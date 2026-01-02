@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -80,16 +81,21 @@ func main() {
 	// when the tunnel attempts to connect or forward traffic.
 	if apiTunnelType == "devtunnels" {
 		go func() {
-			// Run command devtunnel host -p 8080
-			tunnelPort := 8080
-			_, tunnelConfig, err := tunnel.DevTunnelSetup(tunnelPort, true)
+			tunnelName := fmt.Sprintf("aget-tunnel-%d", time.Now().UnixNano())
+			err := tunnel.DevTunnelCreate(tunnelName, "1d", []int{8080})
+			if err != nil {
+				log.Printf("failed to create devtunnel: %v", err)
+				return
+			}
+			_, tunnelConnection, err := tunnel.DevTunnelConnect(tunnelName, true)
 			if err != nil {
 				log.Printf("failed to setup devtunnel: %v", err)
+				return
 			}
 
-			log.Printf("Connect to agent using the URL: %s", tunnelConfig.ConnectionURL)
-			log.Printf("DevTunnel ID: %s", tunnelConfig.TunnelID)
-			log.Printf("DevTunnel Token: %s", tunnelConfig.Token)
+			log.Printf("Connect to agent using the URL: %s", tunnelConnection.ConnectionURL)
+			log.Printf("DevTunnel ID: %s", tunnelConnection.DevTunnelInfo.TunnelID)
+			log.Printf("DevTunnel Token: %s", tunnelConnection.Token)
 
 		}()
 	}
@@ -131,4 +137,6 @@ func cleanupResources() {
 	log.Println("Cleaning up resources before shutdown...")
 	// Add resource cleanup logic here, e.g., terminating kernels, closing tunnels, etc.
 	pm.GlobalProcessManager.KillAll()
+	tunnel.GlobalDevTunnelManager.CleanAll()
+	log.Println("Resource cleanup completed.")
 }
