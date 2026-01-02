@@ -2,28 +2,37 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	pm "github.com/cyber-shuttle/conduit/internal/process"
 	jupyter "github.com/cyber-shuttle/conduit/subsystems/jupyter"
 	tunnel "github.com/cyber-shuttle/conduit/subsystems/tunnel"
 	vfs "github.com/cyber-shuttle/conduit/subsystems/vfs"
 	vscode "github.com/cyber-shuttle/conduit/subsystems/vscode"
 	"github.com/gorilla/mux"
-	pm "github.com/cyber-shuttle/conduit/internal/process"
 )
 
 func main() {
 
-	ctx, stop := signal.NotifyContext(context.Background(), 
-		os.Interrupt, // Ctrl+C 
-		syscall.SIGTERM, // termination (reliable on Linux/macOS) 
-	) 
-	defer stop() 
+	// parse CLI flags
+	tunnelAPI := flag.String("tunnel-api", "devtunnels", "tunnel API provider name (e.g. devtunnels)")
+	flag.Parse()
+	// Support users passing `--tunnel-api=devtunnels` by trimming leading '='
+	apiTunnelType := strings.TrimLeft(*tunnelAPI, "=")
+
+	ctx, stop := signal.NotifyContext(context.Background(),
+		os.Interrupt,    // Ctrl+C
+		syscall.SIGTERM, // termination (reliable on Linux/macOS)
+	)
+	defer stop()
 
 	r := mux.NewRouter()
 	api := r.PathPrefix("/api/v1").Subrouter()
@@ -59,28 +68,53 @@ func main() {
 		Handler: r,
 	}
 
-	// Run server in a goroutine so main can wait for shutdown signal
-	serverErr := make(chan error, 1)
+	// Create listener first so the port is bound before starting any
+	// external tunnel process that expects the port to be open.
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("failed to listen on %s: %v", addr, err)
+	}
+	log.Printf("listening on %s", addr)
 
+	// Start tunnel helper after the listener is bound so the port is open
+	// when the tunnel attempts to connect or forward traffic.
+	if apiTunnelType == "devtunnels" {
+		go func() {
+			// Run command devtunnel host -p 8080
+			tunnelPort := 8080
+			_, tunnelConfig, err := tunnel.DevTunnelSetup(tunnelPort, true)
+			if err != nil {
+				log.Printf("failed to setup devtunnel: %v", err)
+			}
+
+			log.Printf("Connect to agent using the URL: %s", tunnelConfig.ConnectionURL)
+			log.Printf("DevTunnel ID: %s", tunnelConfig.TunnelID)
+			log.Printf("DevTunnel Token: %s", tunnelConfig.Token)
+
+		}()
+	}
+
+	// Run server.Serve using the already-bound listener. Serve will return
+	// when the server is shut down or on error.
+	serverErr := make(chan error, 1)
 	go func() {
-		log.Printf("starting server on %s", addr)
-		err := srv.ListenAndServe()
+		err := srv.Serve(listener)
 		serverErr <- err
 	}()
 
 	select {
-		case <-ctx.Done():
-			// Ctrl+C / SIGTERM received
-			log.Println("Shutdown signal received...")
-		case err := <-serverErr:
-			// Server failed to start or died unexpectedly
-			if err != nil && err != http.ErrServerClosed {
-				log.Printf("server error: %v", err)
-			}
-			return
+	case <-ctx.Done():
+		// Ctrl+C / SIGTERM received
+		log.Println("Shutdown signal received...")
+	case err := <-serverErr:
+		// Server failed to start or died unexpectedly
+		if err != nil && err != http.ErrServerClosed {
+			log.Printf("server error: %v", err)
+		}
+		return
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10* time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	// Stop accepting new connections + wait for in-flight requests

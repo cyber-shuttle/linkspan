@@ -1,17 +1,16 @@
 package jupyter
 
 import (
-	"bufio"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	pm "github.com/cyber-shuttle/conduit/internal/process"
 	venv "github.com/cyber-shuttle/conduit/subsystems/env/venv"
+	utils "github.com/cyber-shuttle/conduit/utils"
 )
 
 func startKernelWithVenv(kernelName string, venvPath string) (string, int, error) {
@@ -82,18 +81,11 @@ func getKernelConnectionFile(kernelInternalID string) (string, error) {
 	// Find [CSKernelApp] Connection file: /Users/dwannipurage3/Library/Jupyter/runtime/kernel-13477a7c-5485-4321-ac21-78809de4fd6c.json in the stdout
 	// look for "[CSKernelApp] Connection file: <path>" in stdout
 	const marker = "[CSKernelApp] Connection file:"
-	sc := bufio.NewScanner(strings.NewReader(stdErr))
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if strings.HasPrefix(line, marker) {
-			rest := strings.TrimSpace(strings.TrimPrefix(line, marker))
-			if rest != "" {
-				// rest should be the path
-				return strings.Fields(rest)[0], nil
-			}
-		}
+	path, err := utils.FindLineInStdout(stdErr, marker)
+	if err == nil {
+		return path, nil
 	}
-	return "", fmt.Errorf("connection file not found in kernel output")
+	return "", fmt.Errorf("connection file not found in kernel output: %v", err)
 }
 
 func startKernelWithCondaEnv(kernelName string) (string, int, error) {
@@ -117,6 +109,7 @@ func getKernelStatus(kernelInternalID string) (string, error) {
 
 func stopKernel(kernelInternalID string) error {
 	// placeholder: stop the Jupyter kernel process
+	log.Printf("Stopping kernel with internal ID %s", kernelInternalID)
 	err := pm.GlobalProcessManager.Kill(kernelInternalID)
 	return err
 }

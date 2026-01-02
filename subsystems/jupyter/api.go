@@ -44,6 +44,7 @@ type KernelConnectionInfoResponse struct {
 
 type KernelShutdownRequest struct {
 	KernelID string `json:"kernelId"`
+	Signal  int `json:"signal"`
 }
 
 type KernelShutdownResponse struct {
