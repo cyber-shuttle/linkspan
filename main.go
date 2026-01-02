@@ -58,11 +58,12 @@ func main() {
 	api.HandleFunc("/fs/delete", vfs.DeleteFile).Methods("DELETE")
 
 	// Tunnel management
-	api.HandleFunc("/tunnels", tunnel.ListTunnels).Methods("GET")
-	api.HandleFunc("/tunnels", tunnel.CreateTunnel).Methods("POST")
-	api.HandleFunc("/tunnels/{id}", tunnel.CloseTunnel).Methods("DELETE")
+	api.HandleFunc("/tunnels/devtunnels", tunnel.ListDevTunnels).Methods("GET")
+	api.HandleFunc("/tunnels/devtunnels", tunnel.CreateDevTunnel).Methods("POST")
+	api.HandleFunc("/tunnels/devtunnels/{id}", tunnel.CloseTunnel).Methods("DELETE")
 
-	addr := ":8080"
+	serverPort := 8080
+	addr := fmt.Sprintf(":%d", serverPort)
 
 	srv := &http.Server{
 		Addr:    addr,
@@ -82,12 +83,12 @@ func main() {
 	if apiTunnelType == "devtunnels" {
 		go func() {
 			tunnelName := fmt.Sprintf("aget-tunnel-%d", time.Now().UnixNano())
-			err := tunnel.DevTunnelCreate(tunnelName, "1d", []int{8080})
+			_, err := tunnel.DevTunnelCreate(tunnelName, "1d", []int{serverPort})
 			if err != nil {
 				log.Printf("failed to create devtunnel: %v", err)
 				return
 			}
-			_, tunnelConnection, err := tunnel.DevTunnelConnect(tunnelName, true)
+			_, tunnelConnection, err := tunnel.DevTunnelHost(tunnelName, true)
 			if err != nil {
 				log.Printf("failed to setup devtunnel: %v", err)
 				return

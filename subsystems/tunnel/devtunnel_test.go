@@ -17,14 +17,14 @@ func TestDevTunnelConnect(t *testing.T) {
 		}
 	}()
 
-	err := DevTunnelCreate(tunnelName, "1d", []int{8080})
+	_, err := DevTunnelCreate(tunnelName, "1d", []int{8080})
 	if err != nil {
 		t.Fatalf("failed to create dev tunnel: %v", err)
 	} else {
 		t.Logf("dev tunnel created successfully")
 	}
 
-	tunnelCommandId, tunnelConnection, err := DevTunnelConnect(tunnelName, true)
+	tunnelCommandId, tunnelConnection, err := DevTunnelHost(tunnelName, true)
 	if err != nil {
 		t.Fatalf("failed to set up dev tunnel: %v", err)
 	} else {
@@ -40,7 +40,7 @@ func TestDevTunnelConnect(t *testing.T) {
 }
 
 func TestDevTunnelCreate(t *testing.T) {
-	err := DevTunnelCreate("test-tunnel", "1d", []int{8080, 9090})
+	_, err := DevTunnelCreate("test-tunnel", "1d", []int{8080, 9090})
 	if err != nil {
 		t.Fatalf("failed to create dev tunnel: %v", err)
 	} else {

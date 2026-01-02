@@ -4,84 +4,60 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
-	"sync"
 	"time"
 
 	pm "github.com/cyber-shuttle/conduit/internal/process"
 	utils "github.com/cyber-shuttle/conduit/utils"
 )
 
-type DevTunnelInfo struct {
-	TunnelID      string
-	TunnelName    string
-}
-
-type DevTunnelConnection struct {
-	ConnectionURL       string
-	Token               string
-	DevTunnelInfo       *DevTunnelInfo
-}
-
-type DevTunnelManager struct {
-	mu    sync.Mutex
-	tunnels map[string]*DevTunnelInfo
-}
-
-func newDevTunnelManager() *DevTunnelManager {
-	return &DevTunnelManager{tunnels: make(map[string]*DevTunnelInfo)}
-}
-
-var GlobalDevTunnelManager = newDevTunnelManager()
-
-func (tm *DevTunnelManager) Register(tunnel *DevTunnelInfo) (string, error) {
-	tm.mu.Lock()
-	tm.tunnels[tunnel.TunnelName] = tunnel
-	tm.mu.Unlock()
-	return tunnel.TunnelName, nil
-}
-
-func (tm *DevTunnelManager) Find(tunnelName string) (*DevTunnelInfo, error) {
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
-	tunnel, exists := tm.tunnels[tunnelName]
-	if !exists {
-		return nil, fmt.Errorf("tunnel %s not found", tunnelName)
-	}
-	return tunnel, nil
-}
-
-func (tm *DevTunnelManager) CleanAll() error {
-	tm.mu.Lock()
-	for id := range tm.tunnels {
-		log.Printf("cleaning up dev tunnel %s", tm.tunnels[id].TunnelName)
-		err := DevTunnelDelete(tm.tunnels[id].TunnelName)
-		if err != nil {
-			log.Printf("failed to delete dev tunnel %s: %v", tm.tunnels[id].TunnelName, err)
-		}
-	}
-	tm.mu.Unlock()
-	return nil
-}
-
-func DevTunnelCreate(tunnelName string, expiration string, ports []int) error {
+func DevTunnelCreate(tunnelName string, expiration string, ports []int) (DevTunnelInfo, error) {
 
 	tunnlelCreateCmd := exec.Command("devtunnel", "create", tunnelName, "--expiration", expiration)
 	id, err := pm.GlobalProcessManager.Start(tunnlelCreateCmd)
 	if err != nil {
 		log.Printf("failed to start devtunnel create command: %v", err)
-		return err
+		return DevTunnelInfo{}, err
 	}
 	err = pm.GlobalProcessManager.Wait(id)
 	if err != nil {
 		log.Printf("devtunnel create command failed: %v", err)
 		stdOut, stdErr, _ := pm.GlobalProcessManager.GetOutput(id)
 		log.Printf("devtunnel create command output - stdout: %s, stderr: %s", stdOut, stdErr)
-		return err
+		return DevTunnelInfo{}, err
+	}
+
+	/*
+	Example output of devtunnel create command:
+
+	Tunnel ID             : agant-8080-tunnel2.use2
+	Description           :
+	Labels                :
+	Access control        : {}
+	Host connections      : 0
+	Client connections    : 0
+	Current upload rate   : 0 MB/s (limit: 20 MB/s)
+	Current download rate : 0 MB/s (limit: 20 MB/s)
+	Tunnel Expiration     : 30 days
+
+	Changed default tunnel to agant-8080-tunnel2.use2.
+	*/
+
+	stdOut, _, err := pm.GlobalProcessManager.GetOutput(id)
+	if err != nil {
+		log.Printf("failed to get output for devtunnels create command: %v", err)
+		return DevTunnelInfo{}, err
+	}
+
+	tunnlelId, err := utils.FindLineInStdout(stdOut, "Tunnel ID             : ") // This is extremely basic and risky parsing, but sufficient for now
+	if err != nil {
+		log.Printf("failed to find tunnel ID in devtunnels create output: %v for stdout %s", err, stdOut)
+		return DevTunnelInfo{}, err
 	}
 
 	GlobalDevTunnelManager.Register(&DevTunnelInfo{
-		TunnelID: tunnelName,
+		TunnelID: tunnlelId,
 		TunnelName: tunnelName,
+		Ports: ports,
 	})
 
 	for _, port := range ports {
@@ -89,16 +65,19 @@ func DevTunnelCreate(tunnelName string, expiration string, ports []int) error {
 		err := tunnlAddPortCmd.Start()
 		if err != nil {
 			log.Printf("failed to start devtunnel port create command: %v", err)
-			return err
+			return DevTunnelInfo{}, err
 		}
 		err = tunnlAddPortCmd.Wait()
 		if err != nil {
 			log.Printf("devtunnel port create command failed: %v", err)
-			return err
+			return DevTunnelInfo{}, err
 		}
 	}
 
-	return nil
+	return DevTunnelInfo{
+		TunnelID:   tunnlelId,
+		TunnelName: tunnelName,
+	}, nil
 }
 
 func DevTunnelDelete(tunnelName string) error {
@@ -118,7 +97,7 @@ func DevTunnelDelete(tunnelName string) error {
 	return nil
 }
 
-func DevTunnelConnect(tunnelName string, createToken bool) (string, DevTunnelConnection, error) {
+func DevTunnelHost(tunnelName string, createToken bool) (string, DevTunnelConnection, error) {
 
 	devTunInfo, err := GlobalDevTunnelManager.Find(tunnelName)
 	if err != nil {
