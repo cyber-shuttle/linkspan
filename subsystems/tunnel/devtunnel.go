@@ -23,7 +23,7 @@ func DevTunnelCreate(tunnelName string, expiration string, ports []int) (DevTunn
 		log.Printf("devtunnel create command failed: %v", err)
 		stdOut, stdErr, _ := pm.GlobalProcessManager.GetOutput(id)
 		log.Printf("devtunnel create command output - stdout: %s, stderr: %s", stdOut, stdErr)
-		return DevTunnelInfo{}, err
+		return DevTunnelInfo{}, fmt.Errorf("Error: devtunnel create command output - stdout: %s, stderr: %s", stdOut, stdErr)
 	}
 
 	/*
