@@ -1,3 +1,4 @@
+version: 2
 project_name: conduit
 builds:
   - id: conduit
@@ -39,21 +40,18 @@ release:
   draft: false
   # Set to true to create a draft release rather than publishing immediately
 
-brew:
-  # Homebrew formula generation. Update 'tap' to your Homebrew tap (owner/repo).
-  name: conduit
-  tap:
-    owner: cyber-shuttle
-    name: homebrew-tap
-  files:
-    - conduit
+brews:
+  - name: conduit
+    tap:
+      owner: cyber-shuttle
+      name: homebrew-tap
+    files:
+      - conduit
 
-snapcraft:
-  # Snapcraft section will generate a snapcraft.yaml and attempt to build/publish.
-  # Publishing to the Snap store requires credentials/snapcraft login configured
-  name: conduit
-  grade: stable
-  confinement: classic
+snapcrafts:
+  - name: conduit
+    grade: stable
+    confinement: classic
 
 changelog:
   # Use the git tag's annotated message and commits to build the changelog
