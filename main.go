@@ -25,6 +25,10 @@ func main() {
 
 	// parse CLI flags
 	tunnelAPI := flag.String("tunnel-api", "devtunnels", "tunnel API provider name (e.g. devtunnels)")
+	tunnelEnable := flag.Bool("tunnel-enable", true, "enable tunnel startup")
+	tunnelRetries := flag.Int("tunnel-retries", 3, "number of retries for tunnel startup")
+	tunnelRetryDelay := flag.Duration("tunnel-retry-delay", 2*time.Second, "delay between tunnel startup retries")
+	tunnelAttemptTimeout := flag.Duration("tunnel-attempt-timeout", 10*time.Second, "timeout per tunnel setup attempt")
 	flag.Parse()
 	// Support users passing `--tunnel-api=devtunnels` by trimming leading '='
 	apiTunnelType := strings.TrimLeft(*tunnelAPI, "=")
@@ -79,26 +83,60 @@ func main() {
 	log.Printf("listening on %s", addr)
 
 	// Start tunnel helper after the listener is bound so the port is open
-	// when the tunnel attempts to connect or forward traffic.
-	if apiTunnelType == "devtunnels" {
+	// when the tunnel attempts to connect or forward traffic. Make startup
+	// conditional and add retries/timeouts to be more robust in unreliable
+	// environments.
+	if apiTunnelType == "devtunnels" && *tunnelEnable {
 		go func() {
 			tunnelName := fmt.Sprintf("aget-tunnel-%d", time.Now().UnixNano())
-			_, err := tunnel.DevTunnelCreate(tunnelName, "1d", []int{serverPort})
-			if err != nil {
-				log.Printf("failed to create devtunnel: %v", err)
-				return
-			}
-			_, tunnelConnection, err := tunnel.DevTunnelHost(tunnelName, true)
-			if err != nil {
-				log.Printf("failed to setup devtunnel: %v", err)
-				return
+
+			for attempt := 1; attempt <= *tunnelRetries; attempt++ {
+				log.Printf("devtunnel: attempt %d/%d to create tunnel %s", attempt, *tunnelRetries, tunnelName)
+
+				// run the create + host sequence in a goroutine so we can
+				// apply a per-attempt timeout.
+				ch := make(chan error, 1)
+				go func() {
+					_, err := tunnel.DevTunnelCreate(tunnelName, "1d", []int{serverPort})
+					if err != nil {
+						ch <- err
+						return
+					}
+					_, tunnelConnection, err := tunnel.DevTunnelHost(tunnelName, true)
+					if err != nil {
+						ch <- err
+						return
+					}
+
+					log.Printf("Connect to agent using the URL: %s", tunnelConnection.ConnectionURL)
+					log.Printf("DevTunnel ID: %s", tunnelConnection.DevTunnelInfo.TunnelID)
+					log.Printf("DevTunnel Token: %s", tunnelConnection.Token)
+					ch <- nil
+				}()
+
+				attemptCtx, cancel := context.WithTimeout(ctx, *tunnelAttemptTimeout)
+				select {
+				case err := <-ch:
+					cancel()
+					if err == nil {
+						log.Printf("devtunnel: successfully created %s", tunnelName)
+						return
+					}
+					log.Printf("devtunnel: attempt %d failed: %v", attempt, err)
+				case <-attemptCtx.Done():
+					log.Printf("devtunnel: attempt %d timed out after %s", attempt, tunnelAttemptTimeout.String())
+				}
+				cancel()
+
+				if attempt < *tunnelRetries {
+					time.Sleep(*tunnelRetryDelay)
+				}
 			}
 
-			log.Printf("Connect to agent using the URL: %s", tunnelConnection.ConnectionURL)
-			log.Printf("DevTunnel ID: %s", tunnelConnection.DevTunnelInfo.TunnelID)
-			log.Printf("DevTunnel Token: %s", tunnelConnection.Token)
-
+			log.Printf("devtunnel: failed to create tunnel %s after %d attempts", tunnelName, *tunnelRetries)
 		}()
+	} else if apiTunnelType == "devtunnels" {
+		log.Println("devtunnel startup skipped (disabled via flag)")
 	}
 
 	// Run server.Serve using the already-bound listener. Serve will return
