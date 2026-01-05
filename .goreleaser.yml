@@ -58,16 +58,6 @@ snapcraft:
 changelog:
   # Use the git tag's annotated message and commits to build the changelog
   use: git
-
-archives:
-  - id: artifacts
-    builds:
-      - conduit
-    format: tar.gz
-    files:
-      - LICENSE
-      - README.md
-
 before:
   hooks:
     - go mod tidy
