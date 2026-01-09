@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	cfg "github.com/cyber-shuttle/conduit/internal/config"
+	cfg "github.com/cyber-shuttle/linkspan/internal/config"
 )
 
 // CreateVirtualEnvironment creates a Python virtual environment at the specified path.

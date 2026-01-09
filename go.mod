@@ -1,4 +1,4 @@
-module github.com/cyber-shuttle/conduit
+module github.com/cyber-shuttle/linkspan
 
 go 1.20
 

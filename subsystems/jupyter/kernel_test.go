@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	pm "github.com/cyber-shuttle/conduit/internal/process"
+	pm "github.com/cyber-shuttle/linkspan/internal/process"
 )
 
 func TestStartKernelWithVenv(t *testing.T) {

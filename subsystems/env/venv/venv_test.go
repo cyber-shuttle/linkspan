@@ -6,7 +6,7 @@ import (
 
 func TestCreatePythonVirtualEnvironment(t *testing.T) {
 	// Test creating a venv in a temporary directory
-	venvPath := "/tmp/test-venv-conduit"
+	venvPath := "/tmp/test-venv-linkspan"
 
 	err := CreatePythonVirtualEnvironment(venvPath)
 	if err != nil {

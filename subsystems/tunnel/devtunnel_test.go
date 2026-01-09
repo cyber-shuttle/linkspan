@@ -3,7 +3,7 @@ package tunnel
 import (
 	"testing"
 
-	pm "github.com/cyber-shuttle/conduit/internal/process"
+	pm "github.com/cyber-shuttle/linkspan/internal/process"
 )
 
 func TestDevTunnelConnect(t *testing.T) {

@@ -3,7 +3,7 @@ package vfs
 import (
 	"net/http"
 
-	utils "github.com/cyber-shuttle/conduit/utils"
+	utils "github.com/cyber-shuttle/linkspan/utils"
 )
 
 type FileInfo struct {

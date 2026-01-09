@@ -13,11 +13,11 @@ import (
 	"syscall"
 	"time"
 
-	pm "github.com/cyber-shuttle/conduit/internal/process"
-	jupyter "github.com/cyber-shuttle/conduit/subsystems/jupyter"
-	tunnel "github.com/cyber-shuttle/conduit/subsystems/tunnel"
-	vfs "github.com/cyber-shuttle/conduit/subsystems/vfs"
-	vscode "github.com/cyber-shuttle/conduit/subsystems/vscode"
+	pm "github.com/cyber-shuttle/linkspan/internal/process"
+	jupyter "github.com/cyber-shuttle/linkspan/subsystems/jupyter"
+	tunnel "github.com/cyber-shuttle/linkspan/subsystems/tunnel"
+	vfs "github.com/cyber-shuttle/linkspan/subsystems/vfs"
+	vscode "github.com/cyber-shuttle/linkspan/subsystems/vscode"
 	"github.com/gorilla/mux"
 )
 

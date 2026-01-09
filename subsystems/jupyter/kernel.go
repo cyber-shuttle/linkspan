@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"time"
 
-	pm "github.com/cyber-shuttle/conduit/internal/process"
-	venv "github.com/cyber-shuttle/conduit/subsystems/env/venv"
-	utils "github.com/cyber-shuttle/conduit/utils"
+	pm "github.com/cyber-shuttle/linkspan/internal/process"
+	venv "github.com/cyber-shuttle/linkspan/subsystems/env/venv"
+	utils "github.com/cyber-shuttle/linkspan/utils"
 )
 
 func startKernelWithVenv(kernelName string, venvPath string) (string, int, error) {

@@ -6,8 +6,8 @@ import (
 	"os/exec"
 	"time"
 
-	pm "github.com/cyber-shuttle/conduit/internal/process"
-	utils "github.com/cyber-shuttle/conduit/utils"
+	pm "github.com/cyber-shuttle/linkspan/internal/process"
+	utils "github.com/cyber-shuttle/linkspan/utils"
 )
 
 func DevTunnelCreate(tunnelName string, expiration string, ports []int) (DevTunnelInfo, error) {

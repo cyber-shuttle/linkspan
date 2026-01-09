@@ -1,4 +1,4 @@
-# Conduit — simple REST scaffold
+# LinkSpan — simple REST scaffold
 
 This repository provides a small Go REST API skeleton exposing endpoints for:
 
@@ -10,7 +10,7 @@ This repository provides a small Go REST API skeleton exposing endpoints for:
 Run locally:
 
 ```bash
-cd /Users/dwannipurage3/code/conduit
+cd /Users/dwannipurage3/code/linkspan
 go test ./...    # runs tests and fetches modules
 go run .         # starts server on :8080
 ```
@@ -31,4 +31,4 @@ Read a remote file (placeholder)
 ```bash
 curl -s "http://localhost:8080/api/v1/fs/read?path=/tmp/test.txt" | jq
 ```
-# conduit
+# linkspan

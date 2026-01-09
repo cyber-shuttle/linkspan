@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	utils "github.com/cyber-shuttle/conduit/utils"
+	utils "github.com/cyber-shuttle/linkspan/utils"
 )
 
 type Tunnel struct {
