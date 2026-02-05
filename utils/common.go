@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 )
@@ -33,4 +34,18 @@ func FindLineInStdout(stdout string, searchString string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("line not found in stdout")
+}
+
+// GetAvailablePort finds and returns an available TCP port.
+// It works by binding to port 0, which lets the OS assign an available port,
+// then closes the listener and returns the assigned port.
+func GetAvailablePort() (int, error) {
+	listener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		return 0, fmt.Errorf("failed to find available port: %w", err)
+	}
+	defer listener.Close()
+
+	addr := listener.Addr().(*net.TCPAddr)
+	return addr.Port, nil
 }

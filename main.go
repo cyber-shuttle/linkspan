@@ -51,9 +51,10 @@ func main() {
 	api.HandleFunc("/jupyter/kernels/shutdown", jupyter.ShutdownKernel).Methods("POST")
 
 	// VS Code remote session management
-	api.HandleFunc("/vscode/sessions", vscode.ListVSCodes).Methods("GET")
+	api.HandleFunc("/vscode/sessions", vscode.ListVSCodeSessions).Methods("GET")
 	api.HandleFunc("/vscode/sessions", vscode.CreateVSCodeSession).Methods("POST")
 	api.HandleFunc("/vscode/sessions/{id}", vscode.TerminateVSCodeSession).Methods("DELETE")
+	api.HandleFunc("/vscode/sessions/{id}/status", vscode.GetVSCodeSessionStatus).Methods("GET")
 
 	// Remote filesystem management
 	api.HandleFunc("/fs/list", vfs.ListFiles).Methods("GET")
@@ -177,5 +178,6 @@ func cleanupResources() {
 	// Add resource cleanup logic here, e.g., terminating kernels, closing tunnels, etc.
 	pm.GlobalProcessManager.KillAll()
 	tunnel.GlobalDevTunnelManager.CleanAll()
+	vscode.StopAllSSHServers()
 	log.Println("Resource cleanup completed.")
 }

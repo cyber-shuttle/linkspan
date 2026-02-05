@@ -32,3 +32,8 @@ Read a remote file (placeholder)
 curl -s "http://localhost:8080/api/v1/fs/read?path=/tmp/test.txt" | jq
 ```
 # linkspan
+
+Build with gorelease 
+```
+goreleaser release --snapshot --clean
+```
