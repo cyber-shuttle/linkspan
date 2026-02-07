@@ -25,10 +25,12 @@ func main() {
 
 	// parse CLI flags
 	tunnelAPI := flag.String("tunnel-api", "devtunnels", "tunnel API provider name (e.g. devtunnels)")
-	tunnelEnable := flag.Bool("tunnel-enable", true, "enable tunnel startup")
+	tunnelEnable := flag.Bool("tunnel-enable", false, "enable tunnel startup")
 	tunnelRetries := flag.Int("tunnel-retries", 3, "number of retries for tunnel startup")
 	tunnelRetryDelay := flag.Duration("tunnel-retry-delay", 2*time.Second, "delay between tunnel startup retries")
 	tunnelAttemptTimeout := flag.Duration("tunnel-attempt-timeout", 10*time.Second, "timeout per tunnel setup attempt")
+	serverPortFlag := flag.Int("port", 8080, "port for the HTTP server to listen on")
+	serverHostFlag := flag.String("host", "0.0.0.0", "host/IP for the HTTP server to bind to")
 	flag.Parse()
 	// Support users passing `--tunnel-api=devtunnels` by trimming leading '='
 	apiTunnelType := strings.TrimLeft(*tunnelAPI, "=")
@@ -71,8 +73,13 @@ func main() {
 	api.HandleFunc("/tunnels/frp", tunnel.CreateFrpTunnelProxy).Methods("POST")
 	api.HandleFunc("/tunnels/frp/{id}", tunnel.TerminateFrpTunnel).Methods("DELETE")
 
-	serverPort := 8080
-	addr := fmt.Sprintf(":%d", serverPort)
+	// Use the configured server host and port from CLI flags
+	serverPort := *serverPortFlag
+	serverHost := *serverHostFlag
+	if serverPort <= 0 || serverPort > 65535 {
+		log.Fatalf("invalid server port: %d", serverPort)
+	}
+	addr := fmt.Sprintf("%s:%d", serverHost, serverPort)
 
 	srv := &http.Server{
 		Addr:    addr,
