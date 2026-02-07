@@ -168,12 +168,31 @@ func startSSHServerForVSCodeConnection(sessionID, addr, password string) *SSHSer
 		return pass == password
 	}
 
+	// Create a forwarded TCP handler for reverse port forwarding
+	forwardHandler := &ssh.ForwardedTCPHandler{}
+
 	// Create server with options so we can stop it later
 	server := &ssh.Server{
 		Addr:             addr,
 		Handler:          sessionHandler,
 		PublicKeyHandler: publicKeyHandler,
 		PasswordHandler:  passwordHandler,
+		LocalPortForwardingCallback: func(ctx ssh.Context, dhost string, dport uint32) bool {
+			log.Printf("local port forwarding requested: host=%s port=%d", dhost, dport)
+			return true // Allow all local port forwards
+		},
+		ReversePortForwardingCallback: func(ctx ssh.Context, bindHost string, bindPort uint32) bool {
+			log.Printf("reverse port forwarding requested: host=%s port=%d", bindHost, bindPort)
+			return true // Allow all reverse port forwards
+		},
+		ChannelHandlers: map[string]ssh.ChannelHandler{
+			"session":      ssh.DefaultSessionHandler,
+			"direct-tcpip": ssh.DirectTCPIPHandler,
+		},
+		RequestHandlers: map[string]ssh.RequestHandler{
+			"tcpip-forward":        forwardHandler.HandleSSHRequest,
+			"cancel-tcpip-forward": forwardHandler.HandleSSHRequest,
+		},
 	}
 
 	sshServer := &SSHServer{server: server}
