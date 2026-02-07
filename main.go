@@ -65,7 +65,11 @@ func main() {
 	// Tunnel management
 	api.HandleFunc("/tunnels/devtunnels", tunnel.ListDevTunnels).Methods("GET")
 	api.HandleFunc("/tunnels/devtunnels", tunnel.CreateDevTunnel).Methods("POST")
-	api.HandleFunc("/tunnels/devtunnels/{id}", tunnel.CloseTunnel).Methods("DELETE")
+	api.HandleFunc("/tunnels/devtunnels/{id}", tunnel.CloseDevTunnel).Methods("DELETE")
+
+	api.HandleFunc("/tunnels/frp", tunnel.ListFrpTunnels).Methods("GET")
+	api.HandleFunc("/tunnels/frp", tunnel.CreateFrpTunnelProxy).Methods("POST")
+	api.HandleFunc("/tunnels/frp/{id}", tunnel.TerminateFrpTunnel).Methods("DELETE")
 
 	serverPort := 8080
 	addr := fmt.Sprintf(":%d", serverPort)
@@ -178,6 +182,7 @@ func cleanupResources() {
 	// Add resource cleanup logic here, e.g., terminating kernels, closing tunnels, etc.
 	pm.GlobalProcessManager.KillAll()
 	tunnel.GlobalDevTunnelManager.CleanAll()
+	tunnel.StopFrpAllTunnels()
 	vscode.StopAllSSHServers()
 	log.Println("Resource cleanup completed.")
 }
