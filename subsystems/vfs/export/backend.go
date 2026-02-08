@@ -14,6 +14,13 @@ import (
 	pb "github.com/cyber-shuttle/linkspan/subsystems/vfs/proto/gen/remotefs"
 )
 
+// Mode bits (Unix-style); avoid syscall.S_IF* for Windows portability.
+const (
+	_modeDir  = 0o40000
+	_modeReg  = 0o100000
+	_modeLnk  = 0o120000
+)
+
 func errToErrno(e error) uint32 {
 	if e == nil {
 		return 0
@@ -165,11 +172,11 @@ func (b *Backend) HandleRequest(ctx context.Context, req *pb.FileRequest) *pb.Fi
 func statToAttr(info os.FileInfo, ino uint64) *pb.Attr {
 	mode := uint32(info.Mode())
 	if info.IsDir() {
-		mode = syscall.S_IFDIR | (mode & 07777)
+		mode = _modeDir | (mode & 07777)
 	} else if info.Mode()&os.ModeSymlink != 0 {
-		mode = syscall.S_IFLNK | (mode & 07777)
+		mode = _modeLnk | (mode & 07777)
 	} else {
-		mode = syscall.S_IFREG | (mode & 07777)
+		mode = _modeReg | (mode & 07777)
 	}
 	attr := &pb.Attr{
 		Ino:     ino,
@@ -182,10 +189,7 @@ func statToAttr(info os.FileInfo, ino uint64) *pb.Attr {
 	attr.Atime = uint64(mt)
 	attr.Mtime = uint64(mt)
 	attr.Ctime = uint64(mt)
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		attr.Uid = uint32(stat.Uid)
-		attr.Gid = uint32(stat.Gid)
-	}
+	attr.Uid, attr.Gid = uidGidFromFileInfo(info)
 	return attr
 }
 
@@ -195,7 +199,7 @@ func (b *Backend) handleGetAttr(r *pb.GetAttrRequest, resp *pb.FileResponse) {
 		if r.Path == "" || r.Path == "/" || r.Path == "." {
 			// Root: return synthetic dir attr
 			resp.Result = &pb.FileResponse_GetAttr{GetAttr: &pb.GetAttrResult{
-				Attr: &pb.Attr{Mode: uint32(syscall.S_IFDIR) | 0755, Ino: 1},
+				Attr: &pb.Attr{Mode: _modeDir | 0755, Ino: 1},
 			}}
 			return
 		}
@@ -205,7 +209,7 @@ func (b *Backend) handleGetAttr(r *pb.GetAttrRequest, resp *pb.FileResponse) {
 	if local == "" {
 		// Root: return synthetic dir attr (do not os.Stat(""))
 		resp.Result = &pb.FileResponse_GetAttr{GetAttr: &pb.GetAttrResult{
-			Attr: &pb.Attr{Mode: uint32(syscall.S_IFDIR) | 0755, Ino: 1},
+			Attr: &pb.Attr{Mode: _modeDir | 0755, Ino: 1},
 		}}
 		return
 	}
@@ -374,9 +378,9 @@ func (b *Backend) handleReaddir(r *pb.ReaddirRequest, resp *pb.FileResponse) {
 			}
 			var mode uint32
 			if info.IsDir() {
-				mode = syscall.S_IFDIR | 0755
+				mode = _modeDir | 0755
 			} else {
-				mode = syscall.S_IFREG | (uint32(info.Mode()) & 07777)
+				mode = _modeReg | (uint32(info.Mode()) & 07777)
 			}
 			ino := b.inoForPath(p.VirtualName)
 			entries = append(entries, &pb.DirEntry{Name: p.VirtualName, Mode: mode, Ino: ino})
@@ -395,11 +399,11 @@ func (b *Backend) handleReaddir(r *pb.ReaddirRequest, resp *pb.FileResponse) {
 			}
 			mode := uint32(info.Mode())
 			if info.IsDir() {
-				mode = syscall.S_IFDIR | (mode & 07777)
+				mode = _modeDir | (mode & 07777)
 			} else if info.Mode()&os.ModeSymlink != 0 {
-				mode = syscall.S_IFLNK | (mode & 07777)
+				mode = _modeLnk | (mode & 07777)
 			} else {
-				mode = syscall.S_IFREG | (mode & 07777)
+				mode = _modeReg | (mode & 07777)
 			}
 			childPath := ent.path + "/" + name
 			if ent.path == "" {
@@ -582,18 +586,18 @@ func (b *Backend) handleStatfs(r *pb.StatfsRequest, resp *pb.FileResponse) {
 			return
 		}
 	}
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(local, &stat); err != nil {
+	blocks, bfree, bavail, files, ffree, bsize, err := getStatfs(local)
+	if err != nil {
 		resp.Errno = errToErrno(err)
 		return
 	}
 	resp.Result = &pb.FileResponse_Statfs{Statfs: &pb.StatfsResult{
-		Blocks:  stat.Blocks,
-		Bfree:   stat.Bfree,
-		Bavail:  stat.Bavail,
-		Files:   stat.Files,
-		Ffree:   stat.Ffree,
-		Bsize:   uint64(stat.Bsize),
+		Blocks:  blocks,
+		Bfree:   bfree,
+		Bavail:  bavail,
+		Files:   files,
+		Ffree:   ffree,
+		Bsize:   uint64(bsize),
 		Namelen: 255,
 	}}
 }

@@ -4,13 +4,20 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/cyber-shuttle/linkspan/subsystems/vfs/cache"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/export"
+	"github.com/cyber-shuttle/linkspan/subsystems/vfs/fileproto"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/frpclient"
 	pb "github.com/cyber-shuttle/linkspan/subsystems/vfs/proto/gen/remotefs"
+	"github.com/cyber-shuttle/linkspan/subsystems/vfs/resolver"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/source"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/encoding/gzip"
 )
 
 // MountConfig holds options for a FUSE mount.
@@ -271,5 +278,217 @@ func (p *PublishManager) StopAll() {
 		if e.stop != nil {
 			e.stop()
 		}
+	}
+}
+
+// ConnectConfig holds options for connecting to a remote publish server (REST-based file access).
+type ConnectConfig struct {
+	ServerAddr    string `json:"server_addr"`
+	Token         string `json:"token,omitempty"`
+	FRPConnection string `json:"frp_connection,omitempty"`
+	CacheSizeMB   int64  `json:"cache_size_mb,omitempty"`
+	CacheTTLSec   int    `json:"cache_ttl_sec,omitempty"`
+	BlockSizeKB   int64  `json:"block_size_kb,omitempty"`
+	NoCache       bool   `json:"no_cache,omitempty"`
+}
+
+// ConnectEntry represents an active gRPC connect session for REST-based file operations.
+type ConnectEntry struct {
+	ID           string              `json:"id"`
+	ServerAddr   string              `json:"server_addr"`
+	CreatedAt    time.Time           `json:"created_at"`
+	CachedClient *cache.CachedClient `json:"-"`
+	fpClient     *fileproto.Client
+	conn         *grpc.ClientConn
+	frpCancel    func()
+}
+
+// ConnectManager manages active gRPC connect sessions.
+type ConnectManager struct {
+	mu       sync.Mutex
+	nextID   int
+	connects map[string]*ConnectEntry
+}
+
+// GlobalConnectManager is the default connect manager.
+var GlobalConnectManager = &ConnectManager{connects: make(map[string]*ConnectEntry)}
+
+// Connect opens a gRPC connect session to a remote publish server. Returns connect ID or error.
+func (c *ConnectManager) Connect(cfg ConnectConfig) (string, error) {
+	serverAddr := cfg.ServerAddr
+	var frpCancel func()
+
+	if cfg.Token != "" && cfg.FRPConnection != "" {
+		parts := strings.SplitN(cfg.Token, ":", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return "", errMountTokenInvalid
+		}
+		id, secret := parts[0], parts[1]
+		server, authToken, parseErr := frpclient.ParseFRPConnection(cfg.FRPConnection)
+		if parseErr != nil {
+			return "", parseErr
+		}
+		if checkErr := frpclient.CheckFRPServerReachable(server, 5*time.Second); checkErr != nil {
+			return "", checkErr
+		}
+		common, cfgErr := frpclient.CommonConfig(server, authToken)
+		if cfgErr != nil {
+			return "", cfgErr
+		}
+		var addr string
+		var err error
+		addr, frpCancel, err = frpclient.RunMountVisitors(context.Background(), common, id, secret)
+		if err != nil {
+			return "", err
+		}
+		serverAddr = addr
+	} else {
+		var err error
+		serverAddr, err = resolver.ResolveServer(cfg.ServerAddr)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	conn, err := grpc.NewClient(serverAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(grpc.UseCompressor(gzip.Name)),
+	)
+	if err != nil {
+		if frpCancel != nil {
+			frpCancel()
+		}
+		return "", err
+	}
+
+	client := pb.NewRemotefsCoordinatorClient(conn)
+	stream, err := client.ConnectSink(context.Background())
+	if err != nil {
+		conn.Close()
+		if frpCancel != nil {
+			frpCancel()
+		}
+		return "", err
+	}
+
+	if err := stream.Send(&pb.FileMessage{
+		Payload: &pb.FileMessage_ConnectSink{ConnectSink: &pb.ConnectSinkRequest{}},
+	}); err != nil {
+		conn.Close()
+		if frpCancel != nil {
+			frpCancel()
+		}
+		return "", err
+	}
+
+	fpClient := fileproto.NewClient(stream)
+	go fpClient.Run()
+
+	cacheSize := cfg.CacheSizeMB * 1024 * 1024
+	if cacheSize <= 0 {
+		cacheSize = 256 * 1024 * 1024
+	}
+	blockSize := cfg.BlockSizeKB * 1024
+	if blockSize <= 0 {
+		blockSize = 256 * 1024
+	}
+	metadataTTL := time.Duration(cfg.CacheTTLSec) * time.Second
+	if metadataTTL <= 0 {
+		metadataTTL = 30 * time.Second
+	}
+	cacheConfig := &cache.Config{
+		MaxDataCacheSize:    cacheSize,
+		BlockSize:           blockSize,
+		DataTTL:             5 * time.Minute,
+		MetadataTTL:         metadataTTL,
+		DirectoryTTL:        metadataTTL,
+		Enabled:             !cfg.NoCache,
+		PrefetchBlocks:      4,
+		MaxParallelFetches:  8,
+		EnablePrefetch:      true,
+		EnableParallelFetch: true,
+	}
+	cachedClient := cache.NewCachedClient(fpClient, cacheConfig)
+
+	c.mu.Lock()
+	c.nextID++
+	connectID := fmt.Sprintf("connect-%d", c.nextID)
+	c.connects[connectID] = &ConnectEntry{
+		ID:           connectID,
+		ServerAddr:   cfg.ServerAddr,
+		CreatedAt:    time.Now(),
+		CachedClient: cachedClient,
+		fpClient:     fpClient,
+		conn:         conn,
+		frpCancel:    frpCancel,
+	}
+	c.mu.Unlock()
+	return connectID, nil
+}
+
+// Get returns the connect entry by ID.
+func (c *ConnectManager) Get(id string) (*ConnectEntry, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ent, ok := c.connects[id]
+	if !ok {
+		return nil, ErrConnectNotFound
+	}
+	return ent, nil
+}
+
+// Disconnect closes the connect session by ID.
+func (c *ConnectManager) Disconnect(id string) error {
+	c.mu.Lock()
+	ent, ok := c.connects[id]
+	if ok {
+		delete(c.connects, id)
+	}
+	c.mu.Unlock()
+	if !ok {
+		return ErrConnectNotFound
+	}
+	ent.close()
+	return nil
+}
+
+// close cleans up an individual connect entry.
+func (e *ConnectEntry) close() {
+	if e.CachedClient != nil {
+		e.CachedClient.Close()
+	}
+	if e.fpClient != nil {
+		e.fpClient.Close()
+	}
+	if e.conn != nil {
+		e.conn.Close()
+	}
+	if e.frpCancel != nil {
+		e.frpCancel()
+	}
+}
+
+// ListConnects returns all active connect sessions.
+func (c *ConnectManager) ListConnects() []ConnectEntry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]ConnectEntry, 0, len(c.connects))
+	for _, e := range c.connects {
+		out = append(out, ConnectEntry{ID: e.ID, ServerAddr: e.ServerAddr, CreatedAt: e.CreatedAt})
+	}
+	return out
+}
+
+// DisconnectAll closes all active connect sessions.
+func (c *ConnectManager) DisconnectAll() {
+	c.mu.Lock()
+	list := make([]*ConnectEntry, 0, len(c.connects))
+	for _, e := range c.connects {
+		list = append(list, e)
+	}
+	c.connects = make(map[string]*ConnectEntry)
+	c.mu.Unlock()
+	for _, e := range list {
+		e.close()
 	}
 }
