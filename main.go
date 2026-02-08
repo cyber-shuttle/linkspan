@@ -63,6 +63,13 @@ func main() {
 	api.HandleFunc("/fs/read", vfs.ReadFile).Methods("GET")
 	api.HandleFunc("/fs/write", vfs.WriteFile).Methods("POST")
 	api.HandleFunc("/fs/delete", vfs.DeleteFile).Methods("DELETE")
+	// FUSE mount and publish
+	api.HandleFunc("/fs/mounts", vfs.ListMounts).Methods("GET")
+	api.HandleFunc("/fs/mount", vfs.CreateMount).Methods("POST")
+	api.HandleFunc("/fs/mount/{id}", vfs.UnmountMount).Methods("DELETE")
+	api.HandleFunc("/fs/publishes", vfs.ListPublishes).Methods("GET")
+	api.HandleFunc("/fs/publish", vfs.CreatePublish).Methods("POST")
+	api.HandleFunc("/fs/publish/{id}", vfs.StopPublish).Methods("DELETE")
 
 	// Tunnel management
 	api.HandleFunc("/tunnels/devtunnels", tunnel.ListDevTunnels).Methods("GET")
@@ -191,5 +198,7 @@ func cleanupResources() {
 	tunnel.GlobalDevTunnelManager.CleanAll()
 	tunnel.StopFrpAllTunnels()
 	vscode.StopAllSSHServers()
+	vfs.GlobalMountManager.UnmountAll()
+	vfs.GlobalPublishManager.StopAll()
 	log.Println("Resource cleanup completed.")
 }
