@@ -38,7 +38,7 @@ func CreateVSCodeSession(w http.ResponseWriter, r *http.Request) {
 	// Generate a session ID (in production, use a proper ID generator)
 	sessionID := fmt.Sprintf("s-%d", availablePort)
 
-	startSSHServerForVSCodeConnection(sessionID, fmt.Sprintf(":%d", availablePort), sessionReq.Password)
+	StartSSHServerForVSCodeConnection(sessionID, fmt.Sprintf(":%d", availablePort), sessionReq.Password)
 
 	s := VSCodeSessionResponse{ID: sessionID, BindPort: int32(availablePort)}
 	utils.RespondJSON(w, http.StatusCreated, s)

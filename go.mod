@@ -8,6 +8,7 @@ require (
 	github.com/fatedier/frp v0.67.0
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/gorilla/mux v1.8.1
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

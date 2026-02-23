@@ -14,6 +14,7 @@ import (
 	"time"
 
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
+	"github.com/cyber-shuttle/linkspan/internal/workflow"
 	jupyter "github.com/cyber-shuttle/linkspan/subsystems/jupyter"
 	tunnel "github.com/cyber-shuttle/linkspan/subsystems/tunnel"
 	vfs "github.com/cyber-shuttle/linkspan/subsystems/vfs"
@@ -31,6 +32,7 @@ func main() {
 	tunnelAttemptTimeout := flag.Duration("tunnel-attempt-timeout", 10*time.Second, "timeout per tunnel setup attempt")
 	serverPortFlag := flag.Int("port", 8080, "port for the HTTP server to listen on")
 	serverHostFlag := flag.String("host", "0.0.0.0", "host/IP for the HTTP server to bind to")
+	workflowFile := flag.String("workflow", "", "path to workflow YAML file")
 	flag.Parse()
 	// Support users passing `--tunnel-api=devtunnels` by trimming leading '='
 	apiTunnelType := strings.TrimLeft(*tunnelAPI, "=")
@@ -93,6 +95,30 @@ func main() {
 		log.Fatalf("failed to listen on %s: %v", addr, err)
 	}
 	log.Printf("listening on %s", addr)
+
+	// Run workflow if specified. Use "-" to read from stdin.
+	if *workflowFile != "" {
+		var wf *workflow.WorkflowConfig
+		var err error
+		if *workflowFile == "-" {
+			wf, err = workflow.LoadReader(os.Stdin)
+		} else {
+			wf, err = workflow.LoadFile(*workflowFile)
+		}
+		if err != nil {
+			log.Fatalf("workflow: %v", err)
+		}
+		engine := workflow.NewEngine(workflow.DefaultRegistry(), map[string]any{
+			"Timestamp":  time.Now().Unix(),
+			"ServerPort": serverPort,
+			"ServerHost": serverHost,
+		})
+		go func() {
+			if err := engine.Run(wf); err != nil {
+				log.Printf("workflow: %v", err)
+			}
+		}()
+	}
 
 	// Start tunnel helper after the listener is bound so the port is open
 	// when the tunnel attempts to connect or forward traffic. Make startup

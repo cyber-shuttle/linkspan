@@ -31,9 +31,9 @@ var (
 	activeServersMu sync.Mutex
 )
 
-// startSSHServerForVSCodeConnection starts an SSH server and registers it for later shutdown.
+// StartSSHServerForVSCodeConnection starts an SSH server and registers it for later shutdown.
 // Returns the SSHServer instance so it can be stopped.
-func startSSHServerForVSCodeConnection(sessionID, addr, password string) *SSHServer {
+func StartSSHServerForVSCodeConnection(sessionID, addr, password string) *SSHServer {
 
 	// Session handler: support exec (non-interactive) and a tiny interactive REPL.
 	sessionHandler := func(s ssh.Session) {
