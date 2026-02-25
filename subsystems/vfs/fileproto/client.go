@@ -1,55 +1,43 @@
-// Package fileproto provides the gRPC stream client for request/response file operations.
+// Package fileproto provides the wire protocol client for request/response file operations.
 package fileproto
 
 import (
 	"context"
 	"sync"
 
-	pb "github.com/cyber-shuttle/linkspan/subsystems/vfs/proto/gen/remotefs"
-	"google.golang.org/grpc"
+	"github.com/cyber-shuttle/linkspan/subsystems/vfs/wire"
 )
 
-// Stream is the interface for sending and receiving FileMessage (used by both source and sink).
-type Stream interface {
-	Send(*pb.FileMessage) error
-	Recv() (*pb.FileMessage, error)
-}
-
-// Client wraps a stream and provides request/response matching by request_id (for the remote/sink side).
+// Client wraps a wire.Conn and provides request/response matching by request ID.
 type Client struct {
-	stream   Stream
+	conn     *wire.Conn
 	mu       sync.Mutex
-	pending  map[uint64]chan *pb.FileResponse
-	nextID   uint64
+	pending  map[uint32]chan *wire.Response
+	nextID   uint32
 	closed   bool
 	recvDone chan struct{}
 }
 
-// NewClient creates a client that uses the given stream. Call Run() in a goroutine to dispatch responses.
-func NewClient(stream Stream) *Client {
-	c := &Client{
-		stream:   stream,
-		pending:  make(map[uint64]chan *pb.FileResponse),
+// NewClient creates a client that uses the given wire.Conn. Call Run() in a goroutine to dispatch responses.
+func NewClient(conn *wire.Conn) *Client {
+	return &Client{
+		conn:     conn,
+		pending:  make(map[uint32]chan *wire.Response),
 		recvDone: make(chan struct{}),
 	}
-	return c
 }
 
-// Run receives messages from the stream and dispatches responses to waiters. Call once in a goroutine.
-// Returns when Recv fails or stream is closed.
+// Run receives responses from the connection and dispatches them to waiters. Call once in a goroutine.
+// Returns when RecvResponse fails or the connection is closed.
 func (c *Client) Run() {
 	for {
-		msg, err := c.stream.Recv()
+		resp, err := c.conn.RecvResponse()
 		if err != nil {
 			break
 		}
-		resp := msg.GetResponse()
-		if resp == nil {
-			continue
-		}
 		c.mu.Lock()
-		ch := c.pending[resp.RequestId]
-		delete(c.pending, resp.RequestId)
+		ch := c.pending[resp.ID]
+		delete(c.pending, resp.ID)
 		c.mu.Unlock()
 		if ch != nil {
 			select {
@@ -64,22 +52,22 @@ func (c *Client) Run() {
 	for _, ch := range c.pending {
 		close(ch)
 	}
-	c.pending = make(map[uint64]chan *pb.FileResponse)
+	c.pending = make(map[uint32]chan *wire.Response)
 	c.mu.Unlock()
 	close(c.recvDone)
 }
 
-// Do sends the request and blocks until the response with the same request_id is received.
-func (c *Client) Do(ctx context.Context, req *pb.FileRequest) (*pb.FileResponse, error) {
+// Do sends the request and blocks until the response with the matching ID is received.
+func (c *Client) Do(ctx context.Context, req *wire.Request) (*wire.Response, error) {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return nil, grpc.ErrClientConnClosing
+		return nil, wire.ErrClosed
 	}
 	c.nextID++
-	req.RequestId = c.nextID
-	reqID := req.RequestId
-	ch := make(chan *pb.FileResponse, 1)
+	req.ID = c.nextID
+	reqID := req.ID
+	ch := make(chan *wire.Response, 1)
 	c.pending[reqID] = ch
 	c.mu.Unlock()
 
@@ -89,21 +77,20 @@ func (c *Client) Do(ctx context.Context, req *pb.FileRequest) (*pb.FileResponse,
 		c.mu.Unlock()
 	}()
 
-	msg := &pb.FileMessage{Payload: &pb.FileMessage_Request{Request: req}}
-	if err := c.stream.Send(msg); err != nil {
+	if err := c.conn.SendRequest(req); err != nil {
 		return nil, err
 	}
 
 	select {
 	case resp := <-ch:
 		if resp == nil {
-			return nil, grpc.ErrClientConnClosing
+			return nil, wire.ErrClosed
 		}
 		return resp, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-c.recvDone:
-		return nil, grpc.ErrClientConnClosing
+		return nil, wire.ErrClosed
 	}
 }
 
@@ -114,6 +101,6 @@ func (c *Client) Close() {
 	for _, ch := range c.pending {
 		close(ch)
 	}
-	c.pending = make(map[uint64]chan *pb.FileResponse)
+	c.pending = make(map[uint32]chan *wire.Response)
 	c.mu.Unlock()
 }

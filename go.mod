@@ -9,8 +9,6 @@ require (
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/gorilla/mux v1.8.1
 	github.com/hanwen/go-fuse/v2 v2.9.0
-	google.golang.org/grpc v1.78.0
-	google.golang.org/protobuf v1.36.10
 )
 
 require (
@@ -53,7 +51,6 @@ require (
 	golang.org/x/tools v0.38.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20251029180050-ab9386a59fda // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	k8s.io/apimachinery v0.28.8 // indirect

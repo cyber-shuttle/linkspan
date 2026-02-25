@@ -4,12 +4,12 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/cyber-shuttle/linkspan/subsystems/vfs/proto/gen/remotefs"
+	"github.com/cyber-shuttle/linkspan/subsystems/vfs/wire"
 )
 
 // metadataEntry holds a cached file attribute with expiration time.
 type metadataEntry struct {
-	attr      *pb.Attr
+	attr      *wire.Attr
 	expiresAt time.Time
 }
 
@@ -37,7 +37,7 @@ func NewMetadataCache(ttl time.Duration) *MetadataCache {
 
 // Get retrieves cached attributes for the given path.
 // Returns the attributes and true if found and not expired, otherwise nil and false.
-func (c *MetadataCache) Get(path string) (*pb.Attr, bool) {
+func (c *MetadataCache) Get(path string) (*wire.Attr, bool) {
 	c.mu.RLock()
 	entry, ok := c.entries[path]
 	c.mu.RUnlock()
@@ -62,7 +62,7 @@ func (c *MetadataCache) Get(path string) (*pb.Attr, bool) {
 }
 
 // Set stores attributes for the given path with the configured TTL.
-func (c *MetadataCache) Set(path string, attr *pb.Attr) {
+func (c *MetadataCache) Set(path string, attr *wire.Attr) {
 	if attr == nil {
 		return
 	}
@@ -77,7 +77,7 @@ func (c *MetadataCache) Set(path string, attr *pb.Attr) {
 }
 
 // SetWithTTL stores attributes with a custom TTL.
-func (c *MetadataCache) SetWithTTL(path string, attr *pb.Attr, ttl time.Duration) {
+func (c *MetadataCache) SetWithTTL(path string, attr *wire.Attr, ttl time.Duration) {
 	if attr == nil {
 		return
 	}
@@ -157,12 +157,12 @@ func (c *MetadataCache) UpdateSize(path string, newSize uint64) bool {
 	return true
 }
 
-// cloneAttr creates a deep copy of an Attr protobuf message.
-func cloneAttr(attr *pb.Attr) *pb.Attr {
+// cloneAttr creates a deep copy of a wire.Attr.
+func cloneAttr(attr *wire.Attr) *wire.Attr {
 	if attr == nil {
 		return nil
 	}
-	return &pb.Attr{
+	return &wire.Attr{
 		Ino:     attr.Ino,
 		Size:    attr.Size,
 		Mode:    attr.Mode,

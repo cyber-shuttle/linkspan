@@ -4,12 +4,12 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/cyber-shuttle/linkspan/subsystems/vfs/proto/gen/remotefs"
+	"github.com/cyber-shuttle/linkspan/subsystems/vfs/wire"
 )
 
 // directoryEntry holds cached directory entries with expiration time.
 type directoryEntry struct {
-	entries   []*pb.DirEntry
+	entries   []wire.DirEntry
 	expiresAt time.Time
 }
 
@@ -37,7 +37,7 @@ func NewDirectoryCache(ttl time.Duration) *DirectoryCache {
 
 // Get retrieves cached directory entries for the given path.
 // Returns the entries and true if found and not expired, otherwise nil and false.
-func (c *DirectoryCache) Get(path string) ([]*pb.DirEntry, bool) {
+func (c *DirectoryCache) Get(path string) ([]wire.DirEntry, bool) {
 	c.mu.RLock()
 	entry, ok := c.entries[path]
 	if !ok {
@@ -65,7 +65,7 @@ func (c *DirectoryCache) Get(path string) ([]*pb.DirEntry, bool) {
 }
 
 // Set stores directory entries for the given path with the configured TTL.
-func (c *DirectoryCache) Set(path string, entries []*pb.DirEntry) {
+func (c *DirectoryCache) Set(path string, entries []wire.DirEntry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -76,7 +76,7 @@ func (c *DirectoryCache) Set(path string, entries []*pb.DirEntry) {
 }
 
 // SetWithTTL stores directory entries with a custom TTL.
-func (c *DirectoryCache) SetWithTTL(path string, entries []*pb.DirEntry, ttl time.Duration) {
+func (c *DirectoryCache) SetWithTTL(path string, entries []wire.DirEntry, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -140,7 +140,7 @@ func (c *DirectoryCache) Cleanup() int {
 // AddEntry adds a single entry to a cached directory listing.
 // Used when a file is created and we want to update the cache without invalidating.
 // Returns true if the directory was in cache and was updated.
-func (c *DirectoryCache) AddEntry(dirPath string, entry *pb.DirEntry) bool {
+func (c *DirectoryCache) AddEntry(dirPath string, entry wire.DirEntry) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -152,16 +152,15 @@ func (c *DirectoryCache) AddEntry(dirPath string, entry *pb.DirEntry) bool {
 	// Check if entry already exists
 	for i, e := range dirEntry.entries {
 		if e.Name == entry.Name {
-			// Update existing entry by replacing it with a new copy
-			dirEntry.entries[i] = cloneDirEntry(entry)
+			dirEntry.entries[i] = entry
 			return true
 		}
 	}
 
 	// Add new entry (create a new slice to avoid race conditions)
-	newEntries := make([]*pb.DirEntry, len(dirEntry.entries)+1)
+	newEntries := make([]wire.DirEntry, len(dirEntry.entries)+1)
 	copy(newEntries, dirEntry.entries)
-	newEntries[len(dirEntry.entries)] = cloneDirEntry(entry)
+	newEntries[len(dirEntry.entries)] = entry
 	dirEntry.entries = newEntries
 	return true
 }
@@ -181,7 +180,7 @@ func (c *DirectoryCache) RemoveEntry(dirPath, name string) bool {
 	for i, e := range dirEntry.entries {
 		if e.Name == name {
 			// Remove entry by creating a new slice (avoid race conditions)
-			newEntries := make([]*pb.DirEntry, len(dirEntry.entries)-1)
+			newEntries := make([]wire.DirEntry, len(dirEntry.entries)-1)
 			copy(newEntries[:i], dirEntry.entries[:i])
 			copy(newEntries[i:], dirEntry.entries[i+1:])
 			dirEntry.entries = newEntries
@@ -212,26 +211,12 @@ func (c *DirectoryCache) HasEntry(dirPath, name string) bool {
 	return false
 }
 
-// cloneDirEntries creates a deep copy of a slice of DirEntry protobuf messages.
-func cloneDirEntries(entries []*pb.DirEntry) []*pb.DirEntry {
+// cloneDirEntries creates a copy of a slice of DirEntry values.
+func cloneDirEntries(entries []wire.DirEntry) []wire.DirEntry {
 	if entries == nil {
 		return nil
 	}
-	result := make([]*pb.DirEntry, len(entries))
-	for i, e := range entries {
-		result[i] = cloneDirEntry(e)
-	}
+	result := make([]wire.DirEntry, len(entries))
+	copy(result, entries)
 	return result
-}
-
-// cloneDirEntry creates a deep copy of a DirEntry protobuf message.
-func cloneDirEntry(e *pb.DirEntry) *pb.DirEntry {
-	if e == nil {
-		return nil
-	}
-	return &pb.DirEntry{
-		Name: e.Name,
-		Mode: e.Mode,
-		Ino:  e.Ino,
-	}
 }

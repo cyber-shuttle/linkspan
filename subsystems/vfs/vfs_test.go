@@ -14,21 +14,19 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/cache"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/export"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/fileproto"
-	pb "github.com/cyber-shuttle/linkspan/subsystems/vfs/proto/gen/remotefs"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/source"
+	"github.com/cyber-shuttle/linkspan/subsystems/vfs/wire"
 )
 
-// startTestServer starts a gRPC publish server with the given directory and returns
+// startTestServer starts a plain-TCP publish server with the given directory and returns
 // the server address and a cleanup function.
 func startTestServer(t *testing.T, dir string) (string, func()) {
 	t.Helper()
-	paths := []*pb.ExportPath{{LocalPath: dir, VirtualName: "data"}}
+	paths := []*wire.ExportPath{{LocalPath: dir, VirtualName: "data"}}
 	backend := export.NewBackend(paths)
 	srv := source.NewServer(backend)
 
@@ -36,39 +34,27 @@ func startTestServer(t *testing.T, dir string) (string, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	grpcServer := grpc.NewServer()
-	pb.RegisterRemotefsCoordinatorServer(grpcServer, srv)
-	go grpcServer.Serve(lis)
+	stopCh := make(chan struct{})
+	go source.RunContext(stopCh, lis, srv)
 
 	cleanup := func() {
-		grpcServer.GracefulStop()
+		close(stopCh)
 		lis.Close()
 	}
 	return lis.Addr().String(), cleanup
 }
 
 // connectToServer creates a CachedClient connected to the test server.
-func connectToServer(t *testing.T, addr string) (*cache.CachedClient, *fileproto.Client, *grpc.ClientConn) {
+func connectToServer(t *testing.T, addr string) (*cache.CachedClient, *fileproto.Client, net.Conn) {
 	t.Helper()
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := pb.NewRemotefsCoordinatorClient(conn)
-	stream, err := client.ConnectSink(context.Background())
-	if err != nil {
-		conn.Close()
-		t.Fatal(err)
-	}
-	if err := stream.Send(&pb.FileMessage{
-		Payload: &pb.FileMessage_ConnectSink{ConnectSink: &pb.ConnectSinkRequest{}},
-	}); err != nil {
-		conn.Close()
-		t.Fatal(err)
-	}
-	fpClient := fileproto.NewClient(stream)
+	wc := wire.NewConn(conn)
+	fpClient := fileproto.NewClient(wc)
 	go fpClient.Run()
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	cachedClient := cache.NewCachedClient(fpClient, cache.DefaultConfig())
 	return cachedClient, fpClient, conn
@@ -91,9 +77,7 @@ func TestPublishConnectReadFile(t *testing.T) {
 	ctx := context.Background()
 
 	// Lookup the file
-	resp, err := cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Lookup{Lookup: &pb.LookupRequest{Path: "data", Name: "test.txt"}},
-	})
+	resp, err := cc.Do(ctx, &wire.Request{Op: wire.OpLookup, Path: "data", Name: "test.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,37 +86,29 @@ func TestPublishConnectReadFile(t *testing.T) {
 	}
 
 	// Open file
-	openResp, err := cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Open{Open: &pb.OpenRequest{Path: "data/test.txt", Flags: 0}},
-	})
+	openResp, err := cc.Do(ctx, &wire.Request{Op: wire.OpOpen, Path: "data/test.txt", Flags: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if openResp.Errno != 0 {
 		t.Fatalf("open: errno=%d", openResp.Errno)
 	}
-	handleID := openResp.GetOpen().HandleId
+	handleID := openResp.HandleID
 
 	// Read file
-	readResp, err := cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-			Path: "data/test.txt", HandleId: handleID, Offset: 0, Size: 100,
-		}},
-	})
+	readResp, err := cc.Do(ctx, &wire.Request{Op: wire.OpRead, Path: "data/test.txt", HandleID: handleID, Offset: 0, Size: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if readResp.Errno != 0 {
 		t.Fatalf("read: errno=%d", readResp.Errno)
 	}
-	if string(readResp.GetRead().Data) != "hello world" {
-		t.Fatalf("got %q, want %q", readResp.GetRead().Data, "hello world")
+	if string(readResp.Data) != "hello world" {
+		t.Fatalf("got %q, want %q", readResp.Data, "hello world")
 	}
 
 	// Release
-	cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Release{Release: &pb.ReleaseRequest{Path: "data/test.txt", HandleId: handleID}},
-	})
+	cc.Do(ctx, &wire.Request{Op: wire.OpRelease, Path: "data/test.txt", HandleID: handleID})
 }
 
 func TestPublishConnectWriteFile(t *testing.T) {
@@ -150,22 +126,22 @@ func TestPublishConnectWriteFile(t *testing.T) {
 	ctx := context.Background()
 
 	// Open file for writing
-	openResp, err := cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Open{Open: &pb.OpenRequest{Path: "data/writable.txt", Flags: 2}},
-	})
+	openResp, err := cc.Do(ctx, &wire.Request{Op: wire.OpOpen, Path: "data/writable.txt", Flags: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if openResp.Errno != 0 {
 		t.Fatalf("open: errno=%d", openResp.Errno)
 	}
-	handleID := openResp.GetOpen().HandleId
+	handleID := openResp.HandleID
 
 	// Write new data
-	writeResp, err := cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Write{Write: &pb.WriteRequest{
-			Path: "data/writable.txt", HandleId: handleID, Offset: 0, Data: []byte("modified"),
-		}},
+	writeResp, err := cc.Do(ctx, &wire.Request{
+		Op:       wire.OpWrite,
+		Path:     "data/writable.txt",
+		HandleID: handleID,
+		Offset:   0,
+		Data:     []byte("modified"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -173,17 +149,13 @@ func TestPublishConnectWriteFile(t *testing.T) {
 	if writeResp.Errno != 0 {
 		t.Fatalf("write: errno=%d", writeResp.Errno)
 	}
-	if writeResp.GetWrite().Written != 8 {
-		t.Fatalf("written=%d, want 8", writeResp.GetWrite().Written)
+	if writeResp.Written != 8 {
+		t.Fatalf("written=%d, want 8", writeResp.Written)
 	}
 
 	// Flush and release
-	cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Flush{Flush: &pb.FlushRequest{Path: "data/writable.txt", HandleId: handleID}},
-	})
-	cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Release{Release: &pb.ReleaseRequest{Path: "data/writable.txt", HandleId: handleID}},
-	})
+	cc.Do(ctx, &wire.Request{Op: wire.OpFlush, Path: "data/writable.txt", HandleID: handleID})
+	cc.Do(ctx, &wire.Request{Op: wire.OpRelease, Path: "data/writable.txt", HandleID: handleID})
 
 	// Verify on disk
 	data, err := os.ReadFile(filepath.Join(dir, "writable.txt"))
@@ -212,21 +184,17 @@ func TestPublishConnectListDirectory(t *testing.T) {
 	ctx := context.Background()
 
 	// Open directory
-	openResp, err := cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Opendir{Opendir: &pb.OpendirRequest{Path: "data"}},
-	})
+	openResp, err := cc.Do(ctx, &wire.Request{Op: wire.OpOpendir, Path: "data"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if openResp.Errno != 0 {
 		t.Fatalf("opendir: errno=%d", openResp.Errno)
 	}
-	handleID := openResp.GetOpen().HandleId
+	handleID := openResp.HandleID
 
 	// Read directory
-	readResp, err := cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Readdir{Readdir: &pb.ReaddirRequest{Path: "data", HandleId: handleID}},
-	})
+	readResp, err := cc.Do(ctx, &wire.Request{Op: wire.OpReaddir, Path: "data", HandleID: handleID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,13 +203,10 @@ func TestPublishConnectListDirectory(t *testing.T) {
 	}
 
 	// Release
-	cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Releasedir{Releasedir: &pb.ReleasedirRequest{Path: "data", HandleId: handleID}},
-	})
+	cc.Do(ctx, &wire.Request{Op: wire.OpReleasedir, Path: "data", HandleID: handleID})
 
-	entries := readResp.GetReaddir().Entries
 	names := make(map[string]bool)
-	for _, e := range entries {
+	for _, e := range readResp.Entries {
 		names[e.Name] = true
 	}
 	if !names["a.txt"] || !names["b.txt"] || !names["subdir"] {
@@ -263,10 +228,12 @@ func TestPublishConnectCreateAndDelete(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a file
-	createResp, err := cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Create{Create: &pb.CreateRequest{
-			Path: "data", Name: "new.txt", Flags: 0x41, Mode: 0644, // O_WRONLY|O_CREAT
-		}},
+	createResp, err := cc.Do(ctx, &wire.Request{
+		Op:    wire.OpCreate,
+		Path:  "data",
+		Name:  "new.txt",
+		Flags: 0x41, // O_WRONLY|O_CREAT
+		Mode:  0644,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -274,10 +241,8 @@ func TestPublishConnectCreateAndDelete(t *testing.T) {
 	if createResp.Errno != 0 {
 		t.Fatalf("create: errno=%d", createResp.Errno)
 	}
-	handleID := createResp.GetCreate().HandleId
-	cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Release{Release: &pb.ReleaseRequest{Path: "data/new.txt", HandleId: handleID}},
-	})
+	handleID := createResp.HandleID
+	cc.Do(ctx, &wire.Request{Op: wire.OpRelease, Path: "data/new.txt", HandleID: handleID})
 
 	// Verify file exists on disk
 	if _, err := os.Stat(filepath.Join(dir, "new.txt")); err != nil {
@@ -285,9 +250,7 @@ func TestPublishConnectCreateAndDelete(t *testing.T) {
 	}
 
 	// Delete the file
-	unlinkResp, err := cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Unlink{Unlink: &pb.UnlinkRequest{Path: "data", Name: "new.txt"}},
-	})
+	unlinkResp, err := cc.Do(ctx, &wire.Request{Op: wire.OpUnlink, Path: "data", Name: "new.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,9 +278,7 @@ func TestPublishConnectMkdirAndRmdir(t *testing.T) {
 	ctx := context.Background()
 
 	// Mkdir
-	mkdirResp, err := cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Mkdir{Mkdir: &pb.MkdirRequest{Path: "data", Name: "newdir", Mode: 0755}},
-	})
+	mkdirResp, err := cc.Do(ctx, &wire.Request{Op: wire.OpMkdir, Path: "data", Name: "newdir", Mode: 0755})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,9 +295,7 @@ func TestPublishConnectMkdirAndRmdir(t *testing.T) {
 	}
 
 	// Rmdir
-	rmdirResp, err := cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Rmdir{Rmdir: &pb.RmdirRequest{Path: "data", Name: "newdir"}},
-	})
+	rmdirResp, err := cc.Do(ctx, &wire.Request{Op: wire.OpRmdir, Path: "data", Name: "newdir"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,10 +321,12 @@ func TestPublishConnectRename(t *testing.T) {
 
 	ctx := context.Background()
 
-	renameResp, err := cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Rename{Rename: &pb.RenameRequest{
-			Path: "data", OldName: "old.txt", NewPath: "data", NewName: "new.txt",
-		}},
+	renameResp, err := cc.Do(ctx, &wire.Request{
+		Op:      wire.OpRename,
+		Path:    "data",
+		Name:    "old.txt",
+		NewPath: "data",
+		NewName: "new.txt",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -401,28 +362,30 @@ func TestCachingServesFromCache(t *testing.T) {
 	ctx := context.Background()
 
 	// First GetAttr populates metadata cache
-	resp1, err := cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_GetAttr{GetAttr: &pb.GetAttrRequest{Path: "data/cached.txt"}},
-	})
+	resp1, err := cc.Do(ctx, &wire.Request{Op: wire.OpGetAttr, Path: "data/cached.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resp1.Errno != 0 {
 		t.Fatalf("getattr: errno=%d", resp1.Errno)
 	}
-	attr1 := resp1.GetGetAttr().Attr
+	if resp1.Attr == nil {
+		t.Fatal("expected non-nil attr")
+	}
+	attr1 := resp1.Attr
 
 	// Second GetAttr should come from cache (same result)
-	resp2, err := cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_GetAttr{GetAttr: &pb.GetAttrRequest{Path: "data/cached.txt"}},
-	})
+	resp2, err := cc.Do(ctx, &wire.Request{Op: wire.OpGetAttr, Path: "data/cached.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resp2.Errno != 0 {
 		t.Fatalf("getattr2: errno=%d", resp2.Errno)
 	}
-	attr2 := resp2.GetGetAttr().Attr
+	if resp2.Attr == nil {
+		t.Fatal("expected non-nil attr")
+	}
+	attr2 := resp2.Attr
 
 	if attr1.Size != attr2.Size || attr1.Mtime != attr2.Mtime {
 		t.Fatal("cached attrs should match")
@@ -450,36 +413,30 @@ func TestCacheInvalidationOnWrite(t *testing.T) {
 	ctx := context.Background()
 
 	// Populate cache with a read
-	cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_GetAttr{GetAttr: &pb.GetAttrRequest{Path: "data/inv.txt"}},
-	})
+	cc.Do(ctx, &wire.Request{Op: wire.OpGetAttr, Path: "data/inv.txt"})
 
 	// Write should invalidate metadata cache
-	openResp, _ := cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Open{Open: &pb.OpenRequest{Path: "data/inv.txt", Flags: 2}},
+	openResp, _ := cc.Do(ctx, &wire.Request{Op: wire.OpOpen, Path: "data/inv.txt", Flags: 2})
+	handleID := openResp.HandleID
+	cc.Do(ctx, &wire.Request{
+		Op:       wire.OpWrite,
+		Path:     "data/inv.txt",
+		HandleID: handleID,
+		Offset:   0,
+		Data:     []byte("after!"),
 	})
-	handleID := openResp.GetOpen().HandleId
-	cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Write{Write: &pb.WriteRequest{
-			Path: "data/inv.txt", HandleId: handleID, Offset: 0, Data: []byte("after!"),
-		}},
-	})
-	cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Flush{Flush: &pb.FlushRequest{Path: "data/inv.txt", HandleId: handleID}},
-	})
-	cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Release{Release: &pb.ReleaseRequest{Path: "data/inv.txt", HandleId: handleID}},
-	})
+	cc.Do(ctx, &wire.Request{Op: wire.OpFlush, Path: "data/inv.txt", HandleID: handleID})
+	cc.Do(ctx, &wire.Request{Op: wire.OpRelease, Path: "data/inv.txt", HandleID: handleID})
 
 	// Re-read should show new content (cache was invalidated by write)
-	openResp2, _ := cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Open{Open: &pb.OpenRequest{Path: "data/inv.txt", Flags: 0}},
-	})
-	handleID2 := openResp2.GetOpen().HandleId
-	readResp, err := cc.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-			Path: "data/inv.txt", HandleId: handleID2, Offset: 0, Size: 100,
-		}},
+	openResp2, _ := cc.Do(ctx, &wire.Request{Op: wire.OpOpen, Path: "data/inv.txt", Flags: 0})
+	handleID2 := openResp2.HandleID
+	readResp, err := cc.Do(ctx, &wire.Request{
+		Op:       wire.OpRead,
+		Path:     "data/inv.txt",
+		HandleID: handleID2,
+		Offset:   0,
+		Size:     100,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -487,8 +444,8 @@ func TestCacheInvalidationOnWrite(t *testing.T) {
 	if readResp.Errno != 0 {
 		t.Fatalf("read: errno=%d", readResp.Errno)
 	}
-	if string(readResp.GetRead().Data) != "after!" {
-		t.Fatalf("got %q, want %q", readResp.GetRead().Data, "after!")
+	if string(readResp.Data) != "after!" {
+		t.Fatalf("got %q, want %q", readResp.Data, "after!")
 	}
 }
 
@@ -564,9 +521,7 @@ func TestConnectManagerLifecycle(t *testing.T) {
 
 	// Verify we can do file operations through the session
 	ctx := context.Background()
-	resp, err := ent.CachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Lookup{Lookup: &pb.LookupRequest{Path: "data", Name: "test.txt"}},
-	})
+	resp, err := ent.CachedClient.Do(ctx, &wire.Request{Op: wire.OpLookup, Path: "data", Name: "test.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}

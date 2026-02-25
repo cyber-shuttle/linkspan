@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/cyber-shuttle/linkspan/subsystems/vfs/proto/gen/remotefs"
+	"github.com/cyber-shuttle/linkspan/subsystems/vfs/wire"
 )
 
 // Data Cache Tests
@@ -574,7 +574,7 @@ func TestDataCache_ZeroSizeRead(t *testing.T) {
 func TestMetadataCache_SetAndGet(t *testing.T) {
 	cache := NewMetadataCache(time.Hour)
 
-	attr := &pb.Attr{
+	attr := &wire.Attr{
 		Ino:  123,
 		Size: 1024,
 		Mode: 0644,
@@ -607,7 +607,7 @@ func TestMetadataCache_TTLExpiration(t *testing.T) {
 	currentTime := time.Now()
 	cache.now = func() time.Time { return currentTime }
 
-	attr := &pb.Attr{Ino: 123}
+	attr := &wire.Attr{Ino: 123}
 	cache.Set("test/file.txt", attr)
 
 	// Should be in cache
@@ -629,7 +629,7 @@ func TestMetadataCache_TTLExpiration(t *testing.T) {
 func TestMetadataCache_Invalidation(t *testing.T) {
 	cache := NewMetadataCache(time.Hour)
 
-	cache.Set("test/file.txt", &pb.Attr{Ino: 123})
+	cache.Set("test/file.txt", &wire.Attr{Ino: 123})
 	cache.Invalidate("test/file.txt")
 
 	_, ok := cache.Get("test/file.txt")
@@ -641,9 +641,9 @@ func TestMetadataCache_Invalidation(t *testing.T) {
 func TestMetadataCache_InvalidatePrefix(t *testing.T) {
 	cache := NewMetadataCache(time.Hour)
 
-	cache.Set("dir/file1.txt", &pb.Attr{Ino: 1})
-	cache.Set("dir/file2.txt", &pb.Attr{Ino: 2})
-	cache.Set("other/file.txt", &pb.Attr{Ino: 3})
+	cache.Set("dir/file1.txt", &wire.Attr{Ino: 1})
+	cache.Set("dir/file2.txt", &wire.Attr{Ino: 2})
+	cache.Set("other/file.txt", &wire.Attr{Ino: 3})
 
 	cache.InvalidatePrefix("dir/")
 
@@ -666,7 +666,7 @@ func TestMetadataCache_InvalidatePrefix(t *testing.T) {
 func TestMetadataCache_UpdateSize(t *testing.T) {
 	cache := NewMetadataCache(time.Hour)
 
-	cache.Set("test/file.txt", &pb.Attr{Ino: 123, Size: 100})
+	cache.Set("test/file.txt", &wire.Attr{Ino: 123, Size: 100})
 
 	ok := cache.UpdateSize("test/file.txt", 200)
 	if !ok {
@@ -685,14 +685,14 @@ func TestMetadataCache_Cleanup(t *testing.T) {
 	currentTime := time.Now()
 	cache.now = func() time.Time { return currentTime }
 
-	cache.Set("file1.txt", &pb.Attr{Ino: 1})
-	cache.Set("file2.txt", &pb.Attr{Ino: 2})
+	cache.Set("file1.txt", &wire.Attr{Ino: 1})
+	cache.Set("file2.txt", &wire.Attr{Ino: 2})
 
 	// Advance time
 	currentTime = currentTime.Add(200 * time.Millisecond)
 
 	// Add one more that won't be expired
-	cache.Set("file3.txt", &pb.Attr{Ino: 3})
+	cache.Set("file3.txt", &wire.Attr{Ino: 3})
 
 	removed := cache.Cleanup()
 	if removed != 2 {
@@ -707,7 +707,7 @@ func TestMetadataCache_Cleanup(t *testing.T) {
 func TestMetadataCache_ImmutableReturn(t *testing.T) {
 	cache := NewMetadataCache(time.Hour)
 
-	cache.Set("test/file.txt", &pb.Attr{Ino: 123, Size: 100})
+	cache.Set("test/file.txt", &wire.Attr{Ino: 123, Size: 100})
 
 	// Get and modify
 	attr1, _ := cache.Get("test/file.txt")
@@ -725,7 +725,7 @@ func TestMetadataCache_ImmutableReturn(t *testing.T) {
 func TestDirectoryCache_SetAndGet(t *testing.T) {
 	cache := NewDirectoryCache(time.Hour)
 
-	entries := []*pb.DirEntry{
+	entries := []wire.DirEntry{
 		{Name: "file1.txt", Mode: 0644, Ino: 1},
 		{Name: "file2.txt", Mode: 0644, Ino: 2},
 		{Name: "subdir", Mode: 0755 | 0040000, Ino: 3},
@@ -762,7 +762,7 @@ func TestDirectoryCache_TTLExpiration(t *testing.T) {
 	currentTime := time.Now()
 	cache.now = func() time.Time { return currentTime }
 
-	cache.Set("test/dir", []*pb.DirEntry{{Name: "file.txt"}})
+	cache.Set("test/dir", []wire.DirEntry{{Name: "file.txt"}})
 
 	// Should be in cache
 	_, ok := cache.Get("test/dir")
@@ -783,7 +783,7 @@ func TestDirectoryCache_TTLExpiration(t *testing.T) {
 func TestDirectoryCache_Invalidation(t *testing.T) {
 	cache := NewDirectoryCache(time.Hour)
 
-	cache.Set("test/dir", []*pb.DirEntry{{Name: "file.txt"}})
+	cache.Set("test/dir", []wire.DirEntry{{Name: "file.txt"}})
 	cache.Invalidate("test/dir")
 
 	_, ok := cache.Get("test/dir")
@@ -795,9 +795,9 @@ func TestDirectoryCache_Invalidation(t *testing.T) {
 func TestDirectoryCache_AddEntry(t *testing.T) {
 	cache := NewDirectoryCache(time.Hour)
 
-	cache.Set("test/dir", []*pb.DirEntry{{Name: "file1.txt", Ino: 1}})
+	cache.Set("test/dir", []wire.DirEntry{{Name: "file1.txt", Ino: 1}})
 
-	ok := cache.AddEntry("test/dir", &pb.DirEntry{Name: "file2.txt", Ino: 2})
+	ok := cache.AddEntry("test/dir", wire.DirEntry{Name: "file2.txt", Ino: 2})
 	if !ok {
 		t.Fatal("expected AddEntry to succeed")
 	}
@@ -811,7 +811,7 @@ func TestDirectoryCache_AddEntry(t *testing.T) {
 func TestDirectoryCache_RemoveEntry(t *testing.T) {
 	cache := NewDirectoryCache(time.Hour)
 
-	cache.Set("test/dir", []*pb.DirEntry{
+	cache.Set("test/dir", []wire.DirEntry{
 		{Name: "file1.txt", Ino: 1},
 		{Name: "file2.txt", Ino: 2},
 	})
@@ -833,7 +833,7 @@ func TestDirectoryCache_RemoveEntry(t *testing.T) {
 func TestDirectoryCache_HasEntry(t *testing.T) {
 	cache := NewDirectoryCache(time.Hour)
 
-	cache.Set("test/dir", []*pb.DirEntry{
+	cache.Set("test/dir", []wire.DirEntry{
 		{Name: "file1.txt", Ino: 1},
 	})
 
@@ -849,7 +849,7 @@ func TestDirectoryCache_HasEntry(t *testing.T) {
 func TestDirectoryCache_ImmutableReturn(t *testing.T) {
 	cache := NewDirectoryCache(time.Hour)
 
-	cache.Set("test/dir", []*pb.DirEntry{{Name: "file.txt", Ino: 1}})
+	cache.Set("test/dir", []wire.DirEntry{{Name: "file.txt", Ino: 1}})
 
 	// Get and modify
 	entries1, _ := cache.Get("test/dir")
@@ -865,8 +865,8 @@ func TestDirectoryCache_ImmutableReturn(t *testing.T) {
 func TestDirectoryCache_Clear(t *testing.T) {
 	cache := NewDirectoryCache(time.Hour)
 
-	cache.Set("dir1", []*pb.DirEntry{{Name: "f1"}})
-	cache.Set("dir2", []*pb.DirEntry{{Name: "f2"}})
+	cache.Set("dir1", []wire.DirEntry{{Name: "f1"}})
+	cache.Set("dir2", []wire.DirEntry{{Name: "f2"}})
 
 	cache.Clear()
 

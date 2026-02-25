@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/cyber-shuttle/linkspan/subsystems/vfs/proto/gen/remotefs"
+	"github.com/cyber-shuttle/linkspan/subsystems/vfs/wire"
 )
 
 // TestCacheStaleness_MtimeValidation verifies cache behavior under various staleness rates.
@@ -343,7 +343,7 @@ func TestCacheStaleness_SimulatedWorkload(t *testing.T) {
 		rng.Read(data)
 		mtime := int64(1000)
 		dataCache.WriteWithMtime(f.path, 0, data, mtime)
-		metaCache.Set(f.path, &pb.Attr{Size: uint64(f.size), Mtime: uint64(mtime)})
+		metaCache.Set(f.path, &wire.Attr{Size: uint64(f.size), Mtime: uint64(mtime)})
 		stats[f.path] = struct{ hits, misses int }{}
 	}
 

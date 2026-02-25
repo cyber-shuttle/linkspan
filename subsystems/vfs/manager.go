@@ -12,12 +12,9 @@ import (
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/export"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/fileproto"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/frpclient"
-	pb "github.com/cyber-shuttle/linkspan/subsystems/vfs/proto/gen/remotefs"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/resolver"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/source"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/encoding/gzip"
+	"github.com/cyber-shuttle/linkspan/subsystems/vfs/wire"
 )
 
 // MountConfig holds options for a FUSE mount.
@@ -121,16 +118,16 @@ func (m *MountManager) UnmountAll() {
 	}
 }
 
-// PublishEntry represents an active gRPC publish server.
+// PublishEntry represents an active publish server.
 type PublishEntry struct {
-	ID        string    `json:"id"`
-	Folder    string    `json:"folder"`
-	ListenAddr string   `json:"listen_addr"`
-	CreatedAt time.Time `json:"created_at"`
-	stop      func()
+	ID         string    `json:"id"`
+	Folder     string    `json:"folder"`
+	ListenAddr string    `json:"listen_addr"`
+	CreatedAt  time.Time `json:"created_at"`
+	stop       func()
 }
 
-// PublishManager manages active gRPC publish servers.
+// PublishManager manages active publish servers.
 type PublishManager struct {
 	mu        sync.Mutex
 	nextID    int
@@ -154,7 +151,7 @@ type PublishResult struct {
 	Token string // "id:secret" for mount client when using FRP; empty when not using FRP
 }
 
-// Publish starts a gRPC server exporting the given folder. Returns publish ID, token (if FRP), and error.
+// Publish starts a server exporting the given folder. Returns publish ID, token (if FRP), and error.
 func (p *PublishManager) Publish(cfg PublishConfig) (result PublishResult, err error) {
 	listenAddr := cfg.ListenAddr
 	if listenAddr == "" {
@@ -167,7 +164,7 @@ func (p *PublishManager) Publish(cfg PublishConfig) (result PublishResult, err e
 	if virtualName == "" {
 		virtualName = "data"
 	}
-	paths := []*pb.ExportPath{
+	paths := []*wire.ExportPath{
 		{LocalPath: cfg.Folder, VirtualName: virtualName},
 	}
 	backend := export.NewBackend(paths)
@@ -292,18 +289,18 @@ type ConnectConfig struct {
 	NoCache       bool   `json:"no_cache,omitempty"`
 }
 
-// ConnectEntry represents an active gRPC connect session for REST-based file operations.
+// ConnectEntry represents an active connect session for REST-based file operations.
 type ConnectEntry struct {
 	ID           string              `json:"id"`
 	ServerAddr   string              `json:"server_addr"`
 	CreatedAt    time.Time           `json:"created_at"`
 	CachedClient *cache.CachedClient `json:"-"`
 	fpClient     *fileproto.Client
-	conn         *grpc.ClientConn
+	conn         net.Conn
 	frpCancel    func()
 }
 
-// ConnectManager manages active gRPC connect sessions.
+// ConnectManager manages active connect sessions.
 type ConnectManager struct {
 	mu       sync.Mutex
 	nextID   int
@@ -313,7 +310,7 @@ type ConnectManager struct {
 // GlobalConnectManager is the default connect manager.
 var GlobalConnectManager = &ConnectManager{connects: make(map[string]*ConnectEntry)}
 
-// Connect opens a gRPC connect session to a remote publish server. Returns connect ID or error.
+// Connect opens a connect session to a remote publish server. Returns connect ID or error.
 func (c *ConnectManager) Connect(cfg ConnectConfig) (string, error) {
 	serverAddr := cfg.ServerAddr
 	var frpCancel func()
@@ -350,10 +347,7 @@ func (c *ConnectManager) Connect(cfg ConnectConfig) (string, error) {
 		}
 	}
 
-	conn, err := grpc.NewClient(serverAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithDefaultCallOptions(grpc.UseCompressor(gzip.Name)),
-	)
+	conn, err := net.Dial("tcp", serverAddr)
 	if err != nil {
 		if frpCancel != nil {
 			frpCancel()
@@ -361,27 +355,8 @@ func (c *ConnectManager) Connect(cfg ConnectConfig) (string, error) {
 		return "", err
 	}
 
-	client := pb.NewRemotefsCoordinatorClient(conn)
-	stream, err := client.ConnectSink(context.Background())
-	if err != nil {
-		conn.Close()
-		if frpCancel != nil {
-			frpCancel()
-		}
-		return "", err
-	}
-
-	if err := stream.Send(&pb.FileMessage{
-		Payload: &pb.FileMessage_ConnectSink{ConnectSink: &pb.ConnectSinkRequest{}},
-	}); err != nil {
-		conn.Close()
-		if frpCancel != nil {
-			frpCancel()
-		}
-		return "", err
-	}
-
-	fpClient := fileproto.NewClient(stream)
+	wc := wire.NewConn(conn)
+	fpClient := fileproto.NewClient(wc)
 	go fpClient.Run()
 
 	cacheSize := cfg.CacheSizeMB * 1024 * 1024

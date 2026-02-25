@@ -8,74 +8,49 @@ import (
 	"testing"
 	"time"
 
-	"google.golang.org/grpc"
-
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/export"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/fileproto"
-	pb "github.com/cyber-shuttle/linkspan/subsystems/vfs/proto/gen/remotefs"
+	"github.com/cyber-shuttle/linkspan/subsystems/vfs/wire"
 )
 
-// testServer wraps a gRPC server for testing
-type testServer struct {
-	grpcServer *grpc.Server
-	listener   net.Listener
-	backend    *export.Backend
-}
+// newTestPair creates an in-memory client/server pair backed by a net.Pipe.
+// The server goroutine handles requests using the given Backend.
+// Returns a CachedClient and a cleanup function.
+func newTestPair(t *testing.T, backend *export.Backend, config *Config) *CachedClient {
+	t.Helper()
 
-func newTestServer(t *testing.T, dir string) *testServer {
-	paths := []*pb.ExportPath{{LocalPath: dir, VirtualName: "data"}}
-	backend := export.NewBackend(paths)
+	serverConn, clientConn := net.Pipe()
 
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	serverWire := wire.NewConn(serverConn)
+	clientWire := wire.NewConn(clientConn)
+
+	// Server goroutine: handle requests using the backend.
+	go func() {
+		defer serverConn.Close()
+		for {
+			req, err := serverWire.RecvRequest()
+			if err != nil {
+				return
+			}
+			resp := backend.HandleRequest(context.Background(), req)
+			if err := serverWire.SendResponse(resp); err != nil {
+				return
+			}
+		}
+	}()
+
+	if config == nil {
+		config = DefaultConfig()
 	}
+	client := fileproto.NewClient(clientWire)
+	go client.Run()
 
-	grpcServer := grpc.NewServer()
-	// Note: We need to create a simple server that handles requests
-	// For integration tests, we'll use a mock stream instead
+	t.Cleanup(func() {
+		client.Close()
+		clientConn.Close()
+	})
 
-	return &testServer{
-		grpcServer: grpcServer,
-		listener:   lis,
-		backend:    backend,
-	}
-}
-
-func (s *testServer) Close() {
-	s.grpcServer.Stop()
-	s.listener.Close()
-}
-
-// mockStream implements fileproto.Stream for testing
-type mockStream struct {
-	backend  *export.Backend
-	requests chan *pb.FileMessage
-	ctx      context.Context
-}
-
-func newMockStream(backend *export.Backend) *mockStream {
-	return &mockStream{
-		backend:  backend,
-		requests: make(chan *pb.FileMessage, 100),
-		ctx:      context.Background(),
-	}
-}
-
-func (m *mockStream) Send(msg *pb.FileMessage) error {
-	m.requests <- msg
-	return nil
-}
-
-func (m *mockStream) Recv() (*pb.FileMessage, error) {
-	msg := <-m.requests
-	if req := msg.GetRequest(); req != nil {
-		resp := m.backend.HandleRequest(m.ctx, req)
-		return &pb.FileMessage{
-			Payload: &pb.FileMessage_Response{Response: resp},
-		}, nil
-	}
-	return nil, nil
+	return NewCachedClient(client, config)
 }
 
 func TestIntegration_CloseToOpenConsistency(t *testing.T) {
@@ -88,39 +63,32 @@ func TestIntegration_CloseToOpenConsistency(t *testing.T) {
 	}
 
 	// Create backend and cached client
-	paths := []*pb.ExportPath{{LocalPath: dir, VirtualName: "data"}}
+	paths := []*wire.ExportPath{{LocalPath: dir, VirtualName: "data"}}
 	backend := export.NewBackend(paths)
-	stream := newMockStream(backend)
-	client := fileproto.NewClient(stream)
-	go client.Run()
 
 	config := DefaultConfig()
 	config.MetadataTTL = time.Hour // Long TTL to test invalidation
-	cachedClient := NewCachedClient(client, config)
+	cachedClient := newTestPair(t, backend, config)
 
 	ctx := context.Background()
 	vpath := "data/test.txt"
 
 	// Reader 1: Open and read file
-	openResp, err := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Open{Open: &pb.OpenRequest{Path: vpath, Flags: 0}},
-	})
+	openResp, err := cachedClient.Do(ctx, &wire.Request{Op: wire.OpOpen, Path: vpath, Flags: 0})
 	if err != nil || openResp.Errno != 0 {
 		t.Fatalf("open failed: err=%v, errno=%d", err, openResp.Errno)
 	}
-	handleID := openResp.GetOpen().HandleId
+	handleID := openResp.HandleID
 
-	readResp, err := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-			Path: vpath, HandleId: handleID, Offset: 0, Size: 256,
-		}},
+	readResp, err := cachedClient.Do(ctx, &wire.Request{
+		Op: wire.OpRead, Path: vpath, HandleID: handleID, Offset: 0, Size: 256,
 	})
 	if err != nil || readResp.Errno != 0 {
 		t.Fatalf("read failed: err=%v, errno=%d", err, readResp.Errno)
 	}
 
-	if string(readResp.GetRead().Data) != string(initialContent) {
-		t.Fatalf("expected %q, got %q", initialContent, readResp.GetRead().Data)
+	if string(readResp.Data) != string(initialContent) {
+		t.Fatalf("expected %q, got %q", initialContent, readResp.Data)
 	}
 
 	// Writer: Modify file directly on disk (simulating another writer)
@@ -133,17 +101,15 @@ func TestIntegration_CloseToOpenConsistency(t *testing.T) {
 	cachedClient.InvalidateAll()
 
 	// Reader 2: Should see new content after invalidation
-	readResp2, err := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-			Path: vpath, HandleId: handleID, Offset: 0, Size: 256,
-		}},
+	readResp2, err := cachedClient.Do(ctx, &wire.Request{
+		Op: wire.OpRead, Path: vpath, HandleID: handleID, Offset: 0, Size: 256,
 	})
 	if err != nil || readResp2.Errno != 0 {
 		t.Fatalf("read2 failed: err=%v, errno=%d", err, readResp2.Errno)
 	}
 
-	if string(readResp2.GetRead().Data) != string(newContent) {
-		t.Fatalf("expected %q after invalidation, got %q", newContent, readResp2.GetRead().Data)
+	if string(readResp2.Data) != string(newContent) {
+		t.Fatalf("expected %q after invalidation, got %q", newContent, readResp2.Data)
 	}
 }
 
@@ -155,38 +121,28 @@ func TestIntegration_CacheCoherency_RepeatedReads(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	paths := []*pb.ExportPath{{LocalPath: dir, VirtualName: "data"}}
+	paths := []*wire.ExportPath{{LocalPath: dir, VirtualName: "data"}}
 	backend := export.NewBackend(paths)
-	stream := newMockStream(backend)
-	client := fileproto.NewClient(stream)
-	go client.Run()
-
-	cachedClient := NewCachedClient(client, DefaultConfig())
+	cachedClient := newTestPair(t, backend, nil)
 	ctx := context.Background()
 	vpath := "data/test.txt"
 
 	// Open file
-	openResp, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Open{Open: &pb.OpenRequest{Path: vpath, Flags: 0}},
-	})
-	handleID := openResp.GetOpen().HandleId
+	openResp, _ := cachedClient.Do(ctx, &wire.Request{Op: wire.OpOpen, Path: vpath, Flags: 0})
+	handleID := openResp.HandleID
 
 	// First read - cache miss, fetches from remote
-	read1, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-			Path: vpath, HandleId: handleID, Offset: 0, Size: 256,
-		}},
+	read1, _ := cachedClient.Do(ctx, &wire.Request{
+		Op: wire.OpRead, Path: vpath, HandleID: handleID, Offset: 0, Size: 256,
 	})
 
 	// Second read - should hit cache
-	read2, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-			Path: vpath, HandleId: handleID, Offset: 0, Size: 256,
-		}},
+	read2, _ := cachedClient.Do(ctx, &wire.Request{
+		Op: wire.OpRead, Path: vpath, HandleID: handleID, Offset: 0, Size: 256,
 	})
 
 	// Both should return same data
-	if string(read1.GetRead().Data) != string(read2.GetRead().Data) {
+	if string(read1.Data) != string(read2.Data) {
 		t.Fatal("repeated reads returned different data")
 	}
 
@@ -204,46 +160,34 @@ func TestIntegration_WriteInvalidatesCache(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	paths := []*pb.ExportPath{{LocalPath: dir, VirtualName: "data"}}
+	paths := []*wire.ExportPath{{LocalPath: dir, VirtualName: "data"}}
 	backend := export.NewBackend(paths)
-	stream := newMockStream(backend)
-	client := fileproto.NewClient(stream)
-	go client.Run()
-
-	cachedClient := NewCachedClient(client, DefaultConfig())
+	cachedClient := newTestPair(t, backend, nil)
 	ctx := context.Background()
 	vpath := "data/test.txt"
 
 	// Open for read/write
-	openResp, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Open{Open: &pb.OpenRequest{Path: vpath, Flags: 2}}, // O_RDWR
-	})
-	handleID := openResp.GetOpen().HandleId
+	openResp, _ := cachedClient.Do(ctx, &wire.Request{Op: wire.OpOpen, Path: vpath, Flags: 2}) // O_RDWR
+	handleID := openResp.HandleID
 
 	// Read to populate cache
-	cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-			Path: vpath, HandleId: handleID, Offset: 0, Size: 256,
-		}},
+	cachedClient.Do(ctx, &wire.Request{
+		Op: wire.OpRead, Path: vpath, HandleID: handleID, Offset: 0, Size: 256,
 	})
 
 	// Write new data - should invalidate cache
 	newData := []byte("new data written")
-	cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Write{Write: &pb.WriteRequest{
-			Path: vpath, HandleId: handleID, Offset: 0, Data: newData,
-		}},
+	cachedClient.Do(ctx, &wire.Request{
+		Op: wire.OpWrite, Path: vpath, HandleID: handleID, Offset: 0, Data: newData,
 	})
 
 	// Read again - should get new data (either from remote or from fresh fetch)
-	readResp, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-			Path: vpath, HandleId: handleID, Offset: 0, Size: 256,
-		}},
+	readResp, _ := cachedClient.Do(ctx, &wire.Request{
+		Op: wire.OpRead, Path: vpath, HandleID: handleID, Offset: 0, Size: 256,
 	})
 
-	if string(readResp.GetRead().Data) != string(newData) {
-		t.Fatalf("expected %q after write, got %q", newData, readResp.GetRead().Data)
+	if string(readResp.Data) != string(newData) {
+		t.Fatalf("expected %q after write, got %q", newData, readResp.Data)
 	}
 }
 
@@ -264,34 +208,26 @@ func TestIntegration_LargeFileMultipleBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	paths := []*pb.ExportPath{{LocalPath: dir, VirtualName: "data"}}
+	paths := []*wire.ExportPath{{LocalPath: dir, VirtualName: "data"}}
 	backend := export.NewBackend(paths)
-	stream := newMockStream(backend)
-	client := fileproto.NewClient(stream)
-	go client.Run()
-
 	config := DefaultConfig()
 	config.BlockSize = blockSize
-	cachedClient := NewCachedClient(client, config)
+	cachedClient := newTestPair(t, backend, config)
 	ctx := context.Background()
 	vpath := "data/large.bin"
 
 	// Open file
-	openResp, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Open{Open: &pb.OpenRequest{Path: vpath, Flags: 0}},
-	})
-	handleID := openResp.GetOpen().HandleId
+	openResp, _ := cachedClient.Do(ctx, &wire.Request{Op: wire.OpOpen, Path: vpath, Flags: 0})
+	handleID := openResp.HandleID
 
 	// Read entire file at once (to properly test block-based caching)
-	readResp, err := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-			Path: vpath, HandleId: handleID, Offset: 0, Size: uint32(fileSize),
-		}},
+	readResp, err := cachedClient.Do(ctx, &wire.Request{
+		Op: wire.OpRead, Path: vpath, HandleID: handleID, Offset: 0, Size: uint32(fileSize),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	readData := readResp.GetRead().Data
+	readData := readResp.Data
 
 	// Verify we read the entire file correctly
 	if len(readData) != len(content) {
@@ -310,15 +246,13 @@ func TestIntegration_LargeFileMultipleBlocks(t *testing.T) {
 	}
 
 	// Test partial read from cache (cache hit)
-	partialResp, err := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-			Path: vpath, HandleId: handleID, Offset: 1024, Size: 2048, // Read from middle
-		}},
+	partialResp, err := cachedClient.Do(ctx, &wire.Request{
+		Op: wire.OpRead, Path: vpath, HandleID: handleID, Offset: 1024, Size: 2048,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	partialData := partialResp.GetRead().Data
+	partialData := partialResp.Data
 	if len(partialData) != 2048 {
 		t.Fatalf("expected partial read of 2048 bytes, got %d", len(partialData))
 	}
@@ -341,40 +275,31 @@ func TestIntegration_TruncationInvalidation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	paths := []*pb.ExportPath{{LocalPath: dir, VirtualName: "data"}}
+	paths := []*wire.ExportPath{{LocalPath: dir, VirtualName: "data"}}
 	backend := export.NewBackend(paths)
-	stream := newMockStream(backend)
-	client := fileproto.NewClient(stream)
-	go client.Run()
-
 	config := DefaultConfig()
 	config.BlockSize = 16 // Small blocks for testing
-	cachedClient := NewCachedClient(client, config)
+	cachedClient := newTestPair(t, backend, config)
 	ctx := context.Background()
 	vpath := "data/truncate.txt"
 
 	// Open and read entire file to populate cache
-	openResp, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Open{Open: &pb.OpenRequest{Path: vpath, Flags: 2}},
-	})
-	handleID := openResp.GetOpen().HandleId
+	openResp, _ := cachedClient.Do(ctx, &wire.Request{Op: wire.OpOpen, Path: vpath, Flags: 2})
+	handleID := openResp.HandleID
 
-	cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-			Path: vpath, HandleId: handleID, Offset: 0, Size: 256,
-		}},
+	cachedClient.Do(ctx, &wire.Request{
+		Op: wire.OpRead, Path: vpath, HandleID: handleID, Offset: 0, Size: 256,
 	})
 
 	// Record blocks before truncate
 	blocksBefore := cachedClient.Stats().DataCacheBlocks
 
 	// Truncate file via SetAttr
-	newSize := uint64(10) // Truncate to 10 bytes
-	cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_SetAttr{SetAttr: &pb.SetAttrRequest{
-			Path: vpath,
-			Size: &newSize,
-		}},
+	cachedClient.Do(ctx, &wire.Request{
+		Op:           wire.OpSetAttr,
+		Path:         vpath,
+		SetAttrValid: wire.SetAttrSize,
+		SetSize:      10,
 	})
 
 	// Blocks should be reduced
@@ -383,9 +308,6 @@ func TestIntegration_TruncationInvalidation(t *testing.T) {
 		t.Fatalf("expected fewer blocks after truncate: before=%d, after=%d",
 			blocksBefore, blocksAfter)
 	}
-
-	// Metadata should be invalidated, re-fetch should show new size
-	// Note: GetAttr after truncate would need to re-fetch
 }
 
 func TestIntegration_DirectoryCacheInvalidation(t *testing.T) {
@@ -398,55 +320,37 @@ func TestIntegration_DirectoryCacheInvalidation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	paths := []*pb.ExportPath{{LocalPath: dir, VirtualName: "data"}}
+	paths := []*wire.ExportPath{{LocalPath: dir, VirtualName: "data"}}
 	backend := export.NewBackend(paths)
-	stream := newMockStream(backend)
-	client := fileproto.NewClient(stream)
-	go client.Run()
-
-	cachedClient := NewCachedClient(client, DefaultConfig())
+	cachedClient := newTestPair(t, backend, nil)
 	ctx := context.Background()
 
 	// Open directory
-	openResp, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Opendir{Opendir: &pb.OpendirRequest{Path: "data/subdir"}},
-	})
-	handleID := openResp.GetOpen().HandleId
+	openResp, _ := cachedClient.Do(ctx, &wire.Request{Op: wire.OpOpendir, Path: "data/subdir"})
+	handleID := openResp.HandleID
 
 	// Read directory - populates cache
-	readResp1, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Readdir{Readdir: &pb.ReaddirRequest{
-			Path: "data/subdir", HandleId: handleID,
-		}},
+	readResp1, _ := cachedClient.Do(ctx, &wire.Request{
+		Op: wire.OpReaddir, Path: "data/subdir", HandleID: handleID,
 	})
-	entriesBefore := len(readResp1.GetReaddir().Entries)
+	entriesBefore := len(readResp1.Entries)
 
 	// Release directory
-	cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Releasedir{Releasedir: &pb.ReleasedirRequest{
-			Path: "data/subdir", HandleId: handleID,
-		}},
-	})
+	cachedClient.Do(ctx, &wire.Request{Op: wire.OpReleasedir, Path: "data/subdir", HandleID: handleID})
 
 	// Create new file - should invalidate directory cache
-	cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Create{Create: &pb.CreateRequest{
-			Path: "data/subdir", Name: "file2.txt", Flags: 0, Mode: 0644,
-		}},
+	cachedClient.Do(ctx, &wire.Request{
+		Op: wire.OpCreate, Path: "data/subdir", Name: "file2.txt", Flags: 0, Mode: 0644,
 	})
 
 	// Re-open and read directory - should see new file
-	openResp2, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Opendir{Opendir: &pb.OpendirRequest{Path: "data/subdir"}},
-	})
-	handleID2 := openResp2.GetOpen().HandleId
+	openResp2, _ := cachedClient.Do(ctx, &wire.Request{Op: wire.OpOpendir, Path: "data/subdir"})
+	handleID2 := openResp2.HandleID
 
-	readResp2, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Readdir{Readdir: &pb.ReaddirRequest{
-			Path: "data/subdir", HandleId: handleID2,
-		}},
+	readResp2, _ := cachedClient.Do(ctx, &wire.Request{
+		Op: wire.OpReaddir, Path: "data/subdir", HandleID: handleID2,
 	})
-	entriesAfter := len(readResp2.GetReaddir().Entries)
+	entriesAfter := len(readResp2.Entries)
 
 	if entriesAfter != entriesBefore+1 {
 		t.Fatalf("expected %d entries after create, got %d", entriesBefore+1, entriesAfter)
@@ -467,31 +371,17 @@ func TestIntegration_RenameInvalidatesBothParents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	paths := []*pb.ExportPath{{LocalPath: dir, VirtualName: "data"}}
+	paths := []*wire.ExportPath{{LocalPath: dir, VirtualName: "data"}}
 	backend := export.NewBackend(paths)
-	stream := newMockStream(backend)
-	client := fileproto.NewClient(stream)
-	go client.Run()
-
-	cachedClient := NewCachedClient(client, DefaultConfig())
+	cachedClient := newTestPair(t, backend, nil)
 	ctx := context.Background()
 
 	// Read both directories to populate cache
 	for _, path := range []string{"data/src", "data/dst"} {
-		openResp, _ := cachedClient.Do(ctx, &pb.FileRequest{
-			Op: &pb.FileRequest_Opendir{Opendir: &pb.OpendirRequest{Path: path}},
-		})
-		handleID := openResp.GetOpen().HandleId
-		cachedClient.Do(ctx, &pb.FileRequest{
-			Op: &pb.FileRequest_Readdir{Readdir: &pb.ReaddirRequest{
-				Path: path, HandleId: handleID,
-			}},
-		})
-		cachedClient.Do(ctx, &pb.FileRequest{
-			Op: &pb.FileRequest_Releasedir{Releasedir: &pb.ReleasedirRequest{
-				Path: path, HandleId: handleID,
-			}},
-		})
+		openResp, _ := cachedClient.Do(ctx, &wire.Request{Op: wire.OpOpendir, Path: path})
+		handleID := openResp.HandleID
+		cachedClient.Do(ctx, &wire.Request{Op: wire.OpReaddir, Path: path, HandleID: handleID})
+		cachedClient.Do(ctx, &wire.Request{Op: wire.OpReleasedir, Path: path, HandleID: handleID})
 	}
 
 	// Verify both directories are cached
@@ -501,45 +391,32 @@ func TestIntegration_RenameInvalidatesBothParents(t *testing.T) {
 	}
 
 	// Rename file from src to dst
-	cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Rename{Rename: &pb.RenameRequest{
-			Path:    "data/src",
-			OldName: "file.txt",
-			NewPath: "data/dst",
-			NewName: "renamed.txt",
-		}},
+	cachedClient.Do(ctx, &wire.Request{
+		Op:      wire.OpRename,
+		Path:    "data/src",
+		Name:    "file.txt",
+		NewPath: "data/dst",
+		NewName: "renamed.txt",
 	})
 
 	// Both directory caches should be invalidated
 	// Re-read to verify file moved
-	openSrc, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Opendir{Opendir: &pb.OpendirRequest{Path: "data/src"}},
-	})
-	srcHandle := openSrc.GetOpen().HandleId
-	srcEntries, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Readdir{Readdir: &pb.ReaddirRequest{
-			Path: "data/src", HandleId: srcHandle,
-		}},
-	})
+	openSrc, _ := cachedClient.Do(ctx, &wire.Request{Op: wire.OpOpendir, Path: "data/src"})
+	srcHandle := openSrc.HandleID
+	srcEntries, _ := cachedClient.Do(ctx, &wire.Request{Op: wire.OpReaddir, Path: "data/src", HandleID: srcHandle})
 
-	openDst, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Opendir{Opendir: &pb.OpendirRequest{Path: "data/dst"}},
-	})
-	dstHandle := openDst.GetOpen().HandleId
-	dstEntries, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Readdir{Readdir: &pb.ReaddirRequest{
-			Path: "data/dst", HandleId: dstHandle,
-		}},
-	})
+	openDst, _ := cachedClient.Do(ctx, &wire.Request{Op: wire.OpOpendir, Path: "data/dst"})
+	dstHandle := openDst.HandleID
+	dstEntries, _ := cachedClient.Do(ctx, &wire.Request{Op: wire.OpReaddir, Path: "data/dst", HandleID: dstHandle})
 
 	// src should be empty
-	if len(srcEntries.GetReaddir().Entries) != 0 {
+	if len(srcEntries.Entries) != 0 {
 		t.Fatal("expected src to be empty after rename")
 	}
 
 	// dst should have the renamed file
 	found := false
-	for _, e := range dstEntries.GetReaddir().Entries {
+	for _, e := range dstEntries.Entries {
 		if e.Name == "renamed.txt" {
 			found = true
 			break
@@ -557,21 +434,15 @@ func TestIntegration_MetadataCacheTTL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	paths := []*pb.ExportPath{{LocalPath: dir, VirtualName: "data"}}
+	paths := []*wire.ExportPath{{LocalPath: dir, VirtualName: "data"}}
 	backend := export.NewBackend(paths)
-	stream := newMockStream(backend)
-	client := fileproto.NewClient(stream)
-	go client.Run()
-
 	config := DefaultConfig()
 	config.MetadataTTL = 50 * time.Millisecond // Short TTL for testing
-	cachedClient := NewCachedClient(client, config)
+	cachedClient := newTestPair(t, backend, config)
 	ctx := context.Background()
 
 	// Get attr - populates cache
-	_, err := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_GetAttr{GetAttr: &pb.GetAttrRequest{Path: "data/test.txt"}},
-	})
+	_, err := cachedClient.Do(ctx, &wire.Request{Op: wire.OpGetAttr, Path: "data/test.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -590,13 +461,13 @@ func TestIntegration_MetadataCacheTTL(t *testing.T) {
 	}
 
 	// Get attr again - should fetch fresh data due to TTL expiry
-	attrResp, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_GetAttr{GetAttr: &pb.GetAttrRequest{Path: "data/test.txt"}},
-	})
+	attrResp, _ := cachedClient.Do(ctx, &wire.Request{Op: wire.OpGetAttr, Path: "data/test.txt"})
 
 	// Size should reflect the new content
-	attr := attrResp.GetGetAttr().Attr
-	if attr.Size != uint64(len("much longer content now")) {
-		t.Fatalf("expected size %d, got %d", len("much longer content now"), attr.Size)
+	if attrResp.Attr == nil {
+		t.Fatal("expected non-nil Attr in response")
+	}
+	if attrResp.Attr.Size != uint64(len("much longer content now")) {
+		t.Fatalf("expected size %d, got %d", len("much longer content now"), attrResp.Attr.Size)
 	}
 }

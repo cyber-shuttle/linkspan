@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/cyber-shuttle/linkspan/subsystems/vfs/proto/gen/remotefs"
+	"github.com/cyber-shuttle/linkspan/subsystems/vfs/wire"
 )
 
 // mockFileprotoClient simulates a remote server for testing cache consistency.
@@ -59,80 +59,64 @@ func (m *mockFileprotoClient) ResetRequestCount() {
 	m.requests = make([]string, 0)
 }
 
-// Do implements the fileproto.Client interface for testing.
-func (m *mockFileprotoClient) Do(ctx context.Context, req *pb.FileRequest) (*pb.FileResponse, error) {
+// Do implements the fileproto.Client-compatible interface for testing.
+func (m *mockFileprotoClient) Do(ctx context.Context, req *wire.Request) (*wire.Response, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	switch op := req.Op.(type) {
-	case *pb.FileRequest_GetAttr:
-		m.requests = append(m.requests, "GetAttr:"+op.GetAttr.Path)
-		file, ok := m.files[op.GetAttr.Path]
+	switch req.Op {
+	case wire.OpGetAttr:
+		m.requests = append(m.requests, "GetAttr:"+req.Path)
+		file, ok := m.files[req.Path]
 		if !ok {
-			return &pb.FileResponse{Errno: 2}, nil // ENOENT
+			return &wire.Response{Errno: 2}, nil // ENOENT
 		}
-		return &pb.FileResponse{
-			Result: &pb.FileResponse_GetAttr{
-				GetAttr: &pb.GetAttrResult{
-					Attr: &pb.Attr{
-						Size:  file.size,
-						Mtime: uint64(file.mtime),
-						Mode:  0644,
-					},
-				},
+		return &wire.Response{
+			Attr: &wire.Attr{
+				Size:  file.size,
+				Mtime: uint64(file.mtime),
+				Mode:  0644,
 			},
 		}, nil
 
-	case *pb.FileRequest_Read:
-		m.requests = append(m.requests, "Read:"+op.Read.Path)
-		file, ok := m.files[op.Read.Path]
+	case wire.OpRead:
+		m.requests = append(m.requests, "Read:"+req.Path)
+		file, ok := m.files[req.Path]
 		if !ok {
-			return &pb.FileResponse{Errno: 2}, nil // ENOENT
+			return &wire.Response{Errno: 2}, nil // ENOENT
 		}
-		offset := int64(op.Read.Offset)
-		size := int64(op.Read.Size)
+		offset := req.Offset
+		size := int64(req.Size)
 		if offset >= int64(len(file.data)) {
-			return &pb.FileResponse{
-				Result: &pb.FileResponse_Read{
-					Read: &pb.ReadResult{Data: nil},
-				},
-			}, nil
+			return &wire.Response{}, nil
 		}
 		end := offset + size
 		if end > int64(len(file.data)) {
 			end = int64(len(file.data))
 		}
-		return &pb.FileResponse{
-			Result: &pb.FileResponse_Read{
-				Read: &pb.ReadResult{Data: file.data[offset:end]},
-			},
-		}, nil
+		return &wire.Response{Data: file.data[offset:end]}, nil
 
-	case *pb.FileRequest_Write:
-		m.requests = append(m.requests, "Write:"+op.Write.Path)
-		file, ok := m.files[op.Write.Path]
+	case wire.OpWrite:
+		m.requests = append(m.requests, "Write:"+req.Path)
+		file, ok := m.files[req.Path]
 		if !ok {
 			file = &mockFile{data: make([]byte, 0), mtime: time.Now().Unix()}
-			m.files[op.Write.Path] = file
+			m.files[req.Path] = file
 		}
-		offset := int64(op.Write.Offset)
-		newEnd := offset + int64(len(op.Write.Data))
+		offset := req.Offset
+		newEnd := offset + int64(len(req.Data))
 		if newEnd > int64(len(file.data)) {
 			newData := make([]byte, newEnd)
 			copy(newData, file.data)
 			file.data = newData
 		}
-		copy(file.data[offset:], op.Write.Data)
+		copy(file.data[offset:], req.Data)
 		file.size = uint64(len(file.data))
 		file.mtime = time.Now().Unix() // Update mtime on write
-		return &pb.FileResponse{
-			Result: &pb.FileResponse_Write{
-				Write: &pb.WriteResult{Written: uint32(len(op.Write.Data))},
-			},
-		}, nil
+		return &wire.Response{Written: uint32(len(req.Data))}, nil
 
 	default:
-		return &pb.FileResponse{}, nil
+		return &wire.Response{}, nil
 	}
 }
 
@@ -162,7 +146,7 @@ func TestConsistency_SourceFileModification(t *testing.T) {
 
 	// Simulate initial read - cache the data with mtime
 	dataCache.WriteWithMtime("test.txt", 0, originalData, originalMtime)
-	metaCache.Set("test.txt", &pb.Attr{Size: uint64(len(originalData)), Mtime: uint64(originalMtime)})
+	metaCache.Set("test.txt", &wire.Attr{Size: uint64(len(originalData)), Mtime: uint64(originalMtime)})
 
 	// Verify cache hit with same mtime
 	data, hit := dataCache.ReadWithMtime("test.txt", 0, int64(len(originalData)), originalMtime)
@@ -197,7 +181,7 @@ func TestConsistency_MetadataTTLExpiry(t *testing.T) {
 	metaCache := NewMetadataCache(10 * time.Millisecond)
 
 	// Set metadata
-	attr := &pb.Attr{Size: 100, Mtime: 1000}
+	attr := &wire.Attr{Size: 100, Mtime: 1000}
 	metaCache.Set("test.txt", attr)
 
 	// Verify cache hit
@@ -226,7 +210,7 @@ func TestConsistency_WriteInvalidatesCache(t *testing.T) {
 
 	// Cache some data
 	dataCache.WriteWithMtime(path, 0, []byte("Original data"), mtime)
-	metaCache.Set(path, &pb.Attr{Size: 13, Mtime: uint64(mtime)})
+	metaCache.Set(path, &wire.Attr{Size: 13, Mtime: uint64(mtime)})
 
 	// Verify cached
 	_, hit := dataCache.ReadWithMtime(path, 0, 13, mtime)
@@ -257,7 +241,7 @@ func TestConsistency_FileDeletion(t *testing.T) {
 
 	// Cache the file
 	dataCache.WriteWithMtime(path, 0, []byte("Will be deleted"), mtime)
-	metaCache.Set(path, &pb.Attr{Size: 15, Mtime: uint64(mtime)})
+	metaCache.Set(path, &wire.Attr{Size: 15, Mtime: uint64(mtime)})
 
 	// Simulate file deletion (as CachedClient.handleUnlink does)
 	dataCache.InvalidateAll(path)
@@ -451,7 +435,7 @@ func TestConsistency_EndToEndScenario(t *testing.T) {
 	content1 := []byte("Initial document content")
 	mtime1 := int64(1000)
 	dataCache.WriteWithMtime(path, 0, content1, mtime1)
-	metaCache.Set(path, &pb.Attr{Size: uint64(len(content1)), Mtime: uint64(mtime1)})
+	metaCache.Set(path, &wire.Attr{Size: uint64(len(content1)), Mtime: uint64(mtime1)})
 
 	// Step 2: Read the file - should hit cache
 	data, hit := dataCache.ReadWithMtime(path, 0, int64(len(content1)), mtime1)
@@ -472,7 +456,7 @@ func TestConsistency_EndToEndScenario(t *testing.T) {
 
 	// Step 5: Cache fresh data with new mtime
 	dataCache.WriteWithMtime(path, 0, content2, mtime2)
-	metaCache.Set(path, &pb.Attr{Size: uint64(len(content2)), Mtime: uint64(mtime2)})
+	metaCache.Set(path, &wire.Attr{Size: uint64(len(content2)), Mtime: uint64(mtime2)})
 
 	// Step 6: Read should now return new content
 	data, hit = dataCache.ReadWithMtime(path, 0, int64(len(content2)), mtime2)

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/cyber-shuttle/linkspan/subsystems/vfs/proto/gen/remotefs"
+	"github.com/cyber-shuttle/linkspan/subsystems/vfs/wire"
 )
 
 // Data Cache Concurrency Tests
@@ -219,7 +219,7 @@ func TestMetadataCache_ConcurrentReads(t *testing.T) {
 	cache := NewMetadataCache(time.Hour)
 
 	path := "test/file.txt"
-	cache.Set(path, &pb.Attr{Ino: 123, Size: 1000})
+	cache.Set(path, &wire.Attr{Ino: 123, Size: 1000})
 
 	var wg sync.WaitGroup
 	numReaders := 100
@@ -257,7 +257,7 @@ func TestMetadataCache_ConcurrentSetGet(t *testing.T) {
 					return
 				default:
 					path := "file" + string(rune('A'+id)) + ".txt"
-					cache.Set(path, &pb.Attr{Ino: uint64(id)})
+					cache.Set(path, &wire.Attr{Ino: uint64(id)})
 				}
 			}
 		}(i)
@@ -320,7 +320,7 @@ func TestMetadataCache_ConcurrentExpiration(t *testing.T) {
 					return
 				default:
 					path := "file" + string(rune('A'+counter%26)) + ".txt"
-					cache.Set(path, &pb.Attr{Ino: uint64(id)})
+					cache.Set(path, &wire.Attr{Ino: uint64(id)})
 					counter++
 				}
 			}
@@ -372,7 +372,7 @@ func TestDirectoryCache_ConcurrentReads(t *testing.T) {
 	cache := NewDirectoryCache(time.Hour)
 
 	path := "test/dir"
-	entries := []*pb.DirEntry{
+	entries := []wire.DirEntry{
 		{Name: "file1.txt", Ino: 1},
 		{Name: "file2.txt", Ino: 2},
 	}
@@ -401,7 +401,7 @@ func TestDirectoryCache_ConcurrentModifications(t *testing.T) {
 	cache := NewDirectoryCache(time.Hour)
 
 	path := "test/dir"
-	cache.Set(path, []*pb.DirEntry{{Name: "initial.txt", Ino: 1}})
+	cache.Set(path, []wire.DirEntry{{Name: "initial.txt", Ino: 1}})
 
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
@@ -416,7 +416,7 @@ func TestDirectoryCache_ConcurrentModifications(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				cache.AddEntry(path, &pb.DirEntry{
+				cache.AddEntry(path, wire.DirEntry{
 					Name: "file" + string(rune('0'+counter%10)) + ".txt",
 					Ino:  uint64(counter),
 				})
@@ -516,7 +516,7 @@ func TestAllCaches_ConcurrentOperations(t *testing.T) {
 			default:
 				for i := 0; i < 10; i++ {
 					path := "meta" + string(rune('0'+i)) + ".txt"
-					metaCache.Set(path, &pb.Attr{Ino: uint64(i)})
+					metaCache.Set(path, &wire.Attr{Ino: uint64(i)})
 					metaCache.Get(path)
 					metaCache.Invalidate(path)
 				}
@@ -535,9 +535,9 @@ func TestAllCaches_ConcurrentOperations(t *testing.T) {
 			default:
 				for i := 0; i < 10; i++ {
 					path := "dir" + string(rune('0'+i))
-					dirCache.Set(path, []*pb.DirEntry{{Name: "f.txt"}})
+					dirCache.Set(path, []wire.DirEntry{{Name: "f.txt"}})
 					dirCache.Get(path)
-					dirCache.AddEntry(path, &pb.DirEntry{Name: "new.txt"})
+					dirCache.AddEntry(path, wire.DirEntry{Name: "new.txt"})
 					dirCache.RemoveEntry(path, "new.txt")
 					dirCache.Invalidate(path)
 				}
@@ -589,7 +589,7 @@ func TestMetadataCache_RaceCondition(t *testing.T) {
 
 		go func() {
 			defer wg.Done()
-			cache.Set(path, &pb.Attr{Ino: 1})
+			cache.Set(path, &wire.Attr{Ino: 1})
 		}()
 
 		go func() {
@@ -616,7 +616,7 @@ func TestDirectoryCache_RaceCondition(t *testing.T) {
 
 		go func() {
 			defer wg.Done()
-			cache.Set(path, []*pb.DirEntry{{Name: "f.txt"}})
+			cache.Set(path, []wire.DirEntry{{Name: "f.txt"}})
 		}()
 
 		go func() {
@@ -626,7 +626,7 @@ func TestDirectoryCache_RaceCondition(t *testing.T) {
 
 		go func() {
 			defer wg.Done()
-			cache.AddEntry(path, &pb.DirEntry{Name: "new.txt"})
+			cache.AddEntry(path, wire.DirEntry{Name: "new.txt"})
 		}()
 
 		go func() {

@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"math/rand"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,8 +11,47 @@ import (
 
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/export"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/fileproto"
-	pb "github.com/cyber-shuttle/linkspan/subsystems/vfs/proto/gen/remotefs"
+	"github.com/cyber-shuttle/linkspan/subsystems/vfs/wire"
 )
+
+// newBenchPair creates a CachedClient backed by a real backend over an in-memory net.Pipe.
+// Similar to newTestPair in integration_test.go but for benchmarks.
+func newBenchPair(b *testing.B, backend *export.Backend, config *Config) *CachedClient {
+	b.Helper()
+
+	serverConn, clientConn := net.Pipe()
+
+	serverWire := wire.NewConn(serverConn)
+	clientWire := wire.NewConn(clientConn)
+
+	go func() {
+		defer serverConn.Close()
+		for {
+			req, err := serverWire.RecvRequest()
+			if err != nil {
+				return
+			}
+			resp := backend.HandleRequest(context.Background(), req)
+			if err := serverWire.SendResponse(resp); err != nil {
+				return
+			}
+		}
+	}()
+
+	if config == nil {
+		config = DefaultConfig()
+	}
+
+	client := fileproto.NewClient(clientWire)
+	go client.Run()
+
+	b.Cleanup(func() {
+		client.Close()
+		clientConn.Close()
+	})
+
+	return NewCachedClient(client, config)
+}
 
 // Data Cache Benchmarks
 
@@ -112,7 +152,7 @@ func BenchmarkDataCache_LRUEviction(b *testing.B) {
 
 func BenchmarkMetadataCache_Set(b *testing.B) {
 	cache := NewMetadataCache(time.Hour)
-	attr := &pb.Attr{Ino: 123, Size: 1024, Mode: 0644}
+	attr := &wire.Attr{Ino: 123, Size: 1024, Mode: 0644}
 
 	b.ResetTimer()
 
@@ -125,7 +165,7 @@ func BenchmarkMetadataCache_Set(b *testing.B) {
 func BenchmarkMetadataCache_GetHit(b *testing.B) {
 	cache := NewMetadataCache(time.Hour)
 	path := "test/file.txt"
-	cache.Set(path, &pb.Attr{Ino: 123})
+	cache.Set(path, &wire.Attr{Ino: 123})
 
 	b.ResetTimer()
 
@@ -150,7 +190,7 @@ func BenchmarkMetadataCache_Invalidate(b *testing.B) {
 	// Pre-populate
 	for i := 0; i < 1000; i++ {
 		path := "file" + string(rune('A'+i%26)) + string(rune('0'+i%10)) + ".txt"
-		cache.Set(path, &pb.Attr{Ino: uint64(i)})
+		cache.Set(path, &wire.Attr{Ino: uint64(i)})
 	}
 
 	b.ResetTimer()
@@ -158,7 +198,7 @@ func BenchmarkMetadataCache_Invalidate(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		path := "file" + string(rune('A'+i%26)) + string(rune('0'+i%10)) + ".txt"
 		cache.Invalidate(path)
-		cache.Set(path, &pb.Attr{Ino: uint64(i)}) // Re-add for next iteration
+		cache.Set(path, &wire.Attr{Ino: uint64(i)}) // Re-add for next iteration
 	}
 }
 
@@ -166,9 +206,9 @@ func BenchmarkMetadataCache_Invalidate(b *testing.B) {
 
 func BenchmarkDirectoryCache_Set(b *testing.B) {
 	cache := NewDirectoryCache(time.Hour)
-	entries := make([]*pb.DirEntry, 100)
+	entries := make([]wire.DirEntry, 100)
 	for i := range entries {
-		entries[i] = &pb.DirEntry{Name: "file" + string(rune('0'+i%10)) + ".txt", Ino: uint64(i)}
+		entries[i] = wire.DirEntry{Name: "file" + string(rune('0'+i%10)) + ".txt", Ino: uint64(i)}
 	}
 
 	b.ResetTimer()
@@ -181,9 +221,9 @@ func BenchmarkDirectoryCache_Set(b *testing.B) {
 
 func BenchmarkDirectoryCache_GetHit(b *testing.B) {
 	cache := NewDirectoryCache(time.Hour)
-	entries := make([]*pb.DirEntry, 100)
+	entries := make([]wire.DirEntry, 100)
 	for i := range entries {
-		entries[i] = &pb.DirEntry{Name: "file" + string(rune('0'+i%10)) + ".txt", Ino: uint64(i)}
+		entries[i] = wire.DirEntry{Name: "file" + string(rune('0'+i%10)) + ".txt", Ino: uint64(i)}
 	}
 	path := "test/dir"
 	cache.Set(path, entries)
@@ -198,9 +238,9 @@ func BenchmarkDirectoryCache_GetHit(b *testing.B) {
 func BenchmarkDirectoryCache_LargeDirectory(b *testing.B) {
 	cache := NewDirectoryCache(time.Hour)
 	// Simulate a large directory with 10000 entries
-	entries := make([]*pb.DirEntry, 10000)
+	entries := make([]wire.DirEntry, 10000)
 	for i := range entries {
-		entries[i] = &pb.DirEntry{Name: "file" + string(rune('0'+i)) + ".txt", Ino: uint64(i)}
+		entries[i] = wire.DirEntry{Name: "file" + string(rune('0'+i)) + ".txt", Ino: uint64(i)}
 	}
 	path := "large/dir"
 	cache.Set(path, entries)
@@ -212,7 +252,7 @@ func BenchmarkDirectoryCache_LargeDirectory(b *testing.B) {
 	}
 }
 
-// CachedClient Benchmarks (with mock backend)
+// CachedClient Benchmarks (with real backend over in-memory pipe)
 
 func BenchmarkCachedClient_ReadCacheHit(b *testing.B) {
 	dir := b.TempDir()
@@ -225,37 +265,27 @@ func BenchmarkCachedClient_ReadCacheHit(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	paths := []*pb.ExportPath{{LocalPath: dir, VirtualName: "data"}}
+	paths := []*wire.ExportPath{{LocalPath: dir, VirtualName: "data"}}
 	backend := export.NewBackend(paths)
-	stream := newMockStream(backend)
-	client := fileproto.NewClient(stream)
-	go client.Run()
-
-	cachedClient := NewCachedClient(client, DefaultConfig())
+	cachedClient := newBenchPair(b, backend, nil)
 	ctx := context.Background()
 	vpath := "data/test.txt"
 
 	// Open file
-	openResp, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Open{Open: &pb.OpenRequest{Path: vpath, Flags: 0}},
-	})
-	handleID := openResp.GetOpen().HandleId
+	openResp, _ := cachedClient.Do(ctx, &wire.Request{Op: wire.OpOpen, Path: vpath, Flags: 0})
+	handleID := openResp.HandleID
 
 	// Prime the cache
-	cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-			Path: vpath, HandleId: handleID, Offset: 0, Size: uint32(len(content)),
-		}},
+	cachedClient.Do(ctx, &wire.Request{
+		Op: wire.OpRead, Path: vpath, HandleID: handleID, Offset: 0, Size: uint32(len(content)),
 	})
 
 	b.ResetTimer()
 	b.SetBytes(int64(len(content)))
 
 	for i := 0; i < b.N; i++ {
-		cachedClient.Do(ctx, &pb.FileRequest{
-			Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-				Path: vpath, HandleId: handleID, Offset: 0, Size: uint32(len(content)),
-			}},
+		cachedClient.Do(ctx, &wire.Request{
+			Op: wire.OpRead, Path: vpath, HandleID: handleID, Offset: 0, Size: uint32(len(content)),
 		})
 	}
 }
@@ -268,20 +298,14 @@ func BenchmarkCachedClient_ReadCacheMiss(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	paths := []*pb.ExportPath{{LocalPath: dir, VirtualName: "data"}}
+	paths := []*wire.ExportPath{{LocalPath: dir, VirtualName: "data"}}
 	backend := export.NewBackend(paths)
-	stream := newMockStream(backend)
-	client := fileproto.NewClient(stream)
-	go client.Run()
-
-	cachedClient := NewCachedClient(client, DefaultConfig())
+	cachedClient := newBenchPair(b, backend, nil)
 	ctx := context.Background()
 	vpath := "data/test.txt"
 
-	openResp, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Open{Open: &pb.OpenRequest{Path: vpath, Flags: 0}},
-	})
-	handleID := openResp.GetOpen().HandleId
+	openResp, _ := cachedClient.Do(ctx, &wire.Request{Op: wire.OpOpen, Path: vpath, Flags: 0})
+	handleID := openResp.HandleID
 
 	b.ResetTimer()
 	b.SetBytes(int64(len(content)))
@@ -289,10 +313,8 @@ func BenchmarkCachedClient_ReadCacheMiss(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		// Invalidate cache before each read to force miss
 		cachedClient.InvalidateAll()
-		cachedClient.Do(ctx, &pb.FileRequest{
-			Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-				Path: vpath, HandleId: handleID, Offset: 0, Size: uint32(len(content)),
-			}},
+		cachedClient.Do(ctx, &wire.Request{
+			Op: wire.OpRead, Path: vpath, HandleID: handleID, Offset: 0, Size: uint32(len(content)),
 		})
 	}
 }
@@ -304,26 +326,18 @@ func BenchmarkCachedClient_MetadataHit(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	paths := []*pb.ExportPath{{LocalPath: dir, VirtualName: "data"}}
+	paths := []*wire.ExportPath{{LocalPath: dir, VirtualName: "data"}}
 	backend := export.NewBackend(paths)
-	stream := newMockStream(backend)
-	client := fileproto.NewClient(stream)
-	go client.Run()
-
-	cachedClient := NewCachedClient(client, DefaultConfig())
+	cachedClient := newBenchPair(b, backend, nil)
 	ctx := context.Background()
 
 	// Prime the cache
-	cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_GetAttr{GetAttr: &pb.GetAttrRequest{Path: "data/test.txt"}},
-	})
+	cachedClient.Do(ctx, &wire.Request{Op: wire.OpGetAttr, Path: "data/test.txt"})
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		cachedClient.Do(ctx, &pb.FileRequest{
-			Op: &pb.FileRequest_GetAttr{GetAttr: &pb.GetAttrRequest{Path: "data/test.txt"}},
-		})
+		cachedClient.Do(ctx, &wire.Request{Op: wire.OpGetAttr, Path: "data/test.txt"})
 	}
 }
 
@@ -334,26 +348,18 @@ func BenchmarkCachedClient_LookupHit(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	paths := []*pb.ExportPath{{LocalPath: dir, VirtualName: "data"}}
+	paths := []*wire.ExportPath{{LocalPath: dir, VirtualName: "data"}}
 	backend := export.NewBackend(paths)
-	stream := newMockStream(backend)
-	client := fileproto.NewClient(stream)
-	go client.Run()
-
-	cachedClient := NewCachedClient(client, DefaultConfig())
+	cachedClient := newBenchPair(b, backend, nil)
 	ctx := context.Background()
 
 	// Prime the cache
-	cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Lookup{Lookup: &pb.LookupRequest{Path: "data", Name: "test.txt"}},
-	})
+	cachedClient.Do(ctx, &wire.Request{Op: wire.OpLookup, Path: "data", Name: "test.txt"})
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		cachedClient.Do(ctx, &pb.FileRequest{
-			Op: &pb.FileRequest_Lookup{Lookup: &pb.LookupRequest{Path: "data", Name: "test.txt"}},
-		})
+		cachedClient.Do(ctx, &wire.Request{Op: wire.OpLookup, Path: "data", Name: "test.txt"})
 	}
 }
 
@@ -367,32 +373,25 @@ func BenchmarkComparison_UncachedRead(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	paths := []*pb.ExportPath{{LocalPath: dir, VirtualName: "data"}}
+	paths := []*wire.ExportPath{{LocalPath: dir, VirtualName: "data"}}
 	backend := export.NewBackend(paths)
-	stream := newMockStream(backend)
-	client := fileproto.NewClient(stream)
-	go client.Run()
 
 	// Disable caching
 	config := DefaultConfig()
 	config.Enabled = false
-	cachedClient := NewCachedClient(client, config)
+	cachedClient := newBenchPair(b, backend, config)
 	ctx := context.Background()
 	vpath := "data/test.txt"
 
-	openResp, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Open{Open: &pb.OpenRequest{Path: vpath, Flags: 0}},
-	})
-	handleID := openResp.GetOpen().HandleId
+	openResp, _ := cachedClient.Do(ctx, &wire.Request{Op: wire.OpOpen, Path: vpath, Flags: 0})
+	handleID := openResp.HandleID
 
 	b.ResetTimer()
 	b.SetBytes(int64(len(content)))
 
 	for i := 0; i < b.N; i++ {
-		cachedClient.Do(ctx, &pb.FileRequest{
-			Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-				Path: vpath, HandleId: handleID, Offset: 0, Size: uint32(len(content)),
-			}},
+		cachedClient.Do(ctx, &wire.Request{
+			Op: wire.OpRead, Path: vpath, HandleID: handleID, Offset: 0, Size: uint32(len(content)),
 		})
 	}
 }
@@ -405,37 +404,28 @@ func BenchmarkComparison_CachedRead(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	paths := []*pb.ExportPath{{LocalPath: dir, VirtualName: "data"}}
+	paths := []*wire.ExportPath{{LocalPath: dir, VirtualName: "data"}}
 	backend := export.NewBackend(paths)
-	stream := newMockStream(backend)
-	client := fileproto.NewClient(stream)
-	go client.Run()
 
 	// Enable caching (default)
-	cachedClient := NewCachedClient(client, DefaultConfig())
+	cachedClient := newBenchPair(b, backend, nil)
 	ctx := context.Background()
 	vpath := "data/test.txt"
 
-	openResp, _ := cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Open{Open: &pb.OpenRequest{Path: vpath, Flags: 0}},
-	})
-	handleID := openResp.GetOpen().HandleId
+	openResp, _ := cachedClient.Do(ctx, &wire.Request{Op: wire.OpOpen, Path: vpath, Flags: 0})
+	handleID := openResp.HandleID
 
 	// Prime cache
-	cachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-			Path: vpath, HandleId: handleID, Offset: 0, Size: uint32(len(content)),
-		}},
+	cachedClient.Do(ctx, &wire.Request{
+		Op: wire.OpRead, Path: vpath, HandleID: handleID, Offset: 0, Size: uint32(len(content)),
 	})
 
 	b.ResetTimer()
 	b.SetBytes(int64(len(content)))
 
 	for i := 0; i < b.N; i++ {
-		cachedClient.Do(ctx, &pb.FileRequest{
-			Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-				Path: vpath, HandleId: handleID, Offset: 0, Size: uint32(len(content)),
-			}},
+		cachedClient.Do(ctx, &wire.Request{
+			Op: wire.OpRead, Path: vpath, HandleID: handleID, Offset: 0, Size: uint32(len(content)),
 		})
 	}
 }
@@ -461,7 +451,7 @@ func BenchmarkDataCache_ParallelReads(b *testing.B) {
 func BenchmarkMetadataCache_ParallelGets(b *testing.B) {
 	cache := NewMetadataCache(time.Hour)
 	path := "test/file.txt"
-	cache.Set(path, &pb.Attr{Ino: 123, Size: 1024})
+	cache.Set(path, &wire.Attr{Ino: 123, Size: 1024})
 
 	b.ResetTimer()
 
@@ -474,9 +464,9 @@ func BenchmarkMetadataCache_ParallelGets(b *testing.B) {
 
 func BenchmarkDirectoryCache_ParallelGets(b *testing.B) {
 	cache := NewDirectoryCache(time.Hour)
-	entries := make([]*pb.DirEntry, 100)
+	entries := make([]wire.DirEntry, 100)
 	for i := range entries {
-		entries[i] = &pb.DirEntry{Name: "file" + string(rune('0'+i%10)) + ".txt"}
+		entries[i] = wire.DirEntry{Name: "file" + string(rune('0'+i%10)) + ".txt"}
 	}
 	path := "test/dir"
 	cache.Set(path, entries)

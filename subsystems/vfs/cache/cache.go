@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/fileproto"
-	pb "github.com/cyber-shuttle/linkspan/subsystems/vfs/proto/gen/remotefs"
+	"github.com/cyber-shuttle/linkspan/subsystems/vfs/wire"
 )
 
 // BlockCache defines the interface for block-level data caching.
@@ -313,19 +313,18 @@ func (c *CachedClient) doPrefetch(req prefetchRequest) {
 		}
 
 		// Fetch the block
-		resp, err := c.client.Do(ctx, &pb.FileRequest{
-			Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-				Path:   req.path,
-				Offset: offset,
-				Size:   uint32(blockSize),
-			}},
+		resp, err := c.client.Do(ctx, &wire.Request{
+			Op:     wire.OpRead,
+			Path:   req.path,
+			Offset: offset,
+			Size:   uint32(blockSize),
 		})
 		if err != nil || resp.Errno != 0 {
 			continue
 		}
 
-		if rr := resp.GetRead(); rr != nil && len(rr.Data) > 0 {
-			c.dataCache.WriteWithMtime(req.path, offset, rr.Data, req.mtime)
+		if len(resp.Data) > 0 {
+			c.dataCache.WriteWithMtime(req.path, offset, resp.Data, req.mtime)
 		}
 	}
 }
@@ -339,34 +338,34 @@ func (c *CachedClient) Close() {
 }
 
 // Do routes a file request through the cache layer.
-func (c *CachedClient) Do(ctx context.Context, req *pb.FileRequest) (*pb.FileResponse, error) {
+func (c *CachedClient) Do(ctx context.Context, req *wire.Request) (*wire.Response, error) {
 	if !c.config.Enabled {
 		return c.client.Do(ctx, req)
 	}
 
-	switch op := req.Op.(type) {
-	case *pb.FileRequest_GetAttr:
-		return c.handleGetAttr(ctx, req, op.GetAttr)
-	case *pb.FileRequest_Lookup:
-		return c.handleLookup(ctx, req, op.Lookup)
-	case *pb.FileRequest_Read:
-		return c.handleRead(ctx, req, op.Read)
-	case *pb.FileRequest_Write:
-		return c.handleWrite(ctx, req, op.Write)
-	case *pb.FileRequest_Readdir:
-		return c.handleReaddir(ctx, req, op.Readdir)
-	case *pb.FileRequest_Create:
-		return c.handleCreate(ctx, req, op.Create)
-	case *pb.FileRequest_Mkdir:
-		return c.handleMkdir(ctx, req, op.Mkdir)
-	case *pb.FileRequest_Unlink:
-		return c.handleUnlink(ctx, req, op.Unlink)
-	case *pb.FileRequest_Rmdir:
-		return c.handleRmdir(ctx, req, op.Rmdir)
-	case *pb.FileRequest_Rename:
-		return c.handleRename(ctx, req, op.Rename)
-	case *pb.FileRequest_SetAttr:
-		return c.handleSetAttr(ctx, req, op.SetAttr)
+	switch req.Op {
+	case wire.OpGetAttr:
+		return c.handleGetAttr(ctx, req)
+	case wire.OpLookup:
+		return c.handleLookup(ctx, req)
+	case wire.OpRead:
+		return c.handleRead(ctx, req)
+	case wire.OpWrite:
+		return c.handleWrite(ctx, req)
+	case wire.OpReaddir:
+		return c.handleReaddir(ctx, req)
+	case wire.OpCreate:
+		return c.handleCreate(ctx, req)
+	case wire.OpMkdir:
+		return c.handleMkdir(ctx, req)
+	case wire.OpUnlink:
+		return c.handleUnlink(ctx, req)
+	case wire.OpRmdir:
+		return c.handleRmdir(ctx, req)
+	case wire.OpRename:
+		return c.handleRename(ctx, req)
+	case wire.OpSetAttr:
+		return c.handleSetAttr(ctx, req)
 	default:
 		// For other operations, pass through without caching
 		return c.client.Do(ctx, req)
@@ -374,14 +373,13 @@ func (c *CachedClient) Do(ctx context.Context, req *pb.FileRequest) (*pb.FileRes
 }
 
 // handleGetAttr returns cached metadata if valid, otherwise fetches and caches.
-func (c *CachedClient) handleGetAttr(ctx context.Context, req *pb.FileRequest, r *pb.GetAttrRequest) (*pb.FileResponse, error) {
+func (c *CachedClient) handleGetAttr(ctx context.Context, req *wire.Request) (*wire.Response, error) {
 	// Try to get from cache
-	if attr, ok := c.metaCache.Get(r.Path); ok {
-		return &pb.FileResponse{
-			RequestId: req.RequestId,
-			Result: &pb.FileResponse_GetAttr{
-				GetAttr: &pb.GetAttrResult{Attr: attr},
-			},
+	if attr, ok := c.metaCache.Get(req.Path); ok {
+		return &wire.Response{
+			ID:   req.ID,
+			Op:   req.Op,
+			Attr: attr,
 		}, nil
 	}
 
@@ -392,29 +390,26 @@ func (c *CachedClient) handleGetAttr(ctx context.Context, req *pb.FileRequest, r
 	}
 
 	// Cache the result if successful
-	if resp.Errno == 0 {
-		if ga := resp.GetGetAttr(); ga != nil && ga.Attr != nil {
-			c.metaCache.Set(r.Path, ga.Attr)
-		}
+	if resp.Errno == 0 && resp.Attr != nil {
+		c.metaCache.Set(req.Path, resp.Attr)
 	}
 
 	return resp, nil
 }
 
 // handleLookup returns cached metadata if valid, otherwise fetches and caches.
-func (c *CachedClient) handleLookup(ctx context.Context, req *pb.FileRequest, r *pb.LookupRequest) (*pb.FileResponse, error) {
-	childPath := r.Name
-	if r.Path != "" && r.Path != "/" {
-		childPath = r.Path + "/" + r.Name
+func (c *CachedClient) handleLookup(ctx context.Context, req *wire.Request) (*wire.Response, error) {
+	childPath := req.Name
+	if req.Path != "" && req.Path != "/" {
+		childPath = req.Path + "/" + req.Name
 	}
 
 	// Try to get from cache
 	if attr, ok := c.metaCache.Get(childPath); ok {
-		return &pb.FileResponse{
-			RequestId: req.RequestId,
-			Result: &pb.FileResponse_Lookup{
-				Lookup: &pb.LookupResult{Attr: attr},
-			},
+		return &wire.Response{
+			ID:   req.ID,
+			Op:   req.Op,
+			Attr: attr,
 		}, nil
 	}
 
@@ -425,10 +420,8 @@ func (c *CachedClient) handleLookup(ctx context.Context, req *pb.FileRequest, r 
 	}
 
 	// Cache the result if successful
-	if resp.Errno == 0 {
-		if lr := resp.GetLookup(); lr != nil && lr.Attr != nil {
-			c.metaCache.Set(childPath, lr.Attr)
-		}
+	if resp.Errno == 0 && resp.Attr != nil {
+		c.metaCache.Set(childPath, resp.Attr)
 	}
 
 	return resp, nil
@@ -440,28 +433,27 @@ func (c *CachedClient) handleLookup(ctx context.Context, req *pb.FileRequest, r 
 // Consistency: mtime is always validated from the server (coalesced within
 // mtimeCheckInterval to avoid per-block round-trips). This ensures stale
 // data is never served beyond the check interval.
-func (c *CachedClient) handleRead(ctx context.Context, req *pb.FileRequest, r *pb.ReadRequest) (*pb.FileResponse, error) {
+func (c *CachedClient) handleRead(ctx context.Context, req *wire.Request) (*wire.Response, error) {
 	blockSize := c.config.BlockSize
-	size := int64(r.Size)
+	size := int64(req.Size)
 
 	// Validate mtime from server. Checks are coalesced within mtimeCheckInterval
 	// so burst reads (many FUSE blocks for one file) share a single round-trip.
-	mtime := c.getValidatedMtime(ctx, r.Path)
+	mtime := c.getValidatedMtime(ctx, req.Path)
 
-	data, complete := c.dataCache.ReadWithMtime(r.Path, r.Offset, size, mtime)
+	data, complete := c.dataCache.ReadWithMtime(req.Path, req.Offset, size, mtime)
 	if complete {
-		c.triggerPrefetch(r.Path, r.Offset, size, mtime)
-		return &pb.FileResponse{
-			RequestId: req.RequestId,
-			Result: &pb.FileResponse_Read{
-				Read: &pb.ReadResult{Data: data},
-			},
+		c.triggerPrefetch(req.Path, req.Offset, size, mtime)
+		return &wire.Response{
+			ID:   req.ID,
+			Op:   req.Op,
+			Data: data,
 		}, nil
 	}
 
 	// Calculate which blocks we need
-	startBlock := r.Offset / blockSize
-	endBlock := (r.Offset + size - 1) / blockSize
+	startBlock := req.Offset / blockSize
+	endBlock := (req.Offset + size - 1) / blockSize
 	numBlocks := int(endBlock - startBlock + 1)
 
 	// For small reads or if parallel fetch is disabled, use simple fetch
@@ -471,11 +463,9 @@ func (c *CachedClient) handleRead(ctx context.Context, req *pb.FileRequest, r *p
 			return nil, err
 		}
 
-		if resp.Errno == 0 {
-			if rr := resp.GetRead(); rr != nil {
-				c.dataCache.WriteWithMtime(r.Path, r.Offset, rr.Data, mtime)
-				c.triggerPrefetch(r.Path, r.Offset, size, mtime)
-			}
+		if resp.Errno == 0 && len(resp.Data) > 0 {
+			c.dataCache.WriteWithMtime(req.Path, req.Offset, resp.Data, mtime)
+			c.triggerPrefetch(req.Path, req.Offset, size, mtime)
 		}
 		return resp, nil
 	}
@@ -504,33 +494,33 @@ func (c *CachedClient) handleRead(ctx context.Context, req *pb.FileRequest, r *p
 
 			blockOffset := idx * blockSize
 			blockReadSize := blockSize
-			
+
 			// Adjust for partial first/last blocks
 			readStart := int64(0)
 			if idx == startBlock {
-				readStart = r.Offset - blockOffset
+				readStart = req.Offset - blockOffset
 			}
 			readEnd := blockSize
 			if idx == endBlock {
-				readEnd = (r.Offset + size) - blockOffset
+				readEnd = (req.Offset + size) - blockOffset
 				if readEnd > blockSize {
 					readEnd = blockSize
 				}
 			}
-			_ = readStart // Used below
+			_ = readStart // used in assembly below
 
-		if cached, ok := c.dataCache.ReadWithMtime(r.Path, blockOffset, blockReadSize, mtime); ok {
+			if cached, ok := c.dataCache.ReadWithMtime(req.Path, blockOffset, blockReadSize, mtime); ok {
 				results <- blockResult{blockIdx: idx, data: cached}
 				return
 			}
 
 			// Fetch from remote
-			resp, err := c.client.Do(ctx, &pb.FileRequest{
-				Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-					Path:   r.Path,
-					Offset: blockOffset,
-					Size:   uint32(blockReadSize),
-				}},
+			resp, err := c.client.Do(ctx, &wire.Request{
+				Op:       wire.OpRead,
+				Path:     req.Path,
+				HandleID: req.HandleID,
+				Offset:   blockOffset,
+				Size:     uint32(blockReadSize),
 			})
 
 			if err != nil {
@@ -543,14 +533,9 @@ func (c *CachedClient) handleRead(ctx context.Context, req *pb.FileRequest, r *p
 				return
 			}
 
-			rr := resp.GetRead()
-			if rr == nil {
-				results <- blockResult{blockIdx: idx, data: nil}
-				return
-			}
-
-		c.dataCache.WriteWithMtime(r.Path, blockOffset, rr.Data, mtime)
-			results <- blockResult{blockIdx: idx, data: rr.Data}
+			_ = readEnd // used in assembly below
+			c.dataCache.WriteWithMtime(req.Path, blockOffset, resp.Data, mtime)
+			results <- blockResult{blockIdx: idx, data: resp.Data}
 		}(blockIdx)
 	}
 
@@ -582,11 +567,11 @@ func (c *CachedClient) handleRead(ctx context.Context, req *pb.FileRequest, r *p
 		blockOffset := blockIdx * blockSize
 		readStart := int64(0)
 		if blockIdx == startBlock {
-			readStart = r.Offset - blockOffset
+			readStart = req.Offset - blockOffset
 		}
 		readEnd := int64(len(bd))
 		if blockIdx == endBlock {
-			maxEnd := (r.Offset + size) - blockOffset
+			maxEnd := (req.Offset + size) - blockOffset
 			if maxEnd < readEnd {
 				readEnd = maxEnd
 			}
@@ -598,13 +583,12 @@ func (c *CachedClient) handleRead(ctx context.Context, req *pb.FileRequest, r *p
 	}
 
 	// Trigger prefetch for sequential reads
-	c.triggerPrefetch(r.Path, r.Offset, size, mtime)
+	c.triggerPrefetch(req.Path, req.Offset, size, mtime)
 
-	return &pb.FileResponse{
-		RequestId: req.RequestId,
-		Result: &pb.FileResponse_Read{
-			Read: &pb.ReadResult{Data: resultData},
-		},
+	return &wire.Response{
+		ID:   req.ID,
+		Op:   req.Op,
+		Data: resultData,
 	}, nil
 }
 
@@ -624,18 +608,12 @@ func (c *CachedClient) getValidatedMtime(ctx context.Context, path string) int64
 	c.mtimeChecksMu.RUnlock()
 
 	// Fetch fresh mtime from server.
-	resp, err := c.client.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_GetAttr{GetAttr: &pb.GetAttrRequest{Path: path}},
-	})
-	if err != nil || resp.Errno != 0 {
-		return 0
-	}
-	ga := resp.GetGetAttr()
-	if ga == nil || ga.Attr == nil {
+	resp, err := c.client.Do(ctx, &wire.Request{Op: wire.OpGetAttr, Path: path})
+	if err != nil || resp.Errno != 0 || resp.Attr == nil {
 		return 0
 	}
 
-	mtime := int64(ga.Attr.Mtime)
+	mtime := int64(resp.Attr.Mtime)
 
 	// If mtime changed, proactively evict stale data blocks.
 	if oldMtime := c.dataCache.GetMtime(path); oldMtime > 0 && oldMtime != mtime {
@@ -648,7 +626,7 @@ func (c *CachedClient) getValidatedMtime(ctx context.Context, path string) int64
 	c.mtimeChecksMu.Unlock()
 
 	// Also refresh metadata cache (benefits getattr/lookup).
-	c.metaCache.Set(path, ga.Attr)
+	c.metaCache.Set(path, resp.Attr)
 
 	return mtime
 }
@@ -716,7 +694,7 @@ func errnoFromU32(e uint32) error {
 }
 
 // handleWrite sends write to remote and invalidates affected cache blocks.
-func (c *CachedClient) handleWrite(ctx context.Context, req *pb.FileRequest, r *pb.WriteRequest) (*pb.FileResponse, error) {
+func (c *CachedClient) handleWrite(ctx context.Context, req *wire.Request) (*wire.Response, error) {
 	// Write-through: send to remote first
 	resp, err := c.client.Do(ctx, req)
 	if err != nil {
@@ -724,23 +702,22 @@ func (c *CachedClient) handleWrite(ctx context.Context, req *pb.FileRequest, r *
 	}
 
 	if resp.Errno == 0 {
-		c.dataCache.Invalidate(r.Path, r.Offset, int64(len(r.Data)))
-		c.metaCache.Invalidate(r.Path)
-		c.invalidateMtimeCheck(r.Path)
+		c.dataCache.Invalidate(req.Path, req.Offset, int64(len(req.Data)))
+		c.metaCache.Invalidate(req.Path)
+		c.invalidateMtimeCheck(req.Path)
 	}
 
 	return resp, nil
 }
 
 // handleReaddir returns cached directory entries if valid, otherwise fetches and caches.
-func (c *CachedClient) handleReaddir(ctx context.Context, req *pb.FileRequest, r *pb.ReaddirRequest) (*pb.FileResponse, error) {
+func (c *CachedClient) handleReaddir(ctx context.Context, req *wire.Request) (*wire.Response, error) {
 	// Try to get from cache
-	if entries, ok := c.dirCache.Get(r.Path); ok {
-		return &pb.FileResponse{
-			RequestId: req.RequestId,
-			Result: &pb.FileResponse_Readdir{
-				Readdir: &pb.ReaddirResult{Entries: entries},
-			},
+	if entries, ok := c.dirCache.Get(req.Path); ok {
+		return &wire.Response{
+			ID:      req.ID,
+			Op:      req.Op,
+			Entries: entries,
 		}, nil
 	}
 
@@ -752,16 +729,14 @@ func (c *CachedClient) handleReaddir(ctx context.Context, req *pb.FileRequest, r
 
 	// Cache the result if successful
 	if resp.Errno == 0 {
-		if rd := resp.GetReaddir(); rd != nil {
-			c.dirCache.Set(r.Path, rd.Entries)
-		}
+		c.dirCache.Set(req.Path, resp.Entries)
 	}
 
 	return resp, nil
 }
 
 // handleCreate sends to remote and invalidates parent directory cache.
-func (c *CachedClient) handleCreate(ctx context.Context, req *pb.FileRequest, r *pb.CreateRequest) (*pb.FileResponse, error) {
+func (c *CachedClient) handleCreate(ctx context.Context, req *wire.Request) (*wire.Response, error) {
 	resp, err := c.client.Do(ctx, req)
 	if err != nil {
 		return nil, err
@@ -769,14 +744,14 @@ func (c *CachedClient) handleCreate(ctx context.Context, req *pb.FileRequest, r 
 
 	// Invalidate parent directory cache
 	if resp.Errno == 0 {
-		c.dirCache.Invalidate(r.Path)
+		c.dirCache.Invalidate(req.Path)
 	}
 
 	return resp, nil
 }
 
 // handleMkdir sends to remote and invalidates parent directory cache.
-func (c *CachedClient) handleMkdir(ctx context.Context, req *pb.FileRequest, r *pb.MkdirRequest) (*pb.FileResponse, error) {
+func (c *CachedClient) handleMkdir(ctx context.Context, req *wire.Request) (*wire.Response, error) {
 	resp, err := c.client.Do(ctx, req)
 	if err != nil {
 		return nil, err
@@ -784,26 +759,26 @@ func (c *CachedClient) handleMkdir(ctx context.Context, req *pb.FileRequest, r *
 
 	// Invalidate parent directory cache
 	if resp.Errno == 0 {
-		c.dirCache.Invalidate(r.Path)
+		c.dirCache.Invalidate(req.Path)
 	}
 
 	return resp, nil
 }
 
 // handleUnlink sends to remote and invalidates parent directory cache and file caches.
-func (c *CachedClient) handleUnlink(ctx context.Context, req *pb.FileRequest, r *pb.UnlinkRequest) (*pb.FileResponse, error) {
+func (c *CachedClient) handleUnlink(ctx context.Context, req *wire.Request) (*wire.Response, error) {
 	resp, err := c.client.Do(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
 	if resp.Errno == 0 {
-		childPath := r.Name
-		if r.Path != "" && r.Path != "/" {
-			childPath = r.Path + "/" + r.Name
+		childPath := req.Name
+		if req.Path != "" && req.Path != "/" {
+			childPath = req.Path + "/" + req.Name
 		}
 		// Invalidate parent directory cache
-		c.dirCache.Invalidate(r.Path)
+		c.dirCache.Invalidate(req.Path)
 		// Invalidate deleted file's metadata and data
 		c.metaCache.Invalidate(childPath)
 		c.dataCache.InvalidateAll(childPath)
@@ -813,19 +788,19 @@ func (c *CachedClient) handleUnlink(ctx context.Context, req *pb.FileRequest, r 
 }
 
 // handleRmdir sends to remote and invalidates parent directory cache.
-func (c *CachedClient) handleRmdir(ctx context.Context, req *pb.FileRequest, r *pb.RmdirRequest) (*pb.FileResponse, error) {
+func (c *CachedClient) handleRmdir(ctx context.Context, req *wire.Request) (*wire.Response, error) {
 	resp, err := c.client.Do(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
 	if resp.Errno == 0 {
-		childPath := r.Name
-		if r.Path != "" && r.Path != "/" {
-			childPath = r.Path + "/" + r.Name
+		childPath := req.Name
+		if req.Path != "" && req.Path != "/" {
+			childPath = req.Path + "/" + req.Name
 		}
 		// Invalidate parent directory cache
-		c.dirCache.Invalidate(r.Path)
+		c.dirCache.Invalidate(req.Path)
 		// Invalidate deleted directory's metadata and entries
 		c.metaCache.Invalidate(childPath)
 		c.dirCache.Invalidate(childPath)
@@ -835,25 +810,25 @@ func (c *CachedClient) handleRmdir(ctx context.Context, req *pb.FileRequest, r *
 }
 
 // handleRename sends to remote and invalidates both old and new parent directory caches.
-func (c *CachedClient) handleRename(ctx context.Context, req *pb.FileRequest, r *pb.RenameRequest) (*pb.FileResponse, error) {
+func (c *CachedClient) handleRename(ctx context.Context, req *wire.Request) (*wire.Response, error) {
 	resp, err := c.client.Do(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
 	if resp.Errno == 0 {
-		oldChildPath := r.OldName
-		if r.Path != "" && r.Path != "/" {
-			oldChildPath = r.Path + "/" + r.OldName
+		oldChildPath := req.Name
+		if req.Path != "" && req.Path != "/" {
+			oldChildPath = req.Path + "/" + req.Name
 		}
-		newChildPath := r.NewName
-		if r.NewPath != "" && r.NewPath != "/" {
-			newChildPath = r.NewPath + "/" + r.NewName
+		newChildPath := req.NewName
+		if req.NewPath != "" && req.NewPath != "/" {
+			newChildPath = req.NewPath + "/" + req.NewName
 		}
 
 		// Invalidate both parent directories
-		c.dirCache.Invalidate(r.Path)
-		c.dirCache.Invalidate(r.NewPath)
+		c.dirCache.Invalidate(req.Path)
+		c.dirCache.Invalidate(req.NewPath)
 
 		// Invalidate old path's metadata and data
 		c.metaCache.Invalidate(oldChildPath)
@@ -868,18 +843,18 @@ func (c *CachedClient) handleRename(ctx context.Context, req *pb.FileRequest, r 
 }
 
 // handleSetAttr sends to remote and invalidates metadata cache.
-func (c *CachedClient) handleSetAttr(ctx context.Context, req *pb.FileRequest, r *pb.SetAttrRequest) (*pb.FileResponse, error) {
+func (c *CachedClient) handleSetAttr(ctx context.Context, req *wire.Request) (*wire.Response, error) {
 	resp, err := c.client.Do(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
 	if resp.Errno == 0 {
-		c.metaCache.Invalidate(r.Path)
-		c.invalidateMtimeCheck(r.Path)
+		c.metaCache.Invalidate(req.Path)
+		c.invalidateMtimeCheck(req.Path)
 
-		if r.Size != nil {
-			c.dataCache.InvalidateBeyond(r.Path, int64(*r.Size))
+		if req.SetAttrValid&wire.SetAttrSize != 0 {
+			c.dataCache.InvalidateBeyond(req.Path, int64(req.SetSize))
 		}
 	}
 

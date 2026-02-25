@@ -4,6 +4,7 @@ package vfs
 
 import (
 	"context"
+	"net"
 	"os/exec"
 	"strings"
 	"sync"
@@ -11,16 +12,13 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/encoding/gzip"
 
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/cache"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/fileproto"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/frpclient"
 	vfsmount "github.com/cyber-shuttle/linkspan/subsystems/vfs/mount"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs/resolver"
-	pb "github.com/cyber-shuttle/linkspan/subsystems/vfs/proto/gen/remotefs"
+	"github.com/cyber-shuttle/linkspan/subsystems/vfs/wire"
 )
 
 func doMount(cfg MountConfig) (unmount func() error, err error) {
@@ -56,26 +54,13 @@ func doMount(cfg MountConfig) (unmount func() error, err error) {
 			return nil, err
 		}
 	}
-	conn, err := grpc.NewClient(serverAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithDefaultCallOptions(grpc.UseCompressor(gzip.Name)),
-	)
+
+	conn, err := net.Dial("tcp", serverAddr)
 	if err != nil {
 		return nil, err
 	}
-	client := pb.NewRemotefsCoordinatorClient(conn)
-	stream, err := client.ConnectSink(context.Background())
-	if err != nil {
-		conn.Close()
-		return nil, err
-	}
-	if err := stream.Send(&pb.FileMessage{
-		Payload: &pb.FileMessage_ConnectSink{ConnectSink: &pb.ConnectSinkRequest{}},
-	}); err != nil {
-		conn.Close()
-		return nil, err
-	}
-	fpClient := fileproto.NewClient(stream)
+	wc := wire.NewConn(conn)
+	fpClient := fileproto.NewClient(wc)
 	go fpClient.Run()
 
 	cacheSize := cfg.CacheSizeMB * 1024 * 1024

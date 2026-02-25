@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"syscall"
 
-	pb "github.com/cyber-shuttle/linkspan/subsystems/vfs/proto/gen/remotefs"
+	"github.com/cyber-shuttle/linkspan/subsystems/vfs/wire"
 	utils "github.com/cyber-shuttle/linkspan/utils"
 	"github.com/gorilla/mux"
 )
@@ -21,7 +21,7 @@ func ListConnects(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusOK, list)
 }
 
-// CreateConnect establishes a gRPC connect session to a remote publish server.
+// CreateConnect establishes a connect session to a remote publish server.
 func CreateConnect(w http.ResponseWriter, r *http.Request) {
 	var cfg ConnectConfig
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
@@ -83,7 +83,7 @@ func getConnectEntry(w http.ResponseWriter, r *http.Request) *ConnectEntry {
 	return ent
 }
 
-// fileInfoFromAttr converts a proto Attr to a JSON-friendly struct.
+// FileAttr is a JSON-friendly file attribute struct.
 type FileAttr struct {
 	Size  uint64 `json:"size"`
 	Mode  uint32 `json:"mode"`
@@ -96,7 +96,7 @@ type FileAttr struct {
 	Ino   uint64 `json:"ino"`
 }
 
-func attrToFileAttr(a *pb.Attr) FileAttr {
+func attrToFileAttr(a *wire.Attr) FileAttr {
 	if a == nil {
 		return FileAttr{}
 	}
@@ -121,9 +121,7 @@ func ConnectStat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := r.URL.Query().Get("path")
-	resp, err := ent.CachedClient.Do(context.Background(), &pb.FileRequest{
-		Op: &pb.FileRequest_GetAttr{GetAttr: &pb.GetAttrRequest{Path: path}},
-	})
+	resp, err := ent.CachedClient.Do(context.Background(), &wire.Request{Op: wire.OpGetAttr, Path: path})
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -132,12 +130,11 @@ func ConnectStat(w http.ResponseWriter, r *http.Request) {
 		utils.RespondJSON(w, http.StatusNotFound, map[string]string{"error": syscall.Errno(resp.Errno).Error()})
 		return
 	}
-	ga := resp.GetGetAttr()
-	if ga == nil || ga.Attr == nil {
+	if resp.Attr == nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "no attr in response"})
 		return
 	}
-	utils.RespondJSON(w, http.StatusOK, attrToFileAttr(ga.Attr))
+	utils.RespondJSON(w, http.StatusOK, attrToFileAttr(resp.Attr))
 }
 
 // DirEntryInfo is a JSON-friendly directory entry.
@@ -159,9 +156,7 @@ func ConnectListDir(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
 
 	// Open directory
-	resp, err := ent.CachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Opendir{Opendir: &pb.OpendirRequest{Path: path}},
-	})
+	resp, err := ent.CachedClient.Do(ctx, &wire.Request{Op: wire.OpOpendir, Path: path})
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -170,22 +165,13 @@ func ConnectListDir(w http.ResponseWriter, r *http.Request) {
 		utils.RespondJSON(w, http.StatusNotFound, map[string]string{"error": syscall.Errno(resp.Errno).Error()})
 		return
 	}
-	openResp := resp.GetOpen()
-	if openResp == nil {
-		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "no open result"})
-		return
-	}
-	handleID := openResp.HandleId
+	handleID := resp.HandleID
 
 	// Read directory entries
-	resp2, err := ent.CachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Readdir{Readdir: &pb.ReaddirRequest{Path: path, HandleId: handleID}},
-	})
+	resp2, err := ent.CachedClient.Do(ctx, &wire.Request{Op: wire.OpReaddir, Path: path, HandleID: handleID})
 
 	// Release directory handle
-	_, _ = ent.CachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Releasedir{Releasedir: &pb.ReleasedirRequest{Path: path, HandleId: handleID}},
-	})
+	_, _ = ent.CachedClient.Do(ctx, &wire.Request{Op: wire.OpReleasedir, Path: path, HandleID: handleID})
 
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -195,13 +181,8 @@ func ConnectListDir(w http.ResponseWriter, r *http.Request) {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": syscall.Errno(resp2.Errno).Error()})
 		return
 	}
-	rd := resp2.GetReaddir()
-	if rd == nil {
-		utils.RespondJSON(w, http.StatusOK, []DirEntryInfo{})
-		return
-	}
-	entries := make([]DirEntryInfo, 0, len(rd.Entries))
-	for _, e := range rd.Entries {
+	entries := make([]DirEntryInfo, 0, len(resp2.Entries))
+	for _, e := range resp2.Entries {
 		entries = append(entries, DirEntryInfo{
 			Name:  e.Name,
 			Mode:  e.Mode,
@@ -231,9 +212,7 @@ func ConnectReadFile(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
 
 	// Open file
-	openResp, err := ent.CachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Open{Open: &pb.OpenRequest{Path: path, Flags: syscall.O_RDONLY}},
-	})
+	openResp, err := ent.CachedClient.Do(ctx, &wire.Request{Op: wire.OpOpen, Path: path, Flags: syscall.O_RDONLY})
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -242,24 +221,19 @@ func ConnectReadFile(w http.ResponseWriter, r *http.Request) {
 		utils.RespondJSON(w, http.StatusNotFound, map[string]string{"error": syscall.Errno(openResp.Errno).Error()})
 		return
 	}
-	or := openResp.GetOpen()
-	if or == nil {
-		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "no open result"})
-		return
-	}
-	handleID := or.HandleId
+	handleID := openResp.HandleID
 
 	// Read data
-	readResp, err := ent.CachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Read{Read: &pb.ReadRequest{
-			Path: path, HandleId: handleID, Offset: offset, Size: uint32(size),
-		}},
+	readResp, err := ent.CachedClient.Do(ctx, &wire.Request{
+		Op:       wire.OpRead,
+		Path:     path,
+		HandleID: handleID,
+		Offset:   offset,
+		Size:     uint32(size),
 	})
 
 	// Release file handle
-	_, _ = ent.CachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Release{Release: &pb.ReleaseRequest{Path: path, HandleId: handleID}},
-	})
+	_, _ = ent.CachedClient.Do(ctx, &wire.Request{Op: wire.OpRelease, Path: path, HandleID: handleID})
 
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -269,10 +243,9 @@ func ConnectReadFile(w http.ResponseWriter, r *http.Request) {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": syscall.Errno(readResp.Errno).Error()})
 		return
 	}
-	rr := readResp.GetRead()
-	data := []byte{}
-	if rr != nil {
-		data = rr.Data
+	data := readResp.Data
+	if data == nil {
+		data = []byte{}
 	}
 	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"path":   path,
@@ -313,9 +286,7 @@ func ConnectWriteFile(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
 
 	// Open file for writing (create if not exists)
-	openResp, err := ent.CachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Open{Open: &pb.OpenRequest{Path: req.Path, Flags: syscall.O_WRONLY}},
-	})
+	openResp, err := ent.CachedClient.Do(ctx, &wire.Request{Op: wire.OpOpen, Path: req.Path, Flags: syscall.O_WRONLY})
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -324,27 +295,20 @@ func ConnectWriteFile(w http.ResponseWriter, r *http.Request) {
 		utils.RespondJSON(w, http.StatusNotFound, map[string]string{"error": syscall.Errno(openResp.Errno).Error()})
 		return
 	}
-	or := openResp.GetOpen()
-	if or == nil {
-		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "no open result"})
-		return
-	}
-	handleID := or.HandleId
+	handleID := openResp.HandleID
 
 	// Write data
-	writeResp, err := ent.CachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Write{Write: &pb.WriteRequest{
-			Path: req.Path, HandleId: handleID, Offset: req.Offset, Data: data,
-		}},
+	writeResp, err := ent.CachedClient.Do(ctx, &wire.Request{
+		Op:       wire.OpWrite,
+		Path:     req.Path,
+		HandleID: handleID,
+		Offset:   req.Offset,
+		Data:     data,
 	})
 
 	// Flush and release
-	_, _ = ent.CachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Flush{Flush: &pb.FlushRequest{Path: req.Path, HandleId: handleID}},
-	})
-	_, _ = ent.CachedClient.Do(ctx, &pb.FileRequest{
-		Op: &pb.FileRequest_Release{Release: &pb.ReleaseRequest{Path: req.Path, HandleId: handleID}},
-	})
+	_, _ = ent.CachedClient.Do(ctx, &wire.Request{Op: wire.OpFlush, Path: req.Path, HandleID: handleID})
+	_, _ = ent.CachedClient.Do(ctx, &wire.Request{Op: wire.OpRelease, Path: req.Path, HandleID: handleID})
 
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -354,14 +318,9 @@ func ConnectWriteFile(w http.ResponseWriter, r *http.Request) {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": syscall.Errno(writeResp.Errno).Error()})
 		return
 	}
-	wr := writeResp.GetWrite()
-	written := uint32(0)
-	if wr != nil {
-		written = wr.Written
-	}
 	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"path":    req.Path,
-		"written": written,
+		"written": writeResp.Written,
 	})
 }
 
@@ -391,10 +350,12 @@ func ConnectCreateFile(w http.ResponseWriter, r *http.Request) {
 	if req.Mode == 0 {
 		req.Mode = 0644
 	}
-	resp, err := ent.CachedClient.Do(context.Background(), &pb.FileRequest{
-		Op: &pb.FileRequest_Create{Create: &pb.CreateRequest{
-			Path: req.Path, Name: req.Name, Flags: syscall.O_WRONLY | syscall.O_CREAT, Mode: req.Mode,
-		}},
+	resp, err := ent.CachedClient.Do(context.Background(), &wire.Request{
+		Op:    wire.OpCreate,
+		Path:  req.Path,
+		Name:  req.Name,
+		Flags: syscall.O_WRONLY | syscall.O_CREAT,
+		Mode:  req.Mode,
 	})
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -404,18 +365,15 @@ func ConnectCreateFile(w http.ResponseWriter, r *http.Request) {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": syscall.Errno(resp.Errno).Error()})
 		return
 	}
-	cr := resp.GetCreate()
-	if cr == nil {
-		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": "no create result"})
-		return
-	}
 	// Release the handle immediately since we're just creating
-	_, _ = ent.CachedClient.Do(context.Background(), &pb.FileRequest{
-		Op: &pb.FileRequest_Release{Release: &pb.ReleaseRequest{Path: req.Path + "/" + req.Name, HandleId: cr.HandleId}},
+	_, _ = ent.CachedClient.Do(context.Background(), &wire.Request{
+		Op:       wire.OpRelease,
+		Path:     req.Path + "/" + req.Name,
+		HandleID: resp.HandleID,
 	})
 	result := map[string]interface{}{"name": req.Name}
-	if cr.Attr != nil {
-		result["attr"] = attrToFileAttr(cr.Attr)
+	if resp.Attr != nil {
+		result["attr"] = attrToFileAttr(resp.Attr)
 	}
 	utils.RespondJSON(w, http.StatusCreated, result)
 }
@@ -446,8 +404,11 @@ func ConnectMkdir(w http.ResponseWriter, r *http.Request) {
 	if req.Mode == 0 {
 		req.Mode = 0755
 	}
-	resp, err := ent.CachedClient.Do(context.Background(), &pb.FileRequest{
-		Op: &pb.FileRequest_Mkdir{Mkdir: &pb.MkdirRequest{Path: req.Path, Name: req.Name, Mode: req.Mode}},
+	resp, err := ent.CachedClient.Do(context.Background(), &wire.Request{
+		Op:   wire.OpMkdir,
+		Path: req.Path,
+		Name: req.Name,
+		Mode: req.Mode,
 	})
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -457,10 +418,9 @@ func ConnectMkdir(w http.ResponseWriter, r *http.Request) {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": syscall.Errno(resp.Errno).Error()})
 		return
 	}
-	mr := resp.GetMkdir()
 	result := map[string]interface{}{"name": req.Name}
-	if mr != nil && mr.Attr != nil {
-		result["attr"] = attrToFileAttr(mr.Attr)
+	if resp.Attr != nil {
+		result["attr"] = attrToFileAttr(resp.Attr)
 	}
 	utils.RespondJSON(w, http.StatusCreated, result)
 }
@@ -478,9 +438,7 @@ func ConnectDeleteFile(w http.ResponseWriter, r *http.Request) {
 		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "name required"})
 		return
 	}
-	resp, err := ent.CachedClient.Do(context.Background(), &pb.FileRequest{
-		Op: &pb.FileRequest_Unlink{Unlink: &pb.UnlinkRequest{Path: dirPath, Name: name}},
-	})
+	resp, err := ent.CachedClient.Do(context.Background(), &wire.Request{Op: wire.OpUnlink, Path: dirPath, Name: name})
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -505,9 +463,7 @@ func ConnectDeleteDir(w http.ResponseWriter, r *http.Request) {
 		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "name required"})
 		return
 	}
-	resp, err := ent.CachedClient.Do(context.Background(), &pb.FileRequest{
-		Op: &pb.FileRequest_Rmdir{Rmdir: &pb.RmdirRequest{Path: dirPath, Name: name}},
-	})
+	resp, err := ent.CachedClient.Do(context.Background(), &wire.Request{Op: wire.OpRmdir, Path: dirPath, Name: name})
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -543,10 +499,12 @@ func ConnectRename(w http.ResponseWriter, r *http.Request) {
 		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "old_name and new_name required"})
 		return
 	}
-	resp, err := ent.CachedClient.Do(context.Background(), &pb.FileRequest{
-		Op: &pb.FileRequest_Rename{Rename: &pb.RenameRequest{
-			Path: req.Path, OldName: req.OldName, NewPath: req.NewPath, NewName: req.NewName,
-		}},
+	resp, err := ent.CachedClient.Do(context.Background(), &wire.Request{
+		Op:      wire.OpRename,
+		Path:    req.Path,
+		Name:    req.OldName,
+		NewPath: req.NewPath,
+		NewName: req.NewName,
 	})
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -619,7 +577,7 @@ func UnmountMount(w http.ResponseWriter, r *http.Request) {
 
 // --- Publish management ---
 
-// ListPublishes returns all active gRPC publish servers.
+// ListPublishes returns all active publish servers.
 func ListPublishes(w http.ResponseWriter, r *http.Request) {
 	list := GlobalPublishManager.ListPublishes()
 	utils.RespondJSON(w, http.StatusOK, list)
