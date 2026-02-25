@@ -58,11 +58,28 @@ func main() {
 	api.HandleFunc("/vscode/sessions/{id}", vscode.TerminateVSCodeSession).Methods("DELETE")
 	api.HandleFunc("/vscode/sessions/{id}/status", vscode.GetVSCodeSessionStatus).Methods("GET")
 
-	// Remote filesystem management
-	api.HandleFunc("/fs/list", vfs.ListFiles).Methods("GET")
-	api.HandleFunc("/fs/read", vfs.ReadFile).Methods("GET")
-	api.HandleFunc("/fs/write", vfs.WriteFile).Methods("POST")
-	api.HandleFunc("/fs/delete", vfs.DeleteFile).Methods("DELETE")
+	// Remote filesystem — connect session management
+	api.HandleFunc("/fs/connects", vfs.ListConnects).Methods("GET")
+	api.HandleFunc("/fs/connect", vfs.CreateConnect).Methods("POST")
+	api.HandleFunc("/fs/connect/{id}", vfs.DisconnectConnect).Methods("DELETE")
+	api.HandleFunc("/fs/connect/{id}/stats", vfs.GetConnectStats).Methods("GET")
+	// Remote filesystem — file operations on connect sessions
+	api.HandleFunc("/fs/connect/{id}/list", vfs.ConnectListDir).Methods("GET")
+	api.HandleFunc("/fs/connect/{id}/stat", vfs.ConnectStat).Methods("GET")
+	api.HandleFunc("/fs/connect/{id}/read", vfs.ConnectReadFile).Methods("GET")
+	api.HandleFunc("/fs/connect/{id}/write", vfs.ConnectWriteFile).Methods("POST")
+	api.HandleFunc("/fs/connect/{id}/create", vfs.ConnectCreateFile).Methods("POST")
+	api.HandleFunc("/fs/connect/{id}/mkdir", vfs.ConnectMkdir).Methods("POST")
+	api.HandleFunc("/fs/connect/{id}/file", vfs.ConnectDeleteFile).Methods("DELETE")
+	api.HandleFunc("/fs/connect/{id}/dir", vfs.ConnectDeleteDir).Methods("DELETE")
+	api.HandleFunc("/fs/connect/{id}/rename", vfs.ConnectRename).Methods("POST")
+	// Remote filesystem — FUSE mount and publish
+	api.HandleFunc("/fs/mounts", vfs.ListMounts).Methods("GET")
+	api.HandleFunc("/fs/mount", vfs.CreateMount).Methods("POST")
+	api.HandleFunc("/fs/mount/{id}", vfs.UnmountMount).Methods("DELETE")
+	api.HandleFunc("/fs/publishes", vfs.ListPublishes).Methods("GET")
+	api.HandleFunc("/fs/publish", vfs.CreatePublish).Methods("POST")
+	api.HandleFunc("/fs/publish/{id}", vfs.StopPublish).Methods("DELETE")
 
 	// Tunnel management
 	api.HandleFunc("/tunnels/devtunnels", tunnel.ListDevTunnels).Methods("GET")
@@ -191,5 +208,8 @@ func cleanupResources() {
 	tunnel.GlobalDevTunnelManager.CleanAll()
 	tunnel.StopFrpAllTunnels()
 	vscode.StopAllSSHServers()
+	vfs.GlobalConnectManager.DisconnectAll()
+	vfs.GlobalMountManager.UnmountAll()
+	vfs.GlobalPublishManager.StopAll()
 	log.Println("Resource cleanup completed.")
 }
