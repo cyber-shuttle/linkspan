@@ -10,8 +10,7 @@ import (
 )
 
 type VSCodeSessionRequest struct {
-	Password      string `json:"password"`
-	MountUserHome bool   `json:"mount_user_home"`
+	MountUserHome bool `json:"mount_user_home"`
 }
 
 type VSCodeSessionResponse struct {
@@ -38,7 +37,7 @@ func CreateVSCodeSession(w http.ResponseWriter, r *http.Request) {
 	// Generate a session ID (in production, use a proper ID generator)
 	sessionID := fmt.Sprintf("s-%d", availablePort)
 
-	StartSSHServerForVSCodeConnection(sessionID, fmt.Sprintf(":%d", availablePort), sessionReq.Password)
+	StartSSHServerForVSCodeConnection(sessionID, fmt.Sprintf(":%d", availablePort))
 
 	s := VSCodeSessionResponse{ID: sessionID, BindPort: int32(availablePort)}
 	utils.RespondJSON(w, http.StatusCreated, s)

@@ -24,8 +24,6 @@ func registerBuiltinActions(r *Registry) {
 // --- vscode.create_session ---
 
 func actionVSCodeCreateSession(params map[string]any) (*ActionResult, error) {
-	password, _ := params["password"].(string)
-
 	port, err := utils.GetAvailablePort()
 	if err != nil {
 		return nil, fmt.Errorf("get available port: %w", err)
@@ -34,7 +32,7 @@ func actionVSCodeCreateSession(params map[string]any) (*ActionResult, error) {
 	sessionID := fmt.Sprintf("wf-%d", port)
 	addr := fmt.Sprintf(":%d", port)
 
-	vscode.StartSSHServerForVSCodeConnection(sessionID, addr, password)
+	vscode.StartSSHServerForVSCodeConnection(sessionID, addr)
 
 	result := ActionResult{
 		"session_id": sessionID,

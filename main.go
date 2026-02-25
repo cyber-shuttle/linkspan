@@ -75,10 +75,11 @@ func main() {
 	api.HandleFunc("/tunnels/frp", tunnel.CreateFrpTunnelProxy).Methods("POST")
 	api.HandleFunc("/tunnels/frp/{id}", tunnel.TerminateFrpTunnel).Methods("DELETE")
 
-	// Use the configured server host and port from CLI flags
+	// Use the configured server host and port from CLI flags.
+	// Port 0 means "let the OS pick a free port".
 	serverPort := *serverPortFlag
 	serverHost := *serverHostFlag
-	if serverPort <= 0 || serverPort > 65535 {
+	if serverPort < 0 || serverPort > 65535 {
 		log.Fatalf("invalid server port: %d", serverPort)
 	}
 	addr := fmt.Sprintf("%s:%d", serverHost, serverPort)
@@ -94,7 +95,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to listen on %s: %v", addr, err)
 	}
-	log.Printf("listening on %s", addr)
+
+	// When port 0 was requested, update serverPort to the actual bound port.
+	if serverPort == 0 {
+		serverPort = listener.Addr().(*net.TCPAddr).Port
+	}
+	log.Printf("listening on %s:%d", serverHost, serverPort)
 
 	// Run workflow if specified. Use "-" to read from stdin.
 	if *workflowFile != "" {
