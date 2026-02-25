@@ -49,10 +49,14 @@ func actionDevTunnelCreate(params map[string]any) (*ActionResult, error) {
 	if expiration == "" {
 		expiration = "1d"
 	}
+	authToken, _ := params["auth_token"].(string)
+	if authToken == "" {
+		return nil, fmt.Errorf("tunnel.devtunnel_create: auth_token is required")
+	}
 
 	ports := toIntSlice(params["ports"])
 
-	info, err := tunnel.DevTunnelCreate(tunnelName, expiration, ports)
+	info, err := tunnel.DevTunnelCreate(tunnelName, expiration, ports, authToken)
 	if err != nil {
 		return nil, err
 	}
@@ -68,9 +72,12 @@ func actionDevTunnelCreate(params map[string]any) (*ActionResult, error) {
 
 func actionDevTunnelHost(params map[string]any) (*ActionResult, error) {
 	tunnelName, _ := params["tunnel_name"].(string)
-	createToken, _ := params["create_token"].(bool)
+	authToken, _ := params["auth_token"].(string)
+	if authToken == "" {
+		return nil, fmt.Errorf("tunnel.devtunnel_host: auth_token is required")
+	}
 
-	cmdID, conn, err := tunnel.DevTunnelHost(tunnelName, createToken)
+	cmdID, conn, err := tunnel.DevTunnelHost(tunnelName, authToken)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +94,12 @@ func actionDevTunnelHost(params map[string]any) (*ActionResult, error) {
 
 func actionDevTunnelDelete(params map[string]any) (*ActionResult, error) {
 	tunnelName, _ := params["tunnel_name"].(string)
-	if err := tunnel.DevTunnelDelete(tunnelName); err != nil {
+	authToken, _ := params["auth_token"].(string)
+	if authToken == "" {
+		return nil, fmt.Errorf("tunnel.devtunnel_delete: auth_token is required")
+	}
+
+	if err := tunnel.DevTunnelDelete(tunnelName, authToken); err != nil {
 		return nil, err
 	}
 	return &ActionResult{}, nil

@@ -3,8 +3,6 @@ name: "cs-bridge-hpc-setup"
 steps:
   - action: "vscode.create_session"
     name: "Start SSH server"
-    params:
-      password: "test"
     outputs:
       bind_port: "ssh_port"
 
@@ -13,6 +11,7 @@ steps:
     params:
       tunnel_name: "linkspan-tunnel"
       expiration: "1d"
+      auth_token: "{{.TunnelAuthToken}}"
       ports:
         - "{{.ssh_port}}"
 
@@ -20,7 +19,7 @@ steps:
     name: "Host devtunnel"
     params:
       tunnel_name: "linkspan-tunnel"
-      create_token: true
+      auth_token: "{{.TunnelAuthToken}}"
 
   - action: "shell.exec"
     name: "Clone repo"

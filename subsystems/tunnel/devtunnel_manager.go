@@ -6,20 +6,25 @@ import (
 	"sync"
 )
 
+// DevTunnelInfo holds the identifying information for a managed dev tunnel.
 type DevTunnelInfo struct {
-	TunnelID      string
-	TunnelName    string
-	Ports []int
+	TunnelID   string
+	TunnelName string
+	Ports      []int
 }
 
+// DevTunnelConnection bundles a connection URL with its associated token (if any)
+// and the backing tunnel metadata.
 type DevTunnelConnection struct {
-	ConnectionURL       string
-	Token               string
-	DevTunnelInfo       *DevTunnelInfo
+	ConnectionURL string
+	Token         string
+	DevTunnelInfo *DevTunnelInfo
 }
 
+// DevTunnelManager tracks dev tunnels created during the current process lifetime
+// so they can be enumerated and cleaned up on shutdown.
 type DevTunnelManager struct {
-	mu    sync.Mutex
+	mu      sync.Mutex
 	tunnels map[string]*DevTunnelInfo
 }
 
@@ -27,8 +32,11 @@ func newDevTunnelManager() *DevTunnelManager {
 	return &DevTunnelManager{tunnels: make(map[string]*DevTunnelInfo)}
 }
 
+// GlobalDevTunnelManager is the package-level singleton.
 var GlobalDevTunnelManager = newDevTunnelManager()
 
+// Register stores the tunnel metadata.  Returns the tunnel name and a nil error
+// on success; the error return is kept for future validation hooks.
 func (tm *DevTunnelManager) Register(tunnel *DevTunnelInfo) (string, error) {
 	tm.mu.Lock()
 	tm.tunnels[tunnel.TunnelName] = tunnel
@@ -36,6 +44,7 @@ func (tm *DevTunnelManager) Register(tunnel *DevTunnelInfo) (string, error) {
 	return tunnel.TunnelName, nil
 }
 
+// Find retrieves tunnel metadata by name.
 func (tm *DevTunnelManager) Find(tunnelName string) (*DevTunnelInfo, error) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
@@ -46,25 +55,36 @@ func (tm *DevTunnelManager) Find(tunnelName string) (*DevTunnelInfo, error) {
 	return tunnel, nil
 }
 
+// GetAll returns a snapshot of all tracked tunnels.
 func (tm *DevTunnelManager) GetAll() ([]*DevTunnelInfo, error) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
-	tunnels := make([]*DevTunnelInfo, 0, len(tm.tunnels))
-	for _, tunnel := range tm.tunnels {
-		tunnels = append(tunnels, tunnel)
+	out := make([]*DevTunnelInfo, 0, len(tm.tunnels))
+	for _, t := range tm.tunnels {
+		out = append(out, t)
 	}
-	return tunnels, nil
+	return out, nil
 }
 
-func (tm *DevTunnelManager) CleanAll() error {
+// CleanAll deletes every tracked tunnel via the SDK.  authToken must be the same
+// Microsoft Entra ID token that was used when the tunnels were created.
+func (tm *DevTunnelManager) CleanAll(authToken string) error {
 	tm.mu.Lock()
-	for id := range tm.tunnels {
-		log.Printf("cleaning up dev tunnel %s", tm.tunnels[id].TunnelName)
-		err := DevTunnelDelete(tm.tunnels[id].TunnelName)
-		if err != nil {
-			log.Printf("failed to delete dev tunnel %s: %v", tm.tunnels[id].TunnelName, err)
-		}
+	names := make([]string, 0, len(tm.tunnels))
+	for name := range tm.tunnels {
+		names = append(names, name)
 	}
 	tm.mu.Unlock()
+
+	for _, name := range names {
+		log.Printf("devtunnel manager: cleaning up tunnel %s", name)
+		if err := DevTunnelDelete(name, authToken); err != nil {
+			log.Printf("devtunnel manager: failed to delete tunnel %s: %v", name, err)
+		} else {
+			tm.mu.Lock()
+			delete(tm.tunnels, name)
+			tm.mu.Unlock()
+		}
+	}
 	return nil
 }

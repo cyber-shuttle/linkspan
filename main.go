@@ -27,6 +27,7 @@ func main() {
 	// parse CLI flags
 	tunnelAPI := flag.String("tunnel-api", "devtunnels", "tunnel API provider name (e.g. devtunnels)")
 	tunnelEnable := flag.Bool("tunnel-enable", false, "enable tunnel startup")
+	tunnelAuthToken := flag.String("tunnel-auth-token", "", "Microsoft Entra ID bearer token for the Dev Tunnels service")
 	tunnelRetries := flag.Int("tunnel-retries", 3, "number of retries for tunnel startup")
 	tunnelRetryDelay := flag.Duration("tunnel-retry-delay", 2*time.Second, "delay between tunnel startup retries")
 	tunnelAttemptTimeout := flag.Duration("tunnel-attempt-timeout", 10*time.Second, "timeout per tunnel setup attempt")
@@ -115,9 +116,10 @@ func main() {
 			log.Fatalf("workflow: %v", err)
 		}
 		engine := workflow.NewEngine(workflow.DefaultRegistry(), map[string]any{
-			"Timestamp":  time.Now().Unix(),
-			"ServerPort": serverPort,
-			"ServerHost": serverHost,
+			"Timestamp":        time.Now().Unix(),
+			"ServerPort":       serverPort,
+			"ServerHost":       serverHost,
+			"TunnelAuthToken":  *tunnelAuthToken,
 		})
 		go func() {
 			if err := engine.Run(wf); err != nil {
@@ -130,7 +132,14 @@ func main() {
 	// when the tunnel attempts to connect or forward traffic. Make startup
 	// conditional and add retries/timeouts to be more robust in unreliable
 	// environments.
+	// Store auth token for cleanup path.
+	devtunnelAuthTokenForCleanup = *tunnelAuthToken
+
 	if apiTunnelType == "devtunnels" && *tunnelEnable {
+		authToken := *tunnelAuthToken
+		if authToken == "" {
+			log.Println("devtunnel: warning — --tunnel-auth-token not provided; tunnel startup will fail")
+		}
 		go func() {
 			tunnelName := fmt.Sprintf("aget-tunnel-%d", time.Now().UnixNano())
 
@@ -141,12 +150,12 @@ func main() {
 				// apply a per-attempt timeout.
 				ch := make(chan error, 1)
 				go func() {
-					_, err := tunnel.DevTunnelCreate(tunnelName, "1d", []int{serverPort})
+					_, err := tunnel.DevTunnelCreate(tunnelName, "1d", []int{serverPort}, authToken)
 					if err != nil {
 						ch <- err
 						return
 					}
-					_, tunnelConnection, err := tunnel.DevTunnelHost(tunnelName, true)
+					_, tunnelConnection, err := tunnel.DevTunnelHost(tunnelName, authToken)
 					if err != nil {
 						ch <- err
 						return
@@ -216,11 +225,15 @@ func main() {
 	log.Println("Server gracefully stopped.")
 }
 
+// devtunnelAuthTokenForCleanup holds the auth token supplied at startup so the
+// shutdown path can call CleanAll without needing a separate flag reference.
+var devtunnelAuthTokenForCleanup string
+
 func cleanupResources() {
 	log.Println("Cleaning up resources before shutdown...")
 	// Add resource cleanup logic here, e.g., terminating kernels, closing tunnels, etc.
 	pm.GlobalProcessManager.KillAll()
-	tunnel.GlobalDevTunnelManager.CleanAll()
+	tunnel.GlobalDevTunnelManager.CleanAll(devtunnelAuthTokenForCleanup)
 	tunnel.StopFrpAllTunnels()
 	vscode.StopAllSSHServers()
 	log.Println("Resource cleanup completed.")

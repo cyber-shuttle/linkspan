@@ -8,6 +8,7 @@ require (
 	github.com/fatedier/frp v0.67.0
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/gorilla/mux v1.8.1
+	github.com/microsoft/dev-tunnels v0.1.19
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -18,11 +19,13 @@ require (
 	github.com/fatedier/golib v0.5.1 // indirect
 	github.com/go-jose/go-jose/v4 v4.0.5 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
+	github.com/gorilla/websocket v1.5.0 // indirect
 	github.com/hashicorp/yamux v0.1.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.6 // indirect
 	github.com/klauspost/reedsolomon v1.12.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
+
 	github.com/pelletier/go-toml/v2 v2.2.0 // indirect
 	github.com/pion/dtls/v2 v2.2.7 // indirect
 	github.com/pion/logging v0.2.2 // indirect
@@ -32,6 +35,7 @@ require (
 	github.com/pires/go-proxyproto v0.7.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/quic-go/quic-go v0.55.0 // indirect
+	github.com/rodaine/table v1.2.0 // indirect
 	github.com/samber/lo v1.47.0 // indirect
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8 // indirect
 	github.com/spf13/cobra v1.8.0 // indirect
