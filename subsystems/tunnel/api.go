@@ -8,6 +8,7 @@ import (
 	"github.com/gorilla/mux"
 )
 
+// Tunnel is the generic tunnel descriptor exposed by the REST API.
 type Tunnel struct {
 	ID     string `json:"id"`
 	Local  string `json:"local"`
@@ -15,123 +16,133 @@ type Tunnel struct {
 	Active bool   `json:"active"`
 }
 
+// DevTunnelCreateRequest is the JSON body for POST /tunnels/devtunnel.
 type DevTunnelCreateRequest struct {
 	TunnelName string `json:"tunnelName"`
 	Expiration string `json:"expiration"`
 	Ports      []int  `json:"ports"`
-	CreateToken bool   `json:"createToken"`
+	// AuthToken is the Microsoft Entra ID (Azure AD) bearer token used to
+	// authenticate against the Dev Tunnels service.  It is required for all
+	// devtunnel operations.
+	AuthToken string `json:"authToken"`
 }
 
+// DevTunnelCreateResponse is the JSON body returned after a successful create+host.
 type DevTunnelCreateResponse struct {
 	TunnelName string `json:"tunnelName"`
 	TunnelID   string `json:"tunnelID"`
-	Token	  string `json:"token,omitempty"`
+	Token      string `json:"token,omitempty"`
 }
 
+// FrpTunnelProxyCreateRequest is the JSON body for POST /tunnels/frp.
 type FrpTunnelProxyCreateRequest struct {
-	TunnelName string `json:"tunnelName"`
-	Port       int    `json:"port"`
-	TunnelType string `json:"tunnelType"` // e.g., "xtcp"
-	TunnelSecret string `json:"tunnelSecret"`
+	TunnelName    string `json:"tunnelName"`
+	Port          int    `json:"port"`
+	TunnelType    string `json:"tunnelType"` // e.g. "xtcp"
+	TunnelSecret  string `json:"tunnelSecret"`
 	DiscoveryHost string `json:"discoveryHost"`
 	DiscoveryPort int    `json:"discoveryPort"`
 	DiscoveryToken string `json:"discoveryToken"`
 }
 
-
+// FrpTunnelProxyCreateResponse is the JSON body returned after FRP proxy creation.
 type FrpTunnelProxyCreateResponse struct {
 	TunnelName string `json:"tunnelName"`
 }
 
+// FrpTunnelListResponse is the JSON body for GET /tunnels/frp.
 type FrpTunnelListResponse struct {
 	FrpTunnelInfos []FrpTunnelInfo `json:"tunnels"`
 }
 
+// DevTunnelListResponse is the JSON body for GET /tunnels/devtunnel.
 type DevTunnelListResponse struct {
 	DevTunnelInfos []*DevTunnelInfo `json:"tunnels"`
 }
 
+// ListDevTunnels handles GET /tunnels/devtunnel.
 func ListDevTunnels(w http.ResponseWriter, r *http.Request) {
 	tunnels, err := GlobalDevTunnelManager.GetAll()
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	response := DevTunnelListResponse{
-		DevTunnelInfos: tunnels,
-	}
-	utils.RespondJSON(w, http.StatusOK, response)
+	utils.RespondJSON(w, http.StatusOK, DevTunnelListResponse{DevTunnelInfos: tunnels})
 }
 
+// CreateDevTunnel handles POST /tunnels/devtunnel.
+// It creates the tunnel via the SDK and immediately starts hosting it via the CLI.
 func CreateDevTunnel(w http.ResponseWriter, r *http.Request) {
-	devTunnelCR := DevTunnelCreateRequest{}
-	_ = json.NewDecoder(r.Body).Decode(&devTunnelCR)
+	var req DevTunnelCreateRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
 	_ = r.Body.Close()
-	
-	info, err := DevTunnelCreate(devTunnelCR.TunnelName, devTunnelCR.Expiration, devTunnelCR.Ports)
-	if err != nil {
-		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+
+	if req.AuthToken == "" {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "authToken is required"})
 		return
 	}
-	
-	_, connection, err := DevTunnelHost(devTunnelCR.TunnelName, devTunnelCR.CreateToken)
+
+	info, err := DevTunnelCreate(req.TunnelName, req.Expiration, req.Ports, req.AuthToken)
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
-	response := DevTunnelCreateResponse{
-		TunnelName: devTunnelCR.TunnelName,
+	_, connection, err := DevTunnelHost(req.TunnelName, req.AuthToken)
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	utils.RespondJSON(w, http.StatusCreated, DevTunnelCreateResponse{
+		TunnelName: req.TunnelName,
 		TunnelID:   info.TunnelID,
 		Token:      connection.Token,
-	}
-
-	utils.RespondJSON(w, http.StatusCreated, response)	
+	})
 }
 
+// CloseDevTunnel handles DELETE /tunnels/devtunnel/{id} (stub).
 func CloseDevTunnel(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusNoContent, nil)
 }
 
+// CreateFrpTunnelProxy handles POST /tunnels/frp.
 func CreateFrpTunnelProxy(w http.ResponseWriter, r *http.Request) {
-	frpTunnelCr := FrpTunnelProxyCreateRequest{}
-	_ = json.NewDecoder(r.Body).Decode(&frpTunnelCr)
+	var req FrpTunnelProxyCreateRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
 	_ = r.Body.Close()
 
-	info, err := FrpTunnelProxyCreate(frpTunnelCr.TunnelName, frpTunnelCr.Port, frpTunnelCr.TunnelType,
-		frpTunnelCr.TunnelSecret, frpTunnelCr.DiscoveryHost, frpTunnelCr.DiscoveryPort, frpTunnelCr.DiscoveryToken)
+	info, err := FrpTunnelProxyCreate(
+		req.TunnelName, req.Port, req.TunnelType,
+		req.TunnelSecret, req.DiscoveryHost, req.DiscoveryPort, req.DiscoveryToken,
+	)
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
-	response := FrpTunnelProxyCreateResponse{
+	utils.RespondJSON(w, http.StatusCreated, FrpTunnelProxyCreateResponse{
 		TunnelName: info.TunnelName,
-	}
-
-	utils.RespondJSON(w, http.StatusCreated, response)
+	})
 }
 
+// ListFrpTunnels handles GET /tunnels/frp.
 func ListFrpTunnels(w http.ResponseWriter, r *http.Request) {
-	tunnels, err := FrpTunnelList()
+	ts, err := FrpTunnelList()
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-
-	response := FrpTunnelListResponse{
-		FrpTunnelInfos: tunnels,
-	}
-
-	utils.RespondJSON(w, http.StatusOK, response)
+	utils.RespondJSON(w, http.StatusOK, FrpTunnelListResponse{FrpTunnelInfos: ts})
 }
 
+// GetFrpTunnelStatus handles GET /tunnels/frp/{id}/status (stub).
 func GetFrpTunnelStatus(w http.ResponseWriter, r *http.Request) {
-	// Implementation for getting FRP tunnel status
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "unknown"})
 }
 
+// TerminateFrpTunnel handles DELETE /tunnels/frp/{id}.
 func TerminateFrpTunnel(w http.ResponseWriter, r *http.Request) {
-	// Get session ID from query parameter or path
 	vars := mux.Vars(r)
 	tunnelName := vars["id"]
 	if tunnelName == "" {

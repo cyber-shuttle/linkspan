@@ -15,7 +15,7 @@ import (
 	"github.com/gliderlabs/ssh"
 )
 
-// Simple SSH server with password and public-key authentication.
+// Simple SSH server with no authentication.
 // - Interactive sessions present a small REPL that echoes input.
 // - Non-interactive sessions execute the requested command on the host.
 
@@ -31,9 +31,9 @@ var (
 	activeServersMu sync.Mutex
 )
 
-// startSSHServerForVSCodeConnection starts an SSH server and registers it for later shutdown.
+// StartSSHServerForVSCodeConnection starts an SSH server and registers it for later shutdown.
 // Returns the SSHServer instance so it can be stopped.
-func startSSHServerForVSCodeConnection(sessionID, addr, password string) *SSHServer {
+func StartSSHServerForVSCodeConnection(sessionID, addr string) *SSHServer {
 
 	// Session handler: support exec (non-interactive) and a tiny interactive REPL.
 	sessionHandler := func(s ssh.Session) {
@@ -157,26 +157,14 @@ func startSSHServerForVSCodeConnection(sessionID, addr, password string) *SSHSer
 		}
 	}
 
-	// Public key auth: accept any key by default; replace with validation as needed.
-	publicKeyHandler := func(ctx ssh.Context, key ssh.PublicKey) bool {
-		// Example: reject all keys. For production, compare against known keys.
-		return false
-	}
-
-	// Password auth: accept only the configured password.
-	passwordHandler := func(ctx ssh.Context, pass string) bool {
-		return pass == password
-	}
-
 	// Create a forwarded TCP handler for reverse port forwarding
 	forwardHandler := &ssh.ForwardedTCPHandler{}
 
-	// Create server with options so we can stop it later
+	// Create server with no auth handlers — gliderlabs/ssh automatically
+	// sets NoClientAuth=true when all auth handlers are nil.
 	server := &ssh.Server{
-		Addr:             addr,
-		Handler:          sessionHandler,
-		PublicKeyHandler: publicKeyHandler,
-		PasswordHandler:  passwordHandler,
+		Addr:    addr,
+		Handler: sessionHandler,
 		LocalPortForwardingCallback: func(ctx ssh.Context, dhost string, dport uint32) bool {
 			log.Printf("local port forwarding requested: host=%s port=%d", dhost, dport)
 			return true // Allow all local port forwards

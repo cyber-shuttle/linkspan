@@ -1,168 +1,94 @@
 package tunnel
 
 import (
+	"context"
 	"fmt"
 	"log"
-	"os/exec"
-	"time"
-
-	pm "github.com/cyber-shuttle/linkspan/internal/process"
-	utils "github.com/cyber-shuttle/linkspan/utils"
 )
 
-func DevTunnelCreate(tunnelName string, expiration string, ports []int) (DevTunnelInfo, error) {
-
-	tunnlelCreateCmd := exec.Command("devtunnel", "create", tunnelName, "--expiration", expiration)
-	id, err := pm.GlobalProcessManager.Start(tunnlelCreateCmd)
-	if err != nil {
-		log.Printf("failed to start devtunnel create command: %v", err)
-		return DevTunnelInfo{}, err
-	}
-	err = pm.GlobalProcessManager.Wait(id)
-	if err != nil {
-		log.Printf("devtunnel create command failed: %v", err)
-		stdOut, stdErr, _ := pm.GlobalProcessManager.GetOutput(id)
-		log.Printf("devtunnel create command output - stdout: %s, stderr: %s", stdOut, stdErr)
-		return DevTunnelInfo{}, fmt.Errorf("Error: devtunnel create command output - stdout: %s, stderr: %s", stdOut, stdErr)
+// DevTunnelCreate creates a tunnel with the given ports via the SDK and registers
+// it with GlobalDevTunnelManager.  tunnelName is used as the tunnel ID (the API
+// does not support custom display names).  authToken is a Microsoft Entra ID
+// (Azure AD) bearer token used to authenticate against the tunnel service.
+func DevTunnelCreate(tunnelName string, expiration string, ports []int, authToken string) (DevTunnelInfo, error) {
+	if err := InitSDK(authToken); err != nil {
+		return DevTunnelInfo{}, fmt.Errorf("devtunnel create: init SDK: %w", err)
 	}
 
-	/*
-	Example output of devtunnel create command:
-
-	Tunnel ID             : agant-8080-tunnel2.use2
-	Description           :
-	Labels                :
-	Access control        : {}
-	Host connections      : 0
-	Client connections    : 0
-	Current upload rate   : 0 MB/s (limit: 20 MB/s)
-	Current download rate : 0 MB/s (limit: 20 MB/s)
-	Tunnel Expiration     : 30 days
-
-	Changed default tunnel to agant-8080-tunnel2.use2.
-	*/
-
-	stdOut, _, err := pm.GlobalProcessManager.GetOutput(id)
+	ctx := context.Background()
+	sdkTunnel, err := SDKCreateTunnel(ctx, tunnelName, ports)
 	if err != nil {
-		log.Printf("failed to get output for devtunnels create command: %v", err)
-		return DevTunnelInfo{}, err
+		return DevTunnelInfo{}, fmt.Errorf("devtunnel create %q: %w", tunnelName, err)
 	}
 
-	tunnlelId, err := utils.FindLineInStdout(stdOut, "Tunnel ID             : ") // This is extremely basic and risky parsing, but sufficient for now
-	if err != nil {
-		log.Printf("failed to find tunnel ID in devtunnels create output: %v for stdout %s", err, stdOut)
-		return DevTunnelInfo{}, err
-	}
-
-	GlobalDevTunnelManager.Register(&DevTunnelInfo{
-		TunnelID: tunnlelId,
+	info := &DevTunnelInfo{
+		TunnelID:   sdkTunnel.TunnelID,
 		TunnelName: tunnelName,
-		Ports: ports,
-	})
-
-	for _, port := range ports {
-		tunnlAddPortCmd := exec.Command("devtunnel", "port", "create", tunnelName, "-p", fmt.Sprintf("%d", port))
-		err := tunnlAddPortCmd.Start()
-		if err != nil {
-			log.Printf("failed to start devtunnel port create command: %v", err)
-			return DevTunnelInfo{}, err
-		}
-		err = tunnlAddPortCmd.Wait()
-		if err != nil {
-			log.Printf("devtunnel port create command failed: %v", err)
-			return DevTunnelInfo{}, err
-		}
+		Ports:      ports,
 	}
 
-	return DevTunnelInfo{
-		TunnelID:   tunnlelId,
-		TunnelName: tunnelName,
-	}, nil
+	if _, err := GlobalDevTunnelManager.Register(info); err != nil {
+		log.Printf("devtunnel create: warning — failed to register %q in manager: %v", tunnelName, err)
+	}
+
+	log.Printf("devtunnel create: tunnel %q ready (id=%s)", tunnelName, sdkTunnel.TunnelID)
+	return *info, nil
 }
 
-func DevTunnelDelete(tunnelName string) error {
-	tunnlelDeleteCmd := exec.Command("devtunnel", "delete", tunnelName, "-f")
-	id, err := pm.GlobalProcessManager.Start(tunnlelDeleteCmd)
-	if err != nil {
-		log.Printf("failed to start devtunnel delete command: %v", err)
-		return err
+// DevTunnelHost starts hosting the tunnel identified by tunnelName.  It obtains a
+// host-scoped access token from the SDK and passes it to the devtunnel CLI binary
+// (auto-downloaded if absent) via --access-token so no interactive CLI login is
+// required.  A connect-scoped token is also fetched and included in the returned
+// DevTunnelConnection.
+func DevTunnelHost(tunnelName string, authToken string) (string, DevTunnelConnection, error) {
+	if err := InitSDK(authToken); err != nil {
+		return "", DevTunnelConnection{}, fmt.Errorf("devtunnel host: init SDK: %w", err)
 	}
-	err = pm.GlobalProcessManager.Wait(id)
-	if err != nil {
-		log.Printf("devtunnel delete command failed: %v", err)
-		stdOut, stdErr, _ := pm.GlobalProcessManager.GetOutput(id)
-		log.Printf("devtunnel delete command output - stdout: %s, stderr: %s", stdOut, stdErr)
-		return err
-	}
-	return nil
-}
-
-func DevTunnelHost(tunnelName string, createToken bool) (string, DevTunnelConnection, error) {
 
 	devTunInfo, err := GlobalDevTunnelManager.Find(tunnelName)
 	if err != nil {
-		return "", DevTunnelConnection{}, err
+		return "", DevTunnelConnection{}, fmt.Errorf("devtunnel host: tunnel %q not registered: %w", tunnelName, err)
 	}
 
-	tunnelCommand := exec.Command("devtunnel", "host", tunnelName)
-	tunnelCommandId, err := pm.GlobalProcessManager.Start(tunnelCommand)
+	ctx := context.Background()
+
+	// Obtain a host token — this is what the devtunnel CLI needs to act as relay host.
+	hostToken, err := SDKGetHostToken(ctx, tunnelName)
 	if err != nil {
-		log.Printf("failed to host devtunnel command: %v", err)
-		return "", DevTunnelConnection{}, err
+		return "", DevTunnelConnection{}, fmt.Errorf("devtunnel host: get host token for %q: %w", tunnelName, err)
 	}
 
-	time.Sleep(3 * time.Second) // wait for tunnel to initialize
-	stdOut, _, err := pm.GlobalProcessManager.GetOutput(tunnelCommandId)
+	// The CLI `host` command takes the tunnel ID.
+	cmdID, connectionURL, err := CLIHostTunnel(devTunInfo.TunnelID, hostToken)
 	if err != nil {
-		log.Printf("failed to get output for devtunnels command: %v", err)
-		return "", DevTunnelConnection{}, err
+		return "", DevTunnelConnection{}, fmt.Errorf("devtunnel host: start CLI for %q: %w", tunnelName, err)
 	}
 
-	connectionUrl, err := utils.FindLineInStdout(stdOut, "Connect via browser:")
-
-	if err != nil {
-		log.Printf("failed to find connection URL in devtunnels output: %v", err)
-		return "", DevTunnelConnection{}, err
+	conn := DevTunnelConnection{
+		ConnectionURL: connectionURL,
+		DevTunnelInfo: devTunInfo,
 	}
 
-	tunnelId, err := utils.FindLineInStdout(stdOut, "Ready to accept connections for tunnel: ")
-	if err != nil {
-		log.Printf("failed to find tunnel ID in devtunnels output: %v", err)
-		return "", DevTunnelConnection{}, err
-	}
-
-	if createToken {
-		// create a token for the tunnel
-		tokenCommand := exec.Command("devtunnel", "token", tunnelId, "--scopes", "connect")
-		tokenCommandId, err := pm.GlobalProcessManager.Start(tokenCommand)
-		if err != nil {
-			log.Printf("failed to start devtunnels token command: %v", err)
-			return "", DevTunnelConnection{}, err
-		}
-
-		time.Sleep(3 * time.Second) // wait for token command to complete
-		stdOut, _, err := pm.GlobalProcessManager.GetOutput(tokenCommandId)
-		if err != nil {
-			log.Printf("failed to get output for devtunnels token command: %v", err)
-			return "", DevTunnelConnection{}, err
-		}
-
-		token, err := utils.FindLineInStdout(stdOut, "Token:")
-		if err != nil {
-			log.Printf("failed to find token in devtunnels output: %v", err)
-			return "", DevTunnelConnection{}, err
-		}
-
-		return tunnelCommandId, DevTunnelConnection{
-			ConnectionURL: connectionUrl,
-			DevTunnelInfo:      devTunInfo,
-			Token:         token,
-		}, nil
-
+	connectToken, tokenErr := SDKGetConnectToken(ctx, tunnelName)
+	if tokenErr != nil {
+		log.Printf("devtunnel host: warning — could not obtain connect token for %q: %v", tunnelName, tokenErr)
 	} else {
-		return tunnelCommandId, DevTunnelConnection{
-			ConnectionURL: connectionUrl,
-			DevTunnelInfo:      devTunInfo,
-		}, nil
+		conn.Token = connectToken
 	}
+
+	return cmdID, conn, nil
+}
+
+// DevTunnelDelete deletes the tunnel identified by tunnelName via the SDK.
+func DevTunnelDelete(tunnelName string, authToken string) error {
+	if err := InitSDK(authToken); err != nil {
+		return fmt.Errorf("devtunnel delete: init SDK: %w", err)
+	}
+
+	ctx := context.Background()
+	if err := SDKDeleteTunnel(ctx, tunnelName); err != nil {
+		return fmt.Errorf("devtunnel delete %q: %w", tunnelName, err)
+	}
+
+	return nil
 }
