@@ -15,6 +15,7 @@ import (
 
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
 	"github.com/cyber-shuttle/linkspan/internal/workflow"
+	fuse "github.com/cyber-shuttle/linkspan/subsystems/fuse"
 	jupyter "github.com/cyber-shuttle/linkspan/subsystems/jupyter"
 	tunnel "github.com/cyber-shuttle/linkspan/subsystems/tunnel"
 	vfs "github.com/cyber-shuttle/linkspan/subsystems/vfs"
@@ -66,6 +67,10 @@ func main() {
 	api.HandleFunc("/fs/read", vfs.ReadFile).Methods("GET")
 	api.HandleFunc("/fs/write", vfs.WriteFile).Methods("POST")
 	api.HandleFunc("/fs/delete", vfs.DeleteFile).Methods("DELETE")
+
+	// FUSE mount management
+	api.HandleFunc("/fuse/mount-remote", fuse.HandleMountRemote).Methods("POST")
+	api.HandleFunc("/fuse/status", fuse.HandleGetStatus).Methods("GET")
 
 	// Tunnel management
 	api.HandleFunc("/tunnels/devtunnels", tunnel.ListDevTunnels).Methods("GET")
@@ -236,5 +241,6 @@ func cleanupResources() {
 	tunnel.GlobalDevTunnelManager.CleanAll(devtunnelAuthTokenForCleanup)
 	tunnel.StopFrpAllTunnels()
 	vscode.StopAllSSHServers()
+	fuse.Cleanup()
 	log.Println("Resource cleanup completed.")
 }
