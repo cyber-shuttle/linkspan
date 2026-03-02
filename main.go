@@ -69,6 +69,7 @@ func main() {
 	api.HandleFunc("/fs/delete", vfs.DeleteFile).Methods("DELETE")
 
 	// FUSE mount management
+	api.HandleFunc("/fuse/start-server", fuse.HandleStartServer).Methods("POST")
 	api.HandleFunc("/fuse/mount-remote", fuse.HandleMountRemote).Methods("POST")
 	api.HandleFunc("/fuse/status", fuse.HandleGetStatus).Methods("GET")
 

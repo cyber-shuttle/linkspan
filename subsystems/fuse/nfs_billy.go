@@ -10,7 +10,6 @@ import (
 	"time"
 
 	billy "github.com/go-git/go-billy/v5"
-	nfsfile "github.com/willscott/go-nfs/file"
 )
 
 // remoteBillyFS adapts a FUSE TCP *Client into a billy.Filesystem so that it
@@ -327,10 +326,11 @@ func (fi *remoteBillyFileInfo) Mode() os.FileMode  { return posixToGoMode(fi.att
 func (fi *remoteBillyFileInfo) ModTime() time.Time { return time.Unix(fi.attr.Mtime, 0) }
 func (fi *remoteBillyFileInfo) IsDir() bool        { return fi.Mode().IsDir() }
 
-// Sys returns a *nfsfile.FileInfo with Uid/Gid set to 0. go-nfs queries this
-// to populate NFS file ownership attributes.
+// Sys returns nil so that go-nfs generates unique Fileid values by hashing
+// the file path. Returning a nfsfile.FileInfo with Fileid=0 would cause all
+// entries to share the same inode, breaking macOS NFS readdir.
 func (fi *remoteBillyFileInfo) Sys() any {
-	return &nfsfile.FileInfo{Nlink: 1, UID: 0, GID: 0}
+	return nil
 }
 
 // =========================================================================

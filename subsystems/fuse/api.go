@@ -50,6 +50,27 @@ func ActionStartServer(params map[string]any) (map[string]any, error) {
 	return map[string]any{"fuse_port": port}, nil
 }
 
+// StartServerRequest is the JSON body for POST /api/v1/fuse/start-server.
+type StartServerRequest struct {
+	Root string `json:"root"`
+}
+
+// HandleStartServer handles POST /api/v1/fuse/start-server.
+func HandleStartServer(w http.ResponseWriter, r *http.Request) {
+	var req StartServerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	result, err := ActionStartServer(map[string]any{"root": req.Root})
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	utils.RespondJSON(w, http.StatusOK, result)
+}
+
 // HandleGetStatus handles GET /api/v1/fuse/status. It reports whether the
 // TCP server and any local FUSE mount are currently active.
 func HandleGetStatus(w http.ResponseWriter, r *http.Request) {
