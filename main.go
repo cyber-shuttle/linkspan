@@ -35,7 +35,37 @@ func main() {
 	serverPortFlag := flag.Int("port", 8080, "port for the HTTP server to listen on")
 	serverHostFlag := flag.String("host", "0.0.0.0", "host/IP for the HTTP server to bind to")
 	workflowFile := flag.String("workflow", "", "path to workflow YAML file")
+	mountRemote := flag.Bool("mount-remote", false, "mount a remote FUSE server locally via NFS and block until interrupted")
+	mountSessionID := flag.String("session-id", "", "session ID for the NFS mount point directory name (used with --mount-remote)")
+	mountServerAddr := flag.String("server-addr", "", "FUSE TCP server address host:port (used with --mount-remote)")
 	flag.Parse()
+
+	// Mount-remote mode: connect to a remote FUSE TCP server and expose it
+	// locally via NFS. Blocks until interrupted.
+	if *mountRemote {
+		if *mountSessionID == "" || *mountServerAddr == "" {
+			log.Fatal("--mount-remote requires --session-id and --server-addr")
+		}
+		result, err := fuse.ActionMountRemote(map[string]any{
+			"session_id":  *mountSessionID,
+			"server_addr": *mountServerAddr,
+		})
+		if err != nil {
+			log.Fatalf("mount-remote: %v", err)
+		}
+		fmt.Printf("MOUNT_PATH=%s\n", result["mount_path"])
+		if p, ok := result["nfs_port"]; ok {
+			fmt.Printf("NFS_PORT=%v\n", p)
+		}
+		// Block until signal.
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		<-sigCh
+		log.Println("mount-remote: unmounting...")
+		fuse.Cleanup()
+		return
+	}
+
 	// Support users passing `--tunnel-api=devtunnels` by trimming leading '='
 	apiTunnelType := strings.TrimLeft(*tunnelAPI, "=")
 
