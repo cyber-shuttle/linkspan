@@ -23,6 +23,7 @@ func DevTunnelCreate(tunnelName string, expiration string, ports []int, authToke
 
 	info := &DevTunnelInfo{
 		TunnelID:   sdkTunnel.TunnelID,
+		ClusterID:  sdkTunnel.ClusterID,
 		TunnelName: tunnelName,
 		Ports:      ports,
 	}

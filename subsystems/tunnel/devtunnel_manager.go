@@ -9,8 +9,18 @@ import (
 // DevTunnelInfo holds the identifying information for a managed dev tunnel.
 type DevTunnelInfo struct {
 	TunnelID   string
+	ClusterID  string
 	TunnelName string
 	Ports      []int
+}
+
+// QualifiedID returns the cluster-qualified tunnel ID (e.g. "ls-48.use2")
+// required by the devtunnel CLI for connect operations.
+func (d *DevTunnelInfo) QualifiedID() string {
+	if d.ClusterID != "" {
+		return d.TunnelID + "." + d.ClusterID
+	}
+	return d.TunnelID
 }
 
 // DevTunnelConnection bundles a connection URL with its associated token (if any)

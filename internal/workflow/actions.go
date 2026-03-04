@@ -66,7 +66,7 @@ func actionDevTunnelCreate(params map[string]any) (*ActionResult, error) {
 	}
 
 	result := ActionResult{
-		"tunnel_id":   info.TunnelID,
+		"tunnel_id":   info.QualifiedID(),
 		"tunnel_name": info.TunnelName,
 	}
 	return &result, nil
