@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -174,6 +175,58 @@ func CLIHostTunnel(tunnelID string, hostToken string) (commandID string, connect
 	stdout, stderr, _ := pm.GlobalProcessManager.GetOutput(cmdID)
 	return "", "", fmt.Errorf(
 		"devtunnel cli: timed out waiting for connection URL (stdout=%q stderr=%q)",
+		stdout, stderr,
+	)
+}
+
+// CLIConnectTunnel connects to an existing hosted tunnel, making its forwarded
+// ports available on localhost. It runs `devtunnel connect` as a background
+// process and waits until the connection is established.
+//
+// Returns the ProcessManager command ID so the caller can kill it later.
+func CLIConnectTunnel(tunnelID string, accessToken string) (commandID string, err error) {
+	binPath, err := devtunnelBinPath()
+	if err != nil {
+		return "", fmt.Errorf("devtunnel cli: get binary: %w", err)
+	}
+
+	args := []string{"connect", tunnelID, "--access-token", accessToken}
+	log.Printf("devtunnel cli: running: %s %v", binPath, args)
+
+	cmd := cliCommand(binPath, args...)
+	cmdID, err := pm.GlobalProcessManager.Start(cmd)
+	if err != nil {
+		return "", fmt.Errorf("devtunnel cli: start connect command: %w", err)
+	}
+
+	// Wait for the connection to be established. The CLI prints a line
+	// containing "Connected" or "Forwarding port" when ready.
+	const pollInterval = 500 * time.Millisecond
+	const maxWait = 60 * time.Second
+	deadline := time.Now().Add(maxWait)
+
+	for time.Now().Before(deadline) {
+		time.Sleep(pollInterval)
+
+		stdout, stderr, _ := pm.GlobalProcessManager.GetOutput(cmdID)
+		combined := stdout + stderr
+		if strings.Contains(combined, "Connected") || strings.Contains(combined, "Forwarding port") || strings.Contains(combined, "Ready to accept connections") {
+			log.Printf("devtunnel cli: connect established for tunnel %s", tunnelID)
+			return cmdID, nil
+		}
+
+		// Check if process already exited with an error
+		info, infoErr := pm.GlobalProcessManager.GetInfo(cmdID)
+		if infoErr == nil && info.Completed {
+			return "", fmt.Errorf("devtunnel cli: connect exited prematurely (stdout=%q stderr=%q)", stdout, stderr)
+		}
+	}
+
+	// Timed out — kill the process and report
+	_ = pm.GlobalProcessManager.Kill(cmdID)
+	stdout, stderr, _ := pm.GlobalProcessManager.GetOutput(cmdID)
+	return "", fmt.Errorf(
+		"devtunnel cli: timed out waiting for connect (stdout=%q stderr=%q)",
 		stdout, stderr,
 	)
 }

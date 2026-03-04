@@ -92,3 +92,15 @@ func DevTunnelDelete(tunnelName string, authToken string) error {
 
 	return nil
 }
+
+// DevTunnelConnect connects to an existing hosted tunnel, making its forwarded
+// ports available on localhost.  accessToken is a connect-scoped token obtained
+// from the tunnel host.  Returns the ProcessManager command ID.
+func DevTunnelConnect(tunnelID string, accessToken string) (string, error) {
+	cmdID, err := CLIConnectTunnel(tunnelID, accessToken)
+	if err != nil {
+		return "", fmt.Errorf("devtunnel connect %q: %w", tunnelID, err)
+	}
+	log.Printf("devtunnel connect: connected to tunnel %q (cmd=%s)", tunnelID, cmdID)
+	return cmdID, nil
+}

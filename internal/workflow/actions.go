@@ -18,6 +18,7 @@ func registerBuiltinActions(r *Registry) {
 	r.Register("tunnel.devtunnel_create", actionDevTunnelCreate)
 	r.Register("tunnel.devtunnel_host", actionDevTunnelHost)
 	r.Register("tunnel.devtunnel_delete", actionDevTunnelDelete)
+	r.Register("tunnel.devtunnel_connect", actionDevTunnelConnect)
 	r.Register("tunnel.frp_proxy_create", actionFrpProxyCreate)
 	r.Register("shell.exec", actionShellExec)
 	r.Register("fuse.start_server", actionFuseStartServer)
@@ -106,6 +107,29 @@ func actionDevTunnelDelete(params map[string]any) (*ActionResult, error) {
 		return nil, err
 	}
 	return &ActionResult{}, nil
+}
+
+// --- tunnel.devtunnel_connect ---
+
+func actionDevTunnelConnect(params map[string]any) (*ActionResult, error) {
+	tunnelID, _ := params["tunnel_id"].(string)
+	if tunnelID == "" {
+		return nil, fmt.Errorf("tunnel.devtunnel_connect: tunnel_id is required")
+	}
+	accessToken, _ := params["access_token"].(string)
+	if accessToken == "" {
+		return nil, fmt.Errorf("tunnel.devtunnel_connect: access_token is required")
+	}
+
+	cmdID, err := tunnel.DevTunnelConnect(tunnelID, accessToken)
+	if err != nil {
+		return nil, err
+	}
+
+	result := ActionResult{
+		"command_id": cmdID,
+	}
+	return &result, nil
 }
 
 // --- tunnel.frp_proxy_create ---
