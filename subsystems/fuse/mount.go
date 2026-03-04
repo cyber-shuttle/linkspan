@@ -76,7 +76,8 @@ func (m *Mount) Start() error {
 	}
 	m.server = server
 
-	go server.Serve()
+	// fs.Mount already starts the serve loop internally in go-fuse v2.9+,
+	// so we must NOT call server.Serve() again (it panics on double-call).
 
 	return nil
 }
