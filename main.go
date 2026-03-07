@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -114,6 +115,27 @@ func main() {
 	api.HandleFunc("/tunnels/frp", tunnel.CreateFrpTunnelProxy).Methods("POST")
 	api.HandleFunc("/tunnels/frp/{id}", tunnel.TerminateFrpTunnel).Methods("DELETE")
 
+	// Health and workflow status
+	api.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{"status":"ok"}`)
+	}).Methods("GET")
+
+	// Workflow status — set up after engine creation below.
+	var workflowEngine *workflow.Engine
+	api.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
+		if workflowEngine == nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"state":"idle","currentStep":0,"totalSteps":0,"outputs":{}}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(workflowEngine.Status())
+	}).Methods("GET")
+
 	// Use the configured server host and port from CLI flags.
 	// Port 0 means "let the OS pick a free port".
 	serverPort := *serverPortFlag
@@ -153,14 +175,14 @@ func main() {
 		if err != nil {
 			log.Fatalf("workflow: %v", err)
 		}
-		engine := workflow.NewEngine(workflow.DefaultRegistry(), map[string]any{
+		workflowEngine = workflow.NewEngine(workflow.DefaultRegistry(), map[string]any{
 			"Timestamp":       time.Now().Unix(),
 			"ServerPort":      serverPort,
 			"ServerHost":      serverHost,
 			"TunnelAuthToken": *tunnelAuthToken,
 		})
 		go func() {
-			if err := engine.Run(wf); err != nil {
+			if err := workflowEngine.Run(wf); err != nil {
 				log.Printf("workflow: %v", err)
 			}
 		}()
