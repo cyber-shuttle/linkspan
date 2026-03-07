@@ -19,7 +19,7 @@ func authTokenForTest(t *testing.T) string {
 	return token
 }
 
-func TestDevTunnelConnect(t *testing.T) {
+func TestDevTunnelCreateAndHost(t *testing.T) {
 	authToken := authTokenForTest(t)
 	tunnelName := "test-tunnel"
 
@@ -30,42 +30,40 @@ func TestDevTunnelConnect(t *testing.T) {
 		}
 	}()
 
-	_, err := DevTunnelCreate(tunnelName, "1d", authToken)
+	conn, err := DevTunnelCreate(tunnelName, "1d", authToken, 8080)
 	if err != nil {
 		t.Fatalf("failed to create dev tunnel: %v", err)
-	} else {
-		t.Logf("dev tunnel created successfully")
+	}
+	t.Logf("dev tunnel created+hosted: url=%s token=%s", conn.ConnectionURL, conn.Token)
+
+	if conn.DevTunnelInfo.HostCmdID == "" {
+		t.Fatal("expected host command ID to be set")
 	}
 
-	tunnelCommandId, tunnelConnection, err := DevTunnelHost(tunnelName, authToken)
+	err = pm.GlobalProcessManager.Kill(conn.DevTunnelInfo.HostCmdID)
 	if err != nil {
-		t.Fatalf("failed to set up dev tunnel: %v", err)
-	} else {
-		t.Logf("dev tunnel set up successfully: %+v", tunnelConnection)
+		t.Fatalf("failed to stop dev tunnel host: %v", err)
 	}
-
-	err = pm.GlobalProcessManager.Kill(tunnelCommandId)
-	if err != nil {
-		t.Fatalf("failed to stop dev tunnel command with id %s: %v", tunnelCommandId, err)
-	} else {
-		t.Logf("dev tunnel command with id %s stopped successfully", tunnelCommandId)
-	}
+	t.Logf("dev tunnel host stopped successfully")
 }
 
-func TestDevTunnelCreate(t *testing.T) {
+func TestDevTunnelCreateNoPort(t *testing.T) {
 	authToken := authTokenForTest(t)
+	tunnelName := "test-tunnel-noport"
 
-	_, err := DevTunnelCreate("test-tunnel", "1d", authToken)
+	conn, err := DevTunnelCreate(tunnelName, "1d", authToken, 0)
 	if err != nil {
 		t.Fatalf("failed to create dev tunnel: %v", err)
-	} else {
-		t.Logf("dev tunnel created successfully")
+	}
+	t.Logf("dev tunnel created: url=%s", conn.ConnectionURL)
+
+	if conn.DevTunnelInfo.HostCmdID != "" {
+		_ = pm.GlobalProcessManager.Kill(conn.DevTunnelInfo.HostCmdID)
 	}
 
-	err = DevTunnelDelete("test-tunnel", authToken)
+	err = DevTunnelDelete(tunnelName, authToken)
 	if err != nil {
 		t.Fatalf("failed to delete dev tunnel: %v", err)
-	} else {
-		t.Logf("dev tunnel deleted successfully")
 	}
+	t.Logf("dev tunnel deleted successfully")
 }

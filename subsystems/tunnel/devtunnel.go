@@ -8,17 +8,20 @@ import (
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
 )
 
-// DevTunnelCreate creates a tunnel on the service (no ports registered yet)
-// and registers it with GlobalDevTunnelManager.
-func DevTunnelCreate(tunnelName string, expiration string, authToken string) (DevTunnelInfo, error) {
+// DevTunnelCreate creates a tunnel, starts hosting the relay, and forwards the
+// given serverPort so the client can communicate with linkspan immediately.
+// Additional ports (e.g. SSH) can be added later via DevTunnelForward.
+func DevTunnelCreate(tunnelName string, expiration string, authToken string, serverPort int) (DevTunnelConnection, error) {
 	if err := InitSDK(authToken); err != nil {
-		return DevTunnelInfo{}, fmt.Errorf("devtunnel create: init SDK: %w", err)
+		return DevTunnelConnection{}, fmt.Errorf("devtunnel create: init SDK: %w", err)
 	}
 
 	ctx := context.Background()
+
+	// 1. Create the tunnel on the service.
 	sdkTunnel, err := SDKCreateTunnel(ctx, tunnelName)
 	if err != nil {
-		return DevTunnelInfo{}, fmt.Errorf("devtunnel create %q: %w", tunnelName, err)
+		return DevTunnelConnection{}, fmt.Errorf("devtunnel create %q: %w", tunnelName, err)
 	}
 
 	info := &DevTunnelInfo{
@@ -32,52 +35,43 @@ func DevTunnelCreate(tunnelName string, expiration string, authToken string) (De
 		log.Printf("devtunnel create: warning — failed to register %q in manager: %v", tunnelName, err)
 	}
 
-	log.Printf("devtunnel create: tunnel %q ready (id=%s)", tunnelName, sdkTunnel.TunnelID)
-	return *info, nil
-}
-
-// DevTunnelHost starts hosting the tunnel relay connection.
-// No ports are forwarded yet — use DevTunnelForward to add port forwarding.
-func DevTunnelHost(tunnelName string, authToken string) (string, DevTunnelConnection, error) {
-	if err := InitSDK(authToken); err != nil {
-		return "", DevTunnelConnection{}, fmt.Errorf("devtunnel host: init SDK: %w", err)
+	// 2. Register the server port so it is forwarded through the tunnel.
+	if serverPort > 0 {
+		if err := SDKAddPort(ctx, tunnelName, serverPort); err != nil {
+			return DevTunnelConnection{}, fmt.Errorf("devtunnel create: add server port %d to %q: %w", serverPort, tunnelName, err)
+		}
+		info.Ports = append(info.Ports, serverPort)
 	}
 
-	devTunInfo, err := GlobalDevTunnelManager.Find(tunnelName)
-	if err != nil {
-		return "", DevTunnelConnection{}, fmt.Errorf("devtunnel host: tunnel %q not registered: %w", tunnelName, err)
-	}
-
-	ctx := context.Background()
-
+	// 3. Obtain host token and start the relay with the server port forwarded.
 	hostToken, err := SDKGetHostToken(ctx, tunnelName)
 	if err != nil {
-		return "", DevTunnelConnection{}, fmt.Errorf("devtunnel host: get host token for %q: %w", tunnelName, err)
+		return DevTunnelConnection{}, fmt.Errorf("devtunnel create: get host token for %q: %w", tunnelName, err)
 	}
 
-	// Host without ports — all port forwarding is done later via DevTunnelForward.
-	cmdID, connectionURL, err := CLIHostTunnel(devTunInfo.TunnelID, hostToken, nil)
+	cmdID, connectionURL, err := CLIHostTunnel(info.TunnelID, hostToken, info.Ports)
 	if err != nil {
-		return "", DevTunnelConnection{}, fmt.Errorf("devtunnel host: start CLI for %q: %w", tunnelName, err)
+		return DevTunnelConnection{}, fmt.Errorf("devtunnel create: start host for %q: %w", tunnelName, err)
 	}
 
-	// Track the host process command ID so DevTunnelForward can restart it.
-	devTunInfo.HostCmdID = cmdID
-	devTunInfo.HostToken = hostToken
+	info.HostCmdID = cmdID
+	info.HostToken = hostToken
 
 	conn := DevTunnelConnection{
 		ConnectionURL: connectionURL,
-		DevTunnelInfo: devTunInfo,
+		DevTunnelInfo: info,
 	}
 
+	// 4. Get a connect token for the client side.
 	connectToken, tokenErr := SDKGetConnectToken(ctx, tunnelName)
 	if tokenErr != nil {
-		log.Printf("devtunnel host: warning — could not obtain connect token for %q: %v", tunnelName, tokenErr)
+		log.Printf("devtunnel create: warning — could not obtain connect token for %q: %v", tunnelName, tokenErr)
 	} else {
 		conn.Token = connectToken
 	}
 
-	return cmdID, conn, nil
+	log.Printf("devtunnel create: tunnel %q ready (id=%s, url=%s, port=%d)", tunnelName, sdkTunnel.TunnelID, connectionURL, serverPort)
+	return conn, nil
 }
 
 // DevTunnelForward adds port forwarding to an existing hosted tunnel.
@@ -116,7 +110,6 @@ func DevTunnelForward(tunnelName string, port int, authToken string) error {
 
 		hostToken := devTunInfo.HostToken
 		if hostToken == "" {
-			// Re-fetch if not cached (shouldn't happen in normal flow).
 			hostToken, err = SDKGetHostToken(ctx, tunnelName)
 			if err != nil {
 				return fmt.Errorf("devtunnel forward: get host token for %q: %w", tunnelName, err)

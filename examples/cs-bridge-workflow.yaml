@@ -7,15 +7,9 @@ steps:
       tunnel_name: "linkspan-tunnel"
       expiration: "1d"
       auth_token: "{{.TunnelAuthToken}}"
+      server_port: "{{.ServerPort}}"
     outputs:
       tunnel_id: "tunnel_id"
-
-  - action: "tunnel.devtunnel_host"
-    name: "Host devtunnel"
-    params:
-      tunnel_name: "linkspan-tunnel"
-      auth_token: "{{.TunnelAuthToken}}"
-    outputs:
       connection_url: "tunnel_url"
       token: "tunnel_token"
 

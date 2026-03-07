@@ -24,14 +24,16 @@ type DevTunnelCreateRequest struct {
 	// AuthToken is the Microsoft Entra ID (Azure AD) bearer token used to
 	// authenticate against the Dev Tunnels service.  It is required for all
 	// devtunnel operations.
-	AuthToken string `json:"authToken"`
+	AuthToken  string `json:"authToken"`
+	ServerPort int    `json:"serverPort"` // linkspan HTTP port to forward immediately
 }
 
 // DevTunnelCreateResponse is the JSON body returned after a successful create+host.
 type DevTunnelCreateResponse struct {
-	TunnelName string `json:"tunnelName"`
-	TunnelID   string `json:"tunnelID"`
-	Token      string `json:"token,omitempty"`
+	TunnelName    string `json:"tunnelName"`
+	TunnelID      string `json:"tunnelID"`
+	ConnectionURL string `json:"connectionURL,omitempty"`
+	Token         string `json:"token,omitempty"`
 }
 
 // FrpTunnelProxyCreateRequest is the JSON body for POST /tunnels/frp.
@@ -71,7 +73,8 @@ func ListDevTunnels(w http.ResponseWriter, r *http.Request) {
 }
 
 // CreateDevTunnel handles POST /tunnels/devtunnel.
-// It creates the tunnel via the SDK and immediately starts hosting it via the CLI.
+// Creates the tunnel, hosts the relay, and forwards the server port so the
+// client can communicate with linkspan immediately.
 func CreateDevTunnel(w http.ResponseWriter, r *http.Request) {
 	var req DevTunnelCreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -85,22 +88,17 @@ func CreateDevTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := DevTunnelCreate(req.TunnelName, req.Expiration, req.AuthToken)
-	if err != nil {
-		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
-	_, connection, err := DevTunnelHost(req.TunnelName, req.AuthToken)
+	conn, err := DevTunnelCreate(req.TunnelName, req.Expiration, req.AuthToken, req.ServerPort)
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
 	utils.RespondJSON(w, http.StatusCreated, DevTunnelCreateResponse{
-		TunnelName: req.TunnelName,
-		TunnelID:   info.TunnelID,
-		Token:      connection.Token,
+		TunnelName:    req.TunnelName,
+		TunnelID:      conn.DevTunnelInfo.TunnelID,
+		ConnectionURL: conn.ConnectionURL,
+		Token:         conn.Token,
 	})
 }
 

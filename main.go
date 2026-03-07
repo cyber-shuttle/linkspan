@@ -196,24 +196,15 @@ func main() {
 
 				ch := make(chan error, 1)
 				go func() {
-					_, err := tunnel.DevTunnelCreate(tunnelName, "1d", authToken)
+					conn, err := tunnel.DevTunnelCreate(tunnelName, "1d", authToken, serverPort)
 					if err != nil {
-						ch <- err
-						return
-					}
-					_, tunnelConnection, err := tunnel.DevTunnelHost(tunnelName, authToken)
-					if err != nil {
-						ch <- err
-						return
-					}
-					if err := tunnel.DevTunnelForward(tunnelName, serverPort, authToken); err != nil {
 						ch <- err
 						return
 					}
 
-					log.Printf("Connect to agent using the URL: %s", tunnelConnection.ConnectionURL)
-					log.Printf("DevTunnel ID: %s", tunnelConnection.DevTunnelInfo.TunnelID)
-					log.Printf("DevTunnel Token: %s", tunnelConnection.Token)
+					log.Printf("Connect to agent using the URL: %s", conn.ConnectionURL)
+					log.Printf("DevTunnel ID: %s", conn.DevTunnelInfo.TunnelID)
+					log.Printf("DevTunnel Token: %s", conn.Token)
 					ch <- nil
 				}()
 

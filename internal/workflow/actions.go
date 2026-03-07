@@ -15,7 +15,6 @@ import (
 func registerBuiltinActions(r *Registry) {
 	r.Register("vscode.create_session", actionVSCodeCreateSession)
 	r.Register("tunnel.devtunnel_create", actionDevTunnelCreate)
-	r.Register("tunnel.devtunnel_host", actionDevTunnelHost)
 	r.Register("tunnel.devtunnel_forward", actionDevTunnelForward)
 	r.Register("tunnel.devtunnel_delete", actionDevTunnelDelete)
 	r.Register("tunnel.devtunnel_connect", actionDevTunnelConnect)
@@ -44,6 +43,9 @@ func actionVSCodeCreateSession(params map[string]any) (*ActionResult, error) {
 }
 
 // --- tunnel.devtunnel_create ---
+// Creates a tunnel, hosts the relay, and forwards the server port so the client
+// can communicate with linkspan immediately.  Additional ports are added later
+// via tunnel.devtunnel_forward.
 
 func actionDevTunnelCreate(params map[string]any) (*ActionResult, error) {
 	tunnelName, _ := params["tunnel_name"].(string)
@@ -55,35 +57,16 @@ func actionDevTunnelCreate(params map[string]any) (*ActionResult, error) {
 	if authToken == "" {
 		return nil, fmt.Errorf("tunnel.devtunnel_create: auth_token is required")
 	}
+	serverPort := toInt(params["server_port"])
 
-	info, err := tunnel.DevTunnelCreate(tunnelName, expiration, authToken)
+	conn, err := tunnel.DevTunnelCreate(tunnelName, expiration, authToken, serverPort)
 	if err != nil {
 		return nil, err
 	}
 
 	result := ActionResult{
-		"tunnel_id":   info.QualifiedID(),
-		"tunnel_name": info.TunnelName,
-	}
-	return &result, nil
-}
-
-// --- tunnel.devtunnel_host ---
-
-func actionDevTunnelHost(params map[string]any) (*ActionResult, error) {
-	tunnelName, _ := params["tunnel_name"].(string)
-	authToken, _ := params["auth_token"].(string)
-	if authToken == "" {
-		return nil, fmt.Errorf("tunnel.devtunnel_host: auth_token is required")
-	}
-
-	cmdID, conn, err := tunnel.DevTunnelHost(tunnelName, authToken)
-	if err != nil {
-		return nil, err
-	}
-
-	result := ActionResult{
-		"command_id":     cmdID,
+		"tunnel_id":      conn.DevTunnelInfo.QualifiedID(),
+		"tunnel_name":    conn.DevTunnelInfo.TunnelName,
 		"connection_url": conn.ConnectionURL,
 		"token":          conn.Token,
 	}
@@ -201,22 +184,6 @@ func actionShellExec(params map[string]any) (*ActionResult, error) {
 }
 
 // --- helpers ---
-
-// toIntSlice converts a param value to []int, handling YAML-decoded []any.
-func toIntSlice(v any) []int {
-	switch val := v.(type) {
-	case []any:
-		out := make([]int, 0, len(val))
-		for _, elem := range val {
-			out = append(out, toInt(elem))
-		}
-		return out
-	case []int:
-		return val
-	default:
-		return nil
-	}
-}
 
 // toInt converts a param value to int, handling YAML's default float64/int types.
 func toInt(v any) int {
