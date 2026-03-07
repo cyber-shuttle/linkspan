@@ -43,13 +43,23 @@ func DevTunnelCreate(tunnelName string, expiration string, authToken string, ser
 		info.Ports = append(info.Ports, serverPort)
 	}
 
-	// 3. Obtain host token and start the relay with the server port forwarded.
+	// 3. Obtain a host token for future restarts, then start the CLI.
+	// When ports are forwarded, the CLI needs manage scope (to register ports
+	// on the service), so we use the full auth token for the initial host.
+	// The host-scoped token is cached for DevTunnelForward restarts.
 	hostToken, err := SDKGetHostToken(ctx, tunnelName)
 	if err != nil {
 		return DevTunnelConnection{}, fmt.Errorf("devtunnel create: get host token for %q: %w", tunnelName, err)
 	}
 
-	cmdID, connectionURL, err := CLIHostTunnel(info.TunnelID, hostToken, info.Ports)
+	// Use auth token for CLI when ports need forwarding (manage scope required),
+	// host token otherwise.
+	cliToken := hostToken
+	if len(info.Ports) > 0 {
+		cliToken = authToken
+	}
+
+	cmdID, connectionURL, err := CLIHostTunnel(info.TunnelID, cliToken, info.Ports)
 	if err != nil {
 		return DevTunnelConnection{}, fmt.Errorf("devtunnel create: start host for %q: %w", tunnelName, err)
 	}
@@ -104,19 +114,12 @@ func DevTunnelForward(tunnelName string, port int, authToken string) error {
 	devTunInfo.Ports = append(devTunInfo.Ports, port)
 
 	// Restart the host CLI with the updated port list.
+	// Use the auth token (manage scope) since the CLI with -p needs to manage ports.
 	if devTunInfo.HostCmdID != "" {
 		log.Printf("devtunnel forward: restarting host for %q with ports %v", tunnelName, devTunInfo.Ports)
 		_ = pm.GlobalProcessManager.Kill(devTunInfo.HostCmdID)
 
-		hostToken := devTunInfo.HostToken
-		if hostToken == "" {
-			hostToken, err = SDKGetHostToken(ctx, tunnelName)
-			if err != nil {
-				return fmt.Errorf("devtunnel forward: get host token for %q: %w", tunnelName, err)
-			}
-		}
-
-		cmdID, _, err := CLIHostTunnel(devTunInfo.TunnelID, hostToken, devTunInfo.Ports)
+		cmdID, _, err := CLIHostTunnel(devTunInfo.TunnelID, authToken, devTunInfo.Ports)
 		if err != nil {
 			return fmt.Errorf("devtunnel forward: restart host for %q: %w", tunnelName, err)
 		}
