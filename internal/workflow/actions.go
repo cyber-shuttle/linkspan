@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"strings"
 
-	fuse "github.com/cyber-shuttle/linkspan/subsystems/fuse"
 	tunnel "github.com/cyber-shuttle/linkspan/subsystems/tunnel"
 	vscode "github.com/cyber-shuttle/linkspan/subsystems/vscode"
 	utils "github.com/cyber-shuttle/linkspan/utils"
@@ -21,8 +20,6 @@ func registerBuiltinActions(r *Registry) {
 	r.Register("tunnel.devtunnel_connect", actionDevTunnelConnect)
 	r.Register("tunnel.frp_proxy_create", actionFrpProxyCreate)
 	r.Register("shell.exec", actionShellExec)
-	r.Register("fuse.start_server", actionFuseStartServer)
-	r.Register("fuse.mount_remote", actionFuseMountRemote)
 }
 
 // --- vscode.create_session ---
@@ -179,28 +176,6 @@ func actionShellExec(params map[string]any) (*ActionResult, error) {
 		"output": strings.TrimSpace(string(output)),
 	}
 	return &result, nil
-}
-
-// --- fuse.start_server ---
-
-func actionFuseStartServer(params map[string]any) (*ActionResult, error) {
-	result, err := fuse.ActionStartServer(params)
-	if err != nil {
-		return nil, err
-	}
-	ar := ActionResult(result)
-	return &ar, nil
-}
-
-// --- fuse.mount_remote ---
-
-func actionFuseMountRemote(params map[string]any) (*ActionResult, error) {
-	result, err := fuse.ActionMountRemote(params)
-	if err != nil {
-		return nil, err
-	}
-	ar := ActionResult(result)
-	return &ar, nil
 }
 
 // --- helpers ---

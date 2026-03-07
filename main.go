@@ -15,12 +15,17 @@ import (
 
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
 	"github.com/cyber-shuttle/linkspan/internal/workflow"
-	fuse "github.com/cyber-shuttle/linkspan/subsystems/fuse"
 	jupyter "github.com/cyber-shuttle/linkspan/subsystems/jupyter"
 	tunnel "github.com/cyber-shuttle/linkspan/subsystems/tunnel"
-	vfs "github.com/cyber-shuttle/linkspan/subsystems/vfs"
+	"github.com/cyber-shuttle/linkspan/subsystems/vfs"
 	vscode "github.com/cyber-shuttle/linkspan/subsystems/vscode"
 	"github.com/gorilla/mux"
+)
+
+// VFS providers initialized at startup, cleaned up on shutdown.
+var (
+	vfsSyncProvider  *vfs.SyncProvider
+	vfsMountProvider *vfs.MountProvider
 )
 
 func main() {
@@ -35,35 +40,43 @@ func main() {
 	serverPortFlag := flag.Int("port", 8080, "port for the HTTP server to listen on")
 	serverHostFlag := flag.String("host", "0.0.0.0", "host/IP for the HTTP server to bind to")
 	workflowFile := flag.String("workflow", "", "path to workflow YAML file")
-	mountRemote := flag.Bool("mount-remote", false, "mount a remote FUSE server locally via NFS and block until interrupted")
-	mountSessionID := flag.String("session-id", "", "session ID for the NFS mount point directory name (used with --mount-remote)")
-	mountServerAddr := flag.String("server-addr", "", "FUSE TCP server address host:port (used with --mount-remote)")
+	vfsMode := flag.String("vfs-mode", "", "VFS mode: 'sync' or 'mount' (also reads CS_VFS_MODE env)")
+	vfsSessionID := flag.String("vfs-session-id", "", "session ID for VFS (also reads CS_SESSION_ID env)")
 	flag.Parse()
 
-	// Mount-remote mode: connect to a remote FUSE TCP server and expose it
-	// locally via NFS. Blocks until interrupted.
-	if *mountRemote {
-		if *mountSessionID == "" || *mountServerAddr == "" {
-			log.Fatal("--mount-remote requires --session-id and --server-addr")
-		}
-		result, err := fuse.ActionMountRemote(map[string]any{
-			"session_id":  *mountSessionID,
-			"server_addr": *mountServerAddr,
-		})
+	// Initialize VFS if session ID is provided
+	sessionID := *vfsSessionID
+	if sessionID == "" {
+		sessionID = os.Getenv("CS_SESSION_ID")
+	}
+	vfsModeName := *vfsMode
+	if vfsModeName == "" {
+		vfsModeName = os.Getenv("CS_VFS_MODE")
+	}
+
+	if sessionID != "" && vfsModeName != "" {
+		dc, err := vfs.NewDataCache(sessionID)
 		if err != nil {
-			log.Fatalf("mount-remote: %v", err)
+			log.Fatalf("failed to initialize VFS data cache: %v", err)
 		}
-		fmt.Printf("MOUNT_PATH=%s\n", result["mount_path"])
-		if p, ok := result["nfs_port"]; ok {
-			fmt.Printf("NFS_PORT=%v\n", p)
+
+		vfsSyncProvider = vfs.NewSyncProvider(dc)
+		vfsMountProvider = vfs.NewMountProvider(dc)
+
+		switch vfsModeName {
+		case "sync":
+			if err := vfsSyncProvider.Start(); err != nil {
+				log.Fatalf("failed to start VFS sync provider: %v", err)
+			}
+			log.Printf("[vfs] Sync provider started for session %s", sessionID)
+		case "mount":
+			if err := vfsMountProvider.Start(); err != nil {
+				log.Fatalf("failed to start VFS mount provider: %v", err)
+			}
+			log.Printf("[vfs] Mount provider started for session %s", sessionID)
+		default:
+			log.Fatalf("unknown VFS mode: %s (expected 'sync' or 'mount')", vfsModeName)
 		}
-		// Block until signal.
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-		<-sigCh
-		log.Println("mount-remote: unmounting...")
-		fuse.Cleanup()
-		return
 	}
 
 	// Support users passing `--tunnel-api=devtunnels` by trimming leading '='
@@ -91,17 +104,6 @@ func main() {
 	api.HandleFunc("/vscode/sessions", vscode.CreateVSCodeSession).Methods("POST")
 	api.HandleFunc("/vscode/sessions/{id}", vscode.TerminateVSCodeSession).Methods("DELETE")
 	api.HandleFunc("/vscode/sessions/{id}/status", vscode.GetVSCodeSessionStatus).Methods("GET")
-
-	// Remote filesystem management
-	api.HandleFunc("/fs/list", vfs.ListFiles).Methods("GET")
-	api.HandleFunc("/fs/read", vfs.ReadFile).Methods("GET")
-	api.HandleFunc("/fs/write", vfs.WriteFile).Methods("POST")
-	api.HandleFunc("/fs/delete", vfs.DeleteFile).Methods("DELETE")
-
-	// FUSE mount management
-	api.HandleFunc("/fuse/start-server", fuse.HandleStartServer).Methods("POST")
-	api.HandleFunc("/fuse/mount-remote", fuse.HandleMountRemote).Methods("POST")
-	api.HandleFunc("/fuse/status", fuse.HandleGetStatus).Methods("GET")
 
 	// Tunnel management
 	api.HandleFunc("/tunnels/devtunnels", tunnel.ListDevTunnels).Methods("GET")
@@ -152,10 +154,10 @@ func main() {
 			log.Fatalf("workflow: %v", err)
 		}
 		engine := workflow.NewEngine(workflow.DefaultRegistry(), map[string]any{
-			"Timestamp":        time.Now().Unix(),
-			"ServerPort":       serverPort,
-			"ServerHost":       serverHost,
-			"TunnelAuthToken":  *tunnelAuthToken,
+			"Timestamp":       time.Now().Unix(),
+			"ServerPort":      serverPort,
+			"ServerHost":      serverHost,
+			"TunnelAuthToken": *tunnelAuthToken,
 		})
 		go func() {
 			if err := engine.Run(wf); err != nil {
@@ -165,10 +167,7 @@ func main() {
 	}
 
 	// Start tunnel helper after the listener is bound so the port is open
-	// when the tunnel attempts to connect or forward traffic. Make startup
-	// conditional and add retries/timeouts to be more robust in unreliable
-	// environments.
-	// Store auth token for cleanup path.
+	// when the tunnel attempts to connect or forward traffic.
 	devtunnelAuthTokenForCleanup = *tunnelAuthToken
 
 	if apiTunnelType == "devtunnels" && *tunnelEnable {
@@ -182,8 +181,6 @@ func main() {
 			for attempt := 1; attempt <= *tunnelRetries; attempt++ {
 				log.Printf("devtunnel: attempt %d/%d to create tunnel %s", attempt, *tunnelRetries, tunnelName)
 
-				// run the create + host sequence in a goroutine so we can
-				// apply a per-attempt timeout.
 				ch := make(chan error, 1)
 				go func() {
 					_, err := tunnel.DevTunnelCreate(tunnelName, "1d", []int{serverPort}, authToken)
@@ -228,8 +225,7 @@ func main() {
 		log.Println("devtunnel startup skipped (disabled via flag)")
 	}
 
-	// Run server.Serve using the already-bound listener. Serve will return
-	// when the server is shut down or on error.
+	// Run server
 	serverErr := make(chan error, 1)
 	go func() {
 		err := srv.Serve(listener)
@@ -238,10 +234,8 @@ func main() {
 
 	select {
 	case <-ctx.Done():
-		// Ctrl+C / SIGTERM received
 		log.Println("Shutdown signal received...")
 	case err := <-serverErr:
-		// Server failed to start or died unexpectedly
 		if err != nil && err != http.ErrServerClosed {
 			log.Printf("server error: %v", err)
 		}
@@ -251,7 +245,6 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Stop accepting new connections + wait for in-flight requests
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("server shutdown error: %v", err)
 	}
@@ -267,11 +260,18 @@ var devtunnelAuthTokenForCleanup string
 
 func cleanupResources() {
 	log.Println("Cleaning up resources before shutdown...")
-	// Add resource cleanup logic here, e.g., terminating kernels, closing tunnels, etc.
 	pm.GlobalProcessManager.KillAll()
 	tunnel.GlobalDevTunnelManager.CleanAll(devtunnelAuthTokenForCleanup)
 	tunnel.StopFrpAllTunnels()
 	vscode.StopAllSSHServers()
-	fuse.Cleanup()
+
+	// VFS cleanup
+	if vfsSyncProvider != nil {
+		vfsSyncProvider.Stop()
+	}
+	if vfsMountProvider != nil {
+		vfsMountProvider.Stop()
+	}
+
 	log.Println("Resource cleanup completed.")
 }
