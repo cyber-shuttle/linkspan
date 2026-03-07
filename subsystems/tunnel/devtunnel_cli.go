@@ -14,7 +14,6 @@ import (
 	"time"
 
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
-	"github.com/cyber-shuttle/linkspan/utils"
 )
 
 // devtunnelDownloadURLs maps GOOS/GOARCH pairs to the Azure blob storage URLs
@@ -132,25 +131,20 @@ func downloadFile(dst, src string) error {
 }
 
 // CLIHostTunnel starts hosting a tunnel using the managed devtunnel binary and a
-// host-scoped access token obtained from the SDK (no interactive CLI login needed).
+// host-scoped access token obtained from the SDK.
 //
-// It returns:
-//   - commandID — the ProcessManager ID of the background `devtunnel host` process,
-//     so the caller can kill it later via pm.GlobalProcessManager.Kill.
-//   - connectionURL — the "Connect via browser:" URL parsed from the CLI output.
-func CLIHostTunnel(tunnelID string, hostToken string, ports []int) (commandID string, connectionURL string, err error) {
+// Ports are NOT passed via -p; they are registered on the service via the SDK
+// before calling this function.  The relay forwards SDK-registered ports
+// automatically.
+//
+// Returns the ProcessManager command ID and a constructed connection URL.
+func CLIHostTunnel(tunnelID string, hostToken string) (commandID string, connectionURL string, err error) {
 	binPath, err := devtunnelBinPath()
 	if err != nil {
 		return "", "", fmt.Errorf("devtunnel cli: get binary: %w", err)
 	}
 
-	// The devtunnel CLI accepts a tunnel-scoped host token via --access-token.
-	// We pass the tunnel ID so the CLI can connect directly without a lookup.
-	// -p tells the host which local ports to forward through the tunnel.
 	args := []string{"host", tunnelID, "--access-token", hostToken}
-	for _, p := range ports {
-		args = append(args, "-p", fmt.Sprintf("%d", p))
-	}
 	log.Printf("devtunnel cli: running: %s %v", binPath, args)
 
 	cmd := cliCommand(binPath, args...)
@@ -159,9 +153,7 @@ func CLIHostTunnel(tunnelID string, hostToken string, ports []int) (commandID st
 		return "", "", fmt.Errorf("devtunnel cli: start host command: %w", err)
 	}
 
-	// Wait for the CLI to signal it is ready.
-	// - With ports: look for "Connect via browser:" which includes a port-specific URL.
-	// - Without ports: look for "Ready to accept connections" and build the URL ourselves.
+	// Wait for "Ready to accept connections" which signals the relay is up.
 	const pollInterval = 500 * time.Millisecond
 	const maxWait = 30 * time.Second
 	deadline := time.Now().Add(maxWait)
@@ -169,21 +161,16 @@ func CLIHostTunnel(tunnelID string, hostToken string, ports []int) (commandID st
 	for time.Now().Before(deadline) {
 		time.Sleep(pollInterval)
 
-		stdout, _, _ := pm.GlobalProcessManager.GetOutput(cmdID)
+		stdout, stderr, _ := pm.GlobalProcessManager.GetOutput(cmdID)
 
-		// With ports forwarded, the CLI prints a browser-accessible URL.
-		if len(ports) > 0 {
-			url, findErr := utils.FindLineInStdout(stdout, "Connect via browser:")
-			if findErr == nil && url != "" {
-				return cmdID, url, nil
-			}
-		}
-
-		// Without ports (or as a fallback), "Ready to accept connections" means
-		// the relay is up.  Build the connection URL from the tunnel ID.
 		if strings.Contains(stdout, "Ready to accept connections") {
 			connURL := fmt.Sprintf("https://%s.devtunnels.ms", tunnelID)
 			return cmdID, connURL, nil
+		}
+
+		// Check if process exited with an error early.
+		if stderr != "" && !strings.Contains(stderr, "Warning") {
+			return "", "", fmt.Errorf("devtunnel cli: host failed (stderr=%q)", stderr)
 		}
 	}
 
