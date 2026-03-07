@@ -178,18 +178,35 @@ func main() {
 		go func() {
 			tunnelName := fmt.Sprintf("aget-tunnel-%d", time.Now().UnixNano())
 
+			// cleanupAttempt kills any host CLI process and removes the tunnel
+			// from the manager so a timed-out or failed attempt doesn't leak.
+			cleanupAttempt := func() {
+				info, err := tunnel.GlobalDevTunnelManager.Find(tunnelName)
+				if err != nil {
+					return // not registered yet, nothing to clean up
+				}
+				if info.HostCmdID != "" {
+					_ = pm.GlobalProcessManager.Kill(info.HostCmdID)
+				}
+				tunnel.GlobalDevTunnelManager.Remove(tunnelName)
+			}
+
 			for attempt := 1; attempt <= *tunnelRetries; attempt++ {
 				log.Printf("devtunnel: attempt %d/%d to create tunnel %s", attempt, *tunnelRetries, tunnelName)
 
 				ch := make(chan error, 1)
 				go func() {
-					_, err := tunnel.DevTunnelCreate(tunnelName, "1d", []int{serverPort}, authToken)
+					_, err := tunnel.DevTunnelCreate(tunnelName, "1d", authToken)
 					if err != nil {
 						ch <- err
 						return
 					}
 					_, tunnelConnection, err := tunnel.DevTunnelHost(tunnelName, authToken)
 					if err != nil {
+						ch <- err
+						return
+					}
+					if err := tunnel.DevTunnelForward(tunnelName, serverPort, authToken); err != nil {
 						ch <- err
 						return
 					}
@@ -209,10 +226,12 @@ func main() {
 						return
 					}
 					log.Printf("devtunnel: attempt %d failed: %v", attempt, err)
+					cleanupAttempt()
 				case <-attemptCtx.Done():
 					log.Printf("devtunnel: attempt %d timed out after %s", attempt, tunnelAttemptTimeout.String())
+					cancel()
+					cleanupAttempt()
 				}
-				cancel()
 
 				if attempt < *tunnelRetries {
 					time.Sleep(*tunnelRetryDelay)

@@ -126,8 +126,8 @@ func requireSDK() (*SDKManager, error) {
 // bypassing the SDK's CreateTunnel which has a broken retry loop (retries
 // unconditionally, even on success, causing 409/400 cascading failures).
 // tunnelName is used as the tunnel ID (custom display names are a premium feature).
-// After creation, ports are added through the SDK.
-func SDKCreateTunnel(ctx context.Context, tunnelName string, ports []int) (*tunnels.Tunnel, error) {
+// No ports are registered — use SDKAddPort to add forwarding later.
+func SDKCreateTunnel(ctx context.Context, tunnelName string) (*tunnels.Tunnel, error) {
 	sdk, err := requireSDK()
 	if err != nil {
 		return nil, err
@@ -144,21 +144,35 @@ func SDKCreateTunnel(ctx context.Context, tunnelName string, ports []int) (*tunn
 	}
 	log.Printf("devtunnel sdk: tunnel created — id=%s cluster=%s", created.TunnelID, created.ClusterID)
 
-	// Register each requested port on the newly created tunnel.
-	for _, p := range ports {
-		portReq := &tunnels.TunnelPort{
-			PortNumber: uint16(p), //nolint:gosec // port numbers fit in uint16
-			Protocol:   string(tunnels.TunnelProtocolAuto),
-		}
-		log.Printf("devtunnel sdk: adding port %d to tunnel %q", p, tunnelName)
-		if _, err := sdk.manager.CreateTunnelPort(ctx, created, portReq, nil); err != nil {
-			return nil, fmt.Errorf("devtunnel sdk: CreateTunnelPort %d on %q: %w", p, tunnelName, err)
-		}
-	}
-
-	// Persist the full object so subsequent operations can reference it by name.
 	sdk.sdkTunnels[tunnelName] = created
 	return created, nil
+}
+
+// SDKAddPort registers a port on an existing tunnel via the SDK.
+func SDKAddPort(ctx context.Context, tunnelName string, port int) error {
+	sdk, err := requireSDK()
+	if err != nil {
+		return err
+	}
+
+	sdk.mu.Lock()
+	defer sdk.mu.Unlock()
+
+	t, err := sdk.resolveTunnel(ctx, tunnelName)
+	if err != nil {
+		return fmt.Errorf("devtunnel sdk: resolve tunnel %q for port add: %w", tunnelName, err)
+	}
+
+	portReq := &tunnels.TunnelPort{
+		PortNumber: uint16(port), //nolint:gosec // port numbers fit in uint16
+		Protocol:   string(tunnels.TunnelProtocolAuto),
+	}
+	log.Printf("devtunnel sdk: adding port %d to tunnel %q", port, tunnelName)
+	if _, err := sdk.manager.CreateTunnelPort(ctx, t, portReq, nil); err != nil {
+		return fmt.Errorf("devtunnel sdk: CreateTunnelPort %d on %q: %w", port, tunnelName, err)
+	}
+
+	return nil
 }
 
 // createTunnelHTTP performs a single PUT /tunnels/{id} request to create a tunnel.

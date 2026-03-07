@@ -71,7 +71,10 @@ func ListKernels(w http.ResponseWriter, r *http.Request) {
 func ProvisionKernel(w http.ResponseWriter, r *http.Request) {
 	// placeholder: parse request body to create kernel
 	provisionReq := KernelProvisionRequest{}
-	_ = json.NewDecoder(r.Body).Decode(&provisionReq)
+	if err := json.NewDecoder(r.Body).Decode(&provisionReq); err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
 	_ = r.Body.Close()
 
 	if provisionReq.KernelName == "" {
@@ -114,7 +117,10 @@ func ProvisionKernel(w http.ResponseWriter, r *http.Request) {
 func ShutdownKernel(w http.ResponseWriter, r *http.Request) {
 	// placeholder: shutdown by id
 	shutdownReq := KernelShutdownRequest{}
-	_ = json.NewDecoder(r.Body).Decode(&shutdownReq)
+	if err := json.NewDecoder(r.Body).Decode(&shutdownReq); err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
 	_ = r.Body.Close()
 
 	err := stopKernel(shutdownReq.KernelID)
@@ -133,7 +139,10 @@ func ShutdownKernel(w http.ResponseWriter, r *http.Request) {
 func DeleteKernel(w http.ResponseWriter, r *http.Request) {
 	// placeholder: delete by id
 	deleteReq := KernelShutdownRequest{}
-	_ = json.NewDecoder(r.Body).Decode(&deleteReq)
+	if err := json.NewDecoder(r.Body).Decode(&deleteReq); err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
 	_ = r.Body.Close()
 
 	err := stopKernel(deleteReq.KernelID)

@@ -88,10 +88,6 @@ func getKernelConnectionFile(kernelInternalID string) (string, error) {
 	return "", fmt.Errorf("connection file not found in kernel output: %v", err)
 }
 
-func startKernelWithCondaEnv(kernelName string) (string, int, error) {
-	return "", -1, fmt.Errorf("Not implemented")
-}
-
 func getKernelStatus(kernelInternalID string) (string, error) {
 	// placeholder: get the Jupyter kernel process status
 	info, err := pm.GlobalProcessManager.GetInfo(kernelInternalID)

@@ -1,27 +1,32 @@
 name: "cs-bridge-hpc-setup"
 
 steps:
-  - action: "vscode.create_session"
-    name: "Start SSH server"
-    outputs:
-      bind_port: "ssh_port"
-
   - action: "tunnel.devtunnel_create"
     name: "Create devtunnel"
     params:
       tunnel_name: "linkspan-tunnel"
       expiration: "1d"
       auth_token: "{{.TunnelAuthToken}}"
-      ports:
-        - "{{.ssh_port}}"
+    outputs:
+      tunnel_id: "tunnel_id"
 
   - action: "tunnel.devtunnel_host"
     name: "Host devtunnel"
     params:
       tunnel_name: "linkspan-tunnel"
       auth_token: "{{.TunnelAuthToken}}"
+    outputs:
+      connection_url: "tunnel_url"
+      token: "tunnel_token"
 
-  - action: "shell.exec"
-    name: "Clone repo"
+  - action: "vscode.create_session"
+    name: "Start SSH server"
+    outputs:
+      bind_port: "ssh_port"
+
+  - action: "tunnel.devtunnel_forward"
+    name: "Forward SSH port"
     params:
-      command: "git clone https://github.com/org/repo.git /workspace"
+      tunnel_name: "linkspan-tunnel"
+      auth_token: "{{.TunnelAuthToken}}"
+      port: "{{.ssh_port}}"

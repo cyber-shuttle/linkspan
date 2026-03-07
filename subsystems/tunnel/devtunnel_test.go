@@ -30,7 +30,7 @@ func TestDevTunnelConnect(t *testing.T) {
 		}
 	}()
 
-	_, err := DevTunnelCreate(tunnelName, "1d", []int{8080}, authToken)
+	_, err := DevTunnelCreate(tunnelName, "1d", authToken)
 	if err != nil {
 		t.Fatalf("failed to create dev tunnel: %v", err)
 	} else {
@@ -55,7 +55,7 @@ func TestDevTunnelConnect(t *testing.T) {
 func TestDevTunnelCreate(t *testing.T) {
 	authToken := authTokenForTest(t)
 
-	_, err := DevTunnelCreate("test-tunnel", "1d", []int{8080, 9090}, authToken)
+	_, err := DevTunnelCreate("test-tunnel", "1d", authToken)
 	if err != nil {
 		t.Fatalf("failed to create dev tunnel: %v", err)
 	} else {

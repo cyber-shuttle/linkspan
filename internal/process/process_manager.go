@@ -176,14 +176,33 @@ func (pm *ProcessManager) Wait(id string) error {
 
 
 
-// KillAll forcefully kills all managed processes.
+// KillAll forcefully kills all managed processes, waiting up to 2 seconds for
+// each to exit so the OS can reap them (avoiding zombies).
 func (pm *ProcessManager) KillAll() {
 	pm.mu.Lock()
-	defer pm.mu.Unlock()
+	// Snapshot the map so we can release the lock before waiting.
+	snapshot := make(map[string]*ManagedProcess, len(pm.procs))
 	for id, mp := range pm.procs {
+		snapshot[id] = mp
+	}
+	pm.mu.Unlock()
+
+	for id, mp := range snapshot {
 		if mp.Cmd.Process != nil {
 			_ = mp.Cmd.Process.Kill()
+
+			// Wait for the process to be reaped via the done channel (which
+			// is closed by the background goroutine in Start after cmd.Wait
+			// completes).  Use a short timeout so KillAll doesn't hang if a
+			// process refuses to exit.
+			select {
+			case <-mp.done:
+			case <-time.After(2 * time.Second):
+			}
 		}
+
+		pm.mu.Lock()
 		delete(pm.procs, id)
+		pm.mu.Unlock()
 	}
 }

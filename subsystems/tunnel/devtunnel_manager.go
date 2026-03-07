@@ -11,7 +11,10 @@ type DevTunnelInfo struct {
 	TunnelID   string
 	ClusterID  string
 	TunnelName string
-	Ports      []int
+	Ports      []int   // ports currently being forwarded
+	HostCmdID  string  // ProcessManager ID of the running host CLI process
+	HostToken  string  // cached host-scoped access token for restarts
+	AuthToken  string  // Microsoft Entra ID bearer token used to create the tunnel
 }
 
 // QualifiedID returns the cluster-qualified tunnel ID (e.g. "ls-48.use2")
@@ -63,6 +66,13 @@ func (tm *DevTunnelManager) Find(tunnelName string) (*DevTunnelInfo, error) {
 		return nil, fmt.Errorf("tunnel %s not found", tunnelName)
 	}
 	return tunnel, nil
+}
+
+// Remove deletes a tunnel from the manager by name.
+func (tm *DevTunnelManager) Remove(tunnelName string) {
+	tm.mu.Lock()
+	delete(tm.tunnels, tunnelName)
+	tm.mu.Unlock()
 }
 
 // GetAll returns a snapshot of all tracked tunnels.

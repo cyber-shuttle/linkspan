@@ -25,7 +25,10 @@ func ListVSCodeSessions(w http.ResponseWriter, r *http.Request) {
 
 func CreateVSCodeSession(w http.ResponseWriter, r *http.Request) {
 	sessionReq := VSCodeSessionRequest{}
-	_ = json.NewDecoder(r.Body).Decode(&sessionReq)
+	if err := json.NewDecoder(r.Body).Decode(&sessionReq); err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
 	_ = r.Body.Close()
 
 	availablePort, err := utils.GetAvailablePort()

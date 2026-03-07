@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	pm "github.com/cyber-shuttle/linkspan/internal/process"
 	utils "github.com/cyber-shuttle/linkspan/utils"
 	"github.com/gorilla/mux"
 )
@@ -20,7 +21,6 @@ type Tunnel struct {
 type DevTunnelCreateRequest struct {
 	TunnelName string `json:"tunnelName"`
 	Expiration string `json:"expiration"`
-	Ports      []int  `json:"ports"`
 	// AuthToken is the Microsoft Entra ID (Azure AD) bearer token used to
 	// authenticate against the Dev Tunnels service.  It is required for all
 	// devtunnel operations.
@@ -74,7 +74,10 @@ func ListDevTunnels(w http.ResponseWriter, r *http.Request) {
 // It creates the tunnel via the SDK and immediately starts hosting it via the CLI.
 func CreateDevTunnel(w http.ResponseWriter, r *http.Request) {
 	var req DevTunnelCreateRequest
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
 	_ = r.Body.Close()
 
 	if req.AuthToken == "" {
@@ -82,7 +85,7 @@ func CreateDevTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := DevTunnelCreate(req.TunnelName, req.Expiration, req.Ports, req.AuthToken)
+	info, err := DevTunnelCreate(req.TunnelName, req.Expiration, req.AuthToken)
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -101,15 +104,46 @@ func CreateDevTunnel(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// CloseDevTunnel handles DELETE /tunnels/devtunnel/{id} (stub).
+// CloseDevTunnel handles DELETE /tunnels/devtunnel/{id}.
+// It kills the host CLI process, deletes the tunnel via the SDK, and removes
+// it from the in-memory manager.
 func CloseDevTunnel(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	tunnelName := vars["id"]
+	if tunnelName == "" {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "tunnel name required"})
+		return
+	}
+
+	info, err := GlobalDevTunnelManager.Find(tunnelName)
+	if err != nil {
+		utils.RespondJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Kill the host CLI process if one is running.
+	if info.HostCmdID != "" {
+		_ = pm.GlobalProcessManager.Kill(info.HostCmdID)
+	}
+
+	// Delete the tunnel on the service.
+	if err := DevTunnelDelete(tunnelName, info.AuthToken); err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	GlobalDevTunnelManager.Remove(tunnelName)
+
 	utils.RespondJSON(w, http.StatusNoContent, nil)
 }
 
 // CreateFrpTunnelProxy handles POST /tunnels/frp.
 func CreateFrpTunnelProxy(w http.ResponseWriter, r *http.Request) {
 	var req FrpTunnelProxyCreateRequest
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
 	_ = r.Body.Close()
 
 	info, err := FrpTunnelProxyCreate(
@@ -134,11 +168,6 @@ func ListFrpTunnels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	utils.RespondJSON(w, http.StatusOK, FrpTunnelListResponse{FrpTunnelInfos: ts})
-}
-
-// GetFrpTunnelStatus handles GET /tunnels/frp/{id}/status (stub).
-func GetFrpTunnelStatus(w http.ResponseWriter, r *http.Request) {
-	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "unknown"})
 }
 
 // TerminateFrpTunnel handles DELETE /tunnels/frp/{id}.

@@ -138,7 +138,7 @@ func downloadFile(dst, src string) error {
 //   - commandID — the ProcessManager ID of the background `devtunnel host` process,
 //     so the caller can kill it later via pm.GlobalProcessManager.Kill.
 //   - connectionURL — the "Connect via browser:" URL parsed from the CLI output.
-func CLIHostTunnel(tunnelID string, hostToken string) (commandID string, connectionURL string, err error) {
+func CLIHostTunnel(tunnelID string, hostToken string, ports []int) (commandID string, connectionURL string, err error) {
 	binPath, err := devtunnelBinPath()
 	if err != nil {
 		return "", "", fmt.Errorf("devtunnel cli: get binary: %w", err)
@@ -146,7 +146,11 @@ func CLIHostTunnel(tunnelID string, hostToken string) (commandID string, connect
 
 	// The devtunnel CLI accepts a tunnel-scoped host token via --access-token.
 	// We pass the tunnel ID so the CLI can connect directly without a lookup.
+	// -p tells the host which local ports to forward through the tunnel.
 	args := []string{"host", tunnelID, "--access-token", hostToken}
+	for _, p := range ports {
+		args = append(args, "-p", fmt.Sprintf("%d", p))
+	}
 	log.Printf("devtunnel cli: running: %s %v", binPath, args)
 
 	cmd := cliCommand(binPath, args...)
@@ -155,8 +159,9 @@ func CLIHostTunnel(tunnelID string, hostToken string) (commandID string, connect
 		return "", "", fmt.Errorf("devtunnel cli: start host command: %w", err)
 	}
 
-	// Give the relay a moment to publish its "Connect via browser:" line.
-	// The CLI writes this within the first few seconds of startup.
+	// Wait for the CLI to signal it is ready.
+	// - With ports: look for "Connect via browser:" which includes a port-specific URL.
+	// - Without ports: look for "Ready to accept connections" and build the URL ourselves.
 	const pollInterval = 500 * time.Millisecond
 	const maxWait = 30 * time.Second
 	deadline := time.Now().Add(maxWait)
@@ -165,16 +170,27 @@ func CLIHostTunnel(tunnelID string, hostToken string) (commandID string, connect
 		time.Sleep(pollInterval)
 
 		stdout, _, _ := pm.GlobalProcessManager.GetOutput(cmdID)
-		url, findErr := utils.FindLineInStdout(stdout, "Connect via browser:")
-		if findErr == nil && url != "" {
-			return cmdID, url, nil
+
+		// With ports forwarded, the CLI prints a browser-accessible URL.
+		if len(ports) > 0 {
+			url, findErr := utils.FindLineInStdout(stdout, "Connect via browser:")
+			if findErr == nil && url != "" {
+				return cmdID, url, nil
+			}
+		}
+
+		// Without ports (or as a fallback), "Ready to accept connections" means
+		// the relay is up.  Build the connection URL from the tunnel ID.
+		if strings.Contains(stdout, "Ready to accept connections") {
+			connURL := fmt.Sprintf("https://%s.devtunnels.ms", tunnelID)
+			return cmdID, connURL, nil
 		}
 	}
 
 	// Timed out — collect what we have for the error message.
 	stdout, stderr, _ := pm.GlobalProcessManager.GetOutput(cmdID)
 	return "", "", fmt.Errorf(
-		"devtunnel cli: timed out waiting for connection URL (stdout=%q stderr=%q)",
+		"devtunnel cli: timed out waiting for ready signal (stdout=%q stderr=%q)",
 		stdout, stderr,
 	)
 }

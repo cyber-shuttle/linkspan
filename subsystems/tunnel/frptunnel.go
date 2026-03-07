@@ -144,12 +144,6 @@ func FrpTunnelProxyCreate(tunnelName string, port int, tunnelType string,
 	return info, nil
 }
 
-func FrpTunnelVisitorCreate(tunnelName string, bindPort int, tunnelType string,
-	tunnelSecret string, discoveryHost string, discoveryPort int, discoveryToken string) (FrpTunnelInfo, error) {
-	// Placeholder for FRP tunnel creation logic
-	return FrpTunnelInfo{}, nil
-}
-
 func FrpTunnelList() ([]FrpTunnelInfo, error) {
 	activeTunnelsMu.Lock()
 	defer activeTunnelsMu.Unlock()

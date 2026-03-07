@@ -16,6 +16,7 @@ func registerBuiltinActions(r *Registry) {
 	r.Register("vscode.create_session", actionVSCodeCreateSession)
 	r.Register("tunnel.devtunnel_create", actionDevTunnelCreate)
 	r.Register("tunnel.devtunnel_host", actionDevTunnelHost)
+	r.Register("tunnel.devtunnel_forward", actionDevTunnelForward)
 	r.Register("tunnel.devtunnel_delete", actionDevTunnelDelete)
 	r.Register("tunnel.devtunnel_connect", actionDevTunnelConnect)
 	r.Register("tunnel.frp_proxy_create", actionFrpProxyCreate)
@@ -55,9 +56,7 @@ func actionDevTunnelCreate(params map[string]any) (*ActionResult, error) {
 		return nil, fmt.Errorf("tunnel.devtunnel_create: auth_token is required")
 	}
 
-	ports := toIntSlice(params["ports"])
-
-	info, err := tunnel.DevTunnelCreate(tunnelName, expiration, ports, authToken)
+	info, err := tunnel.DevTunnelCreate(tunnelName, expiration, authToken)
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +88,29 @@ func actionDevTunnelHost(params map[string]any) (*ActionResult, error) {
 		"token":          conn.Token,
 	}
 	return &result, nil
+}
+
+// --- tunnel.devtunnel_forward ---
+
+func actionDevTunnelForward(params map[string]any) (*ActionResult, error) {
+	tunnelName, _ := params["tunnel_name"].(string)
+	if tunnelName == "" {
+		return nil, fmt.Errorf("tunnel.devtunnel_forward: tunnel_name is required")
+	}
+	authToken, _ := params["auth_token"].(string)
+	if authToken == "" {
+		return nil, fmt.Errorf("tunnel.devtunnel_forward: auth_token is required")
+	}
+	port := toInt(params["port"])
+	if port == 0 {
+		return nil, fmt.Errorf("tunnel.devtunnel_forward: port is required")
+	}
+
+	if err := tunnel.DevTunnelForward(tunnelName, port, authToken); err != nil {
+		return nil, err
+	}
+
+	return &ActionResult{"port": port}, nil
 }
 
 // --- tunnel.devtunnel_delete ---
