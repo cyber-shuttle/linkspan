@@ -86,32 +86,30 @@ func (r *reconnectingSftpClient) reconnect() error {
 // withClient runs fn with a live SFTP client. If the client has disconnected,
 // it attempts to reconnect transparently.
 func (r *reconnectingSftpClient) withClient(fn func(*sftp.Client) error) error {
-	// Fast path: try with read lock
+	// Fast path: snapshot client under read lock, then call fn without holding the lock.
 	r.mu.RLock()
-	if r.client != nil {
-		err := fn(r.client)
-		r.mu.RUnlock()
-		if err == nil || !isConnectionError(err) {
+	client := r.client
+	r.mu.RUnlock()
+
+	if client != nil {
+		if err := fn(client); err == nil || !isConnectionError(err) {
 			return err
 		}
-	} else {
-		r.mu.RUnlock()
 	}
 
-	// Slow path: reconnect under write lock, then retry
+	// Slow path: reconnect under write lock.
 	r.mu.Lock()
-	// Double-check: another goroutine may have reconnected
-	if r.client != nil {
-		if err := fn(r.client); err == nil || !isConnectionError(err) {
-			r.mu.Unlock()
-			return err
-		}
+	// Double-check: another goroutine may have already reconnected.
+	if r.client != nil && r.client != client {
+		client = r.client
+		r.mu.Unlock()
+		return fn(client)
 	}
 	if err := r.reconnect(); err != nil {
 		r.mu.Unlock()
 		return err
 	}
-	client := r.client
+	client = r.client
 	r.mu.Unlock()
 	return fn(client)
 }
@@ -405,8 +403,9 @@ func (n *overlayNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 		}
 	}
 
-	// Lower entries (skip duplicates)
-	_ = n.rsftp.withClient(func(c *sftp.Client) error {
+	// Lower entries (skip duplicates). On SFTP error we log and continue
+	// with upper-only entries rather than blocking the entire readdir.
+	if err := n.rsftp.withClient(func(c *sftp.Client) error {
 		entries, err := c.ReadDir(n.remotePath)
 		if err != nil {
 			return err
@@ -421,7 +420,9 @@ func (n *overlayNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 			})
 		}
 		return nil
-	})
+	}); err != nil {
+		log.Printf("[overlayfs] readdir %s: SFTP error (returning upper-only entries): %v", n.remotePath, err)
+	}
 
 	if result == nil {
 		return nil, syscall.ENOENT
@@ -463,6 +464,8 @@ func (n *overlayNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, ui
 
 // copyUp ensures the file exists in the upper layer. If it only exists in
 // lower (SFTP), it is copied to upper. Parent dirs are created as needed.
+// The copy is atomic: content is written to a temp file and renamed into
+// place on success; the temp file is removed on any failure.
 func (n *overlayNode) copyUp() error {
 	if _, err := os.Lstat(n.upperPath); err == nil {
 		return nil // already in upper
@@ -483,7 +486,7 @@ func (n *overlayNode) copyUp() error {
 		return os.MkdirAll(n.upperPath, info.Mode())
 	}
 
-	// Copy file content from SFTP to local
+	// Copy file content from SFTP to local atomically via a temp file.
 	return n.rsftp.withClient(func(c *sftp.Client) error {
 		src, err := c.Open(n.remotePath)
 		if err != nil {
@@ -491,16 +494,37 @@ func (n *overlayNode) copyUp() error {
 		}
 		defer src.Close()
 
-		dst, err := os.OpenFile(n.upperPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+		// Write to a sibling temp file so a partial copy never leaves a
+		// corrupt file at n.upperPath.
+		tmp, err := os.CreateTemp(filepath.Dir(n.upperPath), ".copyup-*")
 		if err != nil {
 			return err
 		}
-		defer dst.Close()
+		tmpName := tmp.Name()
 
-		if _, err := io.Copy(dst, src); err != nil {
-			os.Remove(n.upperPath)
+		// Ensure the temp file is cleaned up on any failure path.
+		success := false
+		defer func() {
+			if !success {
+				tmp.Close()
+				os.Remove(tmpName)
+			}
+		}()
+
+		if err := tmp.Chmod(info.Mode()); err != nil {
 			return err
 		}
+		if _, err := io.Copy(tmp, src); err != nil {
+			return err
+		}
+		if err := tmp.Close(); err != nil {
+			return err
+		}
+
+		if err := os.Rename(tmpName, n.upperPath); err != nil {
+			return err
+		}
+		success = true
 		return nil
 	})
 }

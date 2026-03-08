@@ -57,7 +57,8 @@ func (tm *DevTunnelManager) Register(tunnel *DevTunnelInfo) (string, error) {
 	return tunnel.TunnelName, nil
 }
 
-// Find retrieves tunnel metadata by name.
+// Find retrieves a copy of tunnel metadata by name.
+// The returned value is safe to read without synchronization.
 func (tm *DevTunnelManager) Find(tunnelName string) (*DevTunnelInfo, error) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
@@ -65,7 +66,34 @@ func (tm *DevTunnelManager) Find(tunnelName string) (*DevTunnelInfo, error) {
 	if !exists {
 		return nil, fmt.Errorf("tunnel %s not found", tunnelName)
 	}
-	return tunnel, nil
+	cp := *tunnel
+	cp.Ports = make([]int, len(tunnel.Ports))
+	copy(cp.Ports, tunnel.Ports)
+	return &cp, nil
+}
+
+// AddPort records a newly-forwarded port on the named tunnel.
+func (tm *DevTunnelManager) AddPort(tunnelName string, port int) error {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	tunnel, exists := tm.tunnels[tunnelName]
+	if !exists {
+		return fmt.Errorf("tunnel %s not found", tunnelName)
+	}
+	tunnel.Ports = append(tunnel.Ports, port)
+	return nil
+}
+
+// UpdateHostCmd atomically updates the host CLI process ID on the named tunnel.
+func (tm *DevTunnelManager) UpdateHostCmd(tunnelName, cmdID string) error {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	tunnel, exists := tm.tunnels[tunnelName]
+	if !exists {
+		return fmt.Errorf("tunnel %s not found", tunnelName)
+	}
+	tunnel.HostCmdID = cmdID
+	return nil
 }
 
 // Remove deletes a tunnel from the manager by name.

@@ -10,11 +10,10 @@ import (
 
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
 	venv "github.com/cyber-shuttle/linkspan/subsystems/env/venv"
-	utils "github.com/cyber-shuttle/linkspan/utils"
+	"github.com/cyber-shuttle/linkspan/utils"
 )
 
 func startKernelWithVenv(kernelName string, venvPath string) (string, int, error) {
-	// placeholder: start a Jupyter kernel process
 	err := venv.CreatePythonVirtualEnvironment(venvPath)
 	if err != nil {
 		log.Printf("Error creating Python virtual environment: %v", err)
@@ -89,7 +88,6 @@ func getKernelConnectionFile(kernelInternalID string) (string, error) {
 }
 
 func getKernelStatus(kernelInternalID string) (string, error) {
-	// placeholder: get the Jupyter kernel process status
 	info, err := pm.GlobalProcessManager.GetInfo(kernelInternalID)
 	if err != nil {
 		return "", err
@@ -104,7 +102,6 @@ func getKernelStatus(kernelInternalID string) (string, error) {
 }
 
 func stopKernel(kernelInternalID string) error {
-	// placeholder: stop the Jupyter kernel process
 	log.Printf("Stopping kernel with internal ID %s", kernelInternalID)
 	err := pm.GlobalProcessManager.Kill(kernelInternalID)
 	return err

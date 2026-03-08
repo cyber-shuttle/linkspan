@@ -3,7 +3,6 @@ package tunnel
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
 )
@@ -101,13 +100,4 @@ func (d *DevTunnelProvider) List(ctx context.Context) ([]TunnelInfo, error) {
 		})
 	}
 	return out, nil
-}
-
-// portMapToStringKeys converts map[int]int to map[string]any for workflow outputs.
-func portMapToStringKeys(pm map[int]int) map[string]any {
-	out := make(map[string]any, len(pm))
-	for remote, local := range pm {
-		out[strconv.Itoa(remote)] = local
-	}
-	return out
 }

@@ -29,23 +29,24 @@ func (b *Broadcaster) Write(p []byte) (int, error) {
 	n, err := b.dest.Write(p)
 
 	b.mu.RLock()
+	var dead []net.Conn
 	for c := range b.clients {
-		_, writeErr := c.Write(p)
-		if writeErr != nil {
-			// Mark for removal but don't modify map during iteration
-			go b.remove(c)
+		if _, writeErr := c.Write(p); writeErr != nil {
+			dead = append(dead, c)
 		}
 	}
 	b.mu.RUnlock()
 
-	return n, err
-}
+	if len(dead) > 0 {
+		b.mu.Lock()
+		for _, c := range dead {
+			delete(b.clients, c)
+			c.Close()
+		}
+		b.mu.Unlock()
+	}
 
-func (b *Broadcaster) remove(c net.Conn) {
-	b.mu.Lock()
-	delete(b.clients, c)
-	b.mu.Unlock()
-	c.Close()
+	return n, err
 }
 
 // ListenAndServe starts a TCP listener on addr and accepts clients that
@@ -73,7 +74,10 @@ func (b *Broadcaster) ListenAndServe(addr string) (net.Listener, error) {
 				buf := make([]byte, 256)
 				for {
 					if _, err := c.Read(buf); err != nil {
-						b.remove(c)
+						b.mu.Lock()
+						delete(b.clients, c)
+						b.mu.Unlock()
+						c.Close()
 						return
 					}
 				}

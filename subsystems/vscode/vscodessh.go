@@ -71,8 +71,6 @@ func StartSSHServerForVSCodeConnection(sessionID, addr string) *SSHServer {
 		// Interactive session: if the client requested a PTY, run a shell in a pty
 		// so terminal modes (echo, resize) are handled correctly. Otherwise fall
 		// back to a small REPL.
-		//fmt.Fprintf(s, "Welcome, %s! Type 'exit' or 'quit' to disconnect.\n", s.User())
-
 		ptyReq, winCh, isPty := s.Pty()
 		if isPty {
 			// Launch a shell attached to a pty
@@ -132,7 +130,6 @@ func StartSSHServerForVSCodeConnection(sessionID, addr string) *SSHServer {
 		// Fallback REPL when no PTY was requested
 		r := bufio.NewReader(s)
 		for {
-			//io.WriteString(s, "> ")
 			line, err := r.ReadString('\n')
 			if err != nil {
 				if err != io.EOF {

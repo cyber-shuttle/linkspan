@@ -6,15 +6,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-
-	cfg "github.com/cyber-shuttle/linkspan/internal/config"
 )
 
+const defaultPythonBinary = "/usr/bin/python3"
+
 // CreateVirtualEnvironment creates a Python virtual environment at the specified path.
-// It uses the python_binary from config to run `python -m venv`.
+// It uses python3 to run `python -m venv`.
 func CreatePythonVirtualEnvironment(venvPath string) error {
-	config := cfg.Get()
-	pythonBinary := config.PythonBinary
+	pythonBinary := defaultPythonBinary
 
 	// Ensure the venv directory exists (parent directory)
 	venvDir := filepath.Dir(venvPath)

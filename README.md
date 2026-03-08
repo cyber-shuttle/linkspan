@@ -12,7 +12,7 @@ Linkspan is a lightweight agent that runs on compute nodes (HPC clusters, cloud 
   - **Linux mount**: Direct kernel FUSE mount via go-fuse
   - **macOS mount**: NFSv3 proxy (go-nfs + billy adapter) mounted via `mount_nfs`
 - **Jupyter Kernels** — Provision, manage, and connect to Jupyter kernels
-- **Remote Filesystem** — REST API for file listing, reading, writing, and deletion
+- **VFS** — Virtual filesystem modes (`sync` and `mount`) for remote data access
 
 ## Quick Start
 
@@ -31,34 +31,16 @@ linkspan --port 0 --tunnel-auth-token "$TOKEN" --workflow - <<'EOF'
 name: "dev-setup"
 
 steps:
-  - action: "vscode.create_session"
-    name: "Start SSH server"
-    outputs:
-      bind_port: "ssh_port"
-
-  - action: "fuse.start_server"
-    name: "Start FUSE server"
-    outputs:
-      fuse_port: "fuse_server_port"
-
   - action: "tunnel.devtunnel_create"
     name: "Create devtunnel"
     params:
       tunnel_name: "my-tunnel"
       expiration: "1d"
       auth_token: "{{.TunnelAuthToken}}"
-      ports:
-        - "{{.ssh_port}}"
-        - "{{.fuse_server_port}}"
+      server_port: "{{.ServerPort}}"
+      ssh_port: "{{.SshPort}}"
     outputs:
       tunnel_id: "tunnel_id"
-
-  - action: "tunnel.devtunnel_host"
-    name: "Host devtunnel"
-    params:
-      tunnel_name: "my-tunnel"
-      auth_token: "{{.TunnelAuthToken}}"
-    outputs:
       connection_url: "tunnel_url"
       token: "tunnel_token"
 EOF
@@ -74,16 +56,6 @@ linkspan --port 8080
 
 This starts the REST API without running any workflow.
 
-### Mount a Remote Filesystem via NFS (macOS)
-
-Connect to a remote FUSE TCP server and mount it locally using NFS:
-
-```bash
-linkspan --mount-remote --session-id my-session --server-addr 127.0.0.1:40709
-```
-
-This creates a mount at `~/sessions/my-session/` backed by the remote filesystem. The process blocks until interrupted (SIGINT/SIGTERM), at which point it unmounts cleanly.
-
 ## CLI Flags
 
 | Flag | Default | Description |
@@ -96,9 +68,8 @@ This creates a mount at `~/sessions/my-session/` backed by the remote filesystem
 | `--tunnel-retries` | `3` | Retry count for tunnel startup |
 | `--tunnel-retry-delay` | `2s` | Delay between tunnel retries |
 | `--tunnel-attempt-timeout` | `10s` | Timeout per tunnel attempt |
-| `--mount-remote` | `false` | Mount a remote FUSE server locally via NFS |
-| `--session-id` | | Session ID for mount point name (with `--mount-remote`) |
-| `--server-addr` | | FUSE TCP server address `host:port` (with `--mount-remote`) |
+| `--vfs-mode` | | VFS mode: `sync` or `mount` (also reads `CS_VFS_MODE` env) |
+| `--vfs-session-id` | | Session ID for VFS (also reads `CS_SESSION_ID` env) |
 
 ## REST API
 
@@ -122,21 +93,6 @@ All endpoints are under `/api/v1/`.
 | DELETE | `/vscode/sessions/{id}` | Terminate a session |
 | GET | `/vscode/sessions/{id}/status` | Get session status |
 
-### Remote Filesystem
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/fs/list` | List files in a directory |
-| GET | `/fs/read` | Read a file |
-| POST | `/fs/write` | Write a file |
-| DELETE | `/fs/delete` | Delete a file |
-
-### FUSE Mount
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/fuse/start-server` | Start a FUSE TCP server |
-| POST | `/fuse/mount-remote` | Mount a remote FUSE server via NFS |
-| GET | `/fuse/status` | Get FUSE server/mount status |
-
 ### Tunnels
 | Method | Path | Description |
 |--------|------|-------------|
@@ -151,13 +107,12 @@ All endpoints are under `/api/v1/`.
 
 | Action | Description | Outputs |
 |--------|-------------|---------|
-| `vscode.create_session` | Start a VS Code SSH server | `session_id`, `bind_port` |
-| `fuse.start_server` | Start FUSE TCP server on a random port | `fuse_port` |
-| `fuse.mount_remote` | Mount a remote FUSE server locally | `mount_path`, `nfs_port` |
-| `tunnel.devtunnel_create` | Create a Dev Tunnel with specified ports | `tunnel_id`, `tunnel_name` |
-| `tunnel.devtunnel_host` | Host a Dev Tunnel (start relay) | `command_id`, `connection_url`, `token` |
+| `tunnel.devtunnel_create` | Create a Dev Tunnel and forward ports | `tunnel_id`, `tunnel_name`, `connection_url`, `token`, `ssh_port`, `log_port` |
+| `tunnel.devtunnel_forward` | Forward an additional port into a Dev Tunnel | `port` |
 | `tunnel.devtunnel_delete` | Delete a Dev Tunnel | |
+| `tunnel.devtunnel_connect` | Connect to a Dev Tunnel (client side) | `command_id`, `port_map` |
 | `tunnel.frp_proxy_create` | Create an FRP tunnel proxy | `tunnel_name`, `tunnel_type` |
+| `mount.setup_overlay` | Set up an overlay mount over a remote workspace via SSHFS | `merged_path`, `cache_path`, `source_path` |
 | `shell.exec` | Execute a shell command | `output` |
 
 ## Architecture
@@ -167,9 +122,10 @@ linkspan
 ├── main.go                    # Entry point, CLI flags, HTTP router, workflow orchestration
 ├── internal/
 │   ├── workflow/              # Workflow engine: YAML parsing, step execution, action registry
-│   └── process/               # Process manager for background CLI processes
+│   ├── process/               # Process manager for background CLI processes
+│   └── logstream/             # Log broadcaster: tees log output to connected TCP clients
 ├── subsystems/
-│   ├── fuse/                  # FUSE-over-TCP protocol, NFS proxy, mount management
+│   ├── mount/                 # FUSE overlay filesystem, SFTP-backed copy-up mounts
 │   ├── vscode/                # VS Code SSH server lifecycle
 │   ├── tunnel/                # Dev Tunnels SDK + CLI, FRP tunnel management
 │   ├── jupyter/               # Jupyter kernel provisioning
@@ -185,4 +141,4 @@ goreleaser release --snapshot --clean    # Local snapshot build
 goreleaser release --clean               # Tagged release (requires GITHUB_TOKEN)
 ```
 
-Produces archives for Linux (amd64/arm64), macOS (amd64/arm64), and Windows (amd64).
+Produces archives for Linux (amd64/arm64) and macOS (amd64/arm64).

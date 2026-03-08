@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
-	utils "github.com/cyber-shuttle/linkspan/utils"
+	"github.com/cyber-shuttle/linkspan/utils"
 	"github.com/gorilla/mux"
 )
 
@@ -36,25 +36,25 @@ type DevTunnelCreateResponse struct {
 	Token         string `json:"token,omitempty"`
 }
 
-// FrpTunnelProxyCreateRequest is the JSON body for POST /tunnels/frp.
-type FrpTunnelProxyCreateRequest struct {
-	TunnelName    string `json:"tunnelName"`
-	Port          int    `json:"port"`
-	TunnelType    string `json:"tunnelType"` // e.g. "xtcp"
-	TunnelSecret  string `json:"tunnelSecret"`
-	DiscoveryHost string `json:"discoveryHost"`
-	DiscoveryPort int    `json:"discoveryPort"`
+// FRPTunnelProxyCreateRequest is the JSON body for POST /tunnels/frp.
+type FRPTunnelProxyCreateRequest struct {
+	TunnelName     string `json:"tunnelName"`
+	Port           int    `json:"port"`
+	TunnelType     string `json:"tunnelType"` // e.g. "xtcp"
+	TunnelSecret   string `json:"tunnelSecret"`
+	DiscoveryHost  string `json:"discoveryHost"`
+	DiscoveryPort  int    `json:"discoveryPort"`
 	DiscoveryToken string `json:"discoveryToken"`
 }
 
-// FrpTunnelProxyCreateResponse is the JSON body returned after FRP proxy creation.
-type FrpTunnelProxyCreateResponse struct {
+// FRPTunnelProxyCreateResponse is the JSON body returned after FRP proxy creation.
+type FRPTunnelProxyCreateResponse struct {
 	TunnelName string `json:"tunnelName"`
 }
 
-// FrpTunnelListResponse is the JSON body for GET /tunnels/frp.
-type FrpTunnelListResponse struct {
-	FrpTunnelInfos []FrpTunnelInfo `json:"tunnels"`
+// FRPTunnelListResponse is the JSON body for GET /tunnels/frp.
+type FRPTunnelListResponse struct {
+	FRPTunnelInfos []FRPTunnelInfo `json:"tunnels"`
 }
 
 // DevTunnelListResponse is the JSON body for GET /tunnels/devtunnel.
@@ -102,10 +102,10 @@ func CreateDevTunnel(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// CloseDevTunnel handles DELETE /tunnels/devtunnel/{id}.
+// DeleteDevTunnel handles DELETE /tunnels/devtunnel/{id}.
 // It kills the host CLI process, deletes the tunnel via the SDK, and removes
 // it from the in-memory manager.
-func CloseDevTunnel(w http.ResponseWriter, r *http.Request) {
+func DeleteDevTunnel(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	tunnelName := vars["id"]
 	if tunnelName == "" {
@@ -135,16 +135,16 @@ func CloseDevTunnel(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusNoContent, nil)
 }
 
-// CreateFrpTunnelProxy handles POST /tunnels/frp.
-func CreateFrpTunnelProxy(w http.ResponseWriter, r *http.Request) {
-	var req FrpTunnelProxyCreateRequest
+// CreateFRPTunnelProxy handles POST /tunnels/frp.
+func CreateFRPTunnelProxy(w http.ResponseWriter, r *http.Request) {
+	var req FRPTunnelProxyCreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
 	}
 	_ = r.Body.Close()
 
-	info, err := FrpTunnelProxyCreate(
+	info, err := FRPTunnelProxyCreate(
 		req.TunnelName, req.Port, req.TunnelType,
 		req.TunnelSecret, req.DiscoveryHost, req.DiscoveryPort, req.DiscoveryToken,
 	)
@@ -153,23 +153,23 @@ func CreateFrpTunnelProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	utils.RespondJSON(w, http.StatusCreated, FrpTunnelProxyCreateResponse{
+	utils.RespondJSON(w, http.StatusCreated, FRPTunnelProxyCreateResponse{
 		TunnelName: info.TunnelName,
 	})
 }
 
-// ListFrpTunnels handles GET /tunnels/frp.
-func ListFrpTunnels(w http.ResponseWriter, r *http.Request) {
-	ts, err := FrpTunnelList()
+// ListFRPTunnels handles GET /tunnels/frp.
+func ListFRPTunnels(w http.ResponseWriter, r *http.Request) {
+	ts, err := FRPTunnelList()
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	utils.RespondJSON(w, http.StatusOK, FrpTunnelListResponse{FrpTunnelInfos: ts})
+	utils.RespondJSON(w, http.StatusOK, FRPTunnelListResponse{FRPTunnelInfos: ts})
 }
 
-// TerminateFrpTunnel handles DELETE /tunnels/frp/{id}.
-func TerminateFrpTunnel(w http.ResponseWriter, r *http.Request) {
+// DeleteFRPTunnel handles DELETE /tunnels/frp/{id}.
+func DeleteFRPTunnel(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	tunnelName := vars["id"]
 	if tunnelName == "" {
@@ -177,8 +177,8 @@ func TerminateFrpTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := StopFrpTunnelByName(tunnelName); err != nil {
-		utils.RespondJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+	if err := DeleteFRPTunnelByName(tunnelName); err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 

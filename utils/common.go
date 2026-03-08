@@ -24,7 +24,6 @@ func FindLineInStdout(stdout string, searchString string) (string, error) {
 	sc := bufio.NewScanner(strings.NewReader(stdout))
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
-		//log.Println("Checking line:", line)
 		if strings.HasPrefix(line, searchString) {
 			rest := strings.TrimPrefix(line, searchString)
 			if rest != "" {

@@ -9,9 +9,10 @@ var (
 	providersMu sync.RWMutex
 	providers   = map[string]TunnelProvider{
 		"devtunnel": &DevTunnelProvider{},
+		"frp":       NewFRPTunnelProvider(),
 	}
 	// activeConnections tracks connectionID -> provider name for Disconnect routing.
-	connectionsMu    sync.Mutex
+	connectionsMu    sync.RWMutex
 	activeConnections = make(map[string]string) // connectionID -> provider name
 )
 
@@ -49,8 +50,8 @@ func UntrackConnection(connectionID string) {
 
 // ConnectionProvider returns the provider name that owns a connection.
 func ConnectionProvider(connectionID string) (string, bool) {
-	connectionsMu.Lock()
+	connectionsMu.RLock()
 	name, ok := activeConnections[connectionID]
-	connectionsMu.Unlock()
+	connectionsMu.RUnlock()
 	return name, ok
 }

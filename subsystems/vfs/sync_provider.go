@@ -31,23 +31,24 @@ func (s *SyncProvider) Start() error {
 }
 
 func (s *SyncProvider) Stop() {
-	if s.SessionName == "" {
-		return
-	}
 	bin := s.DataCache.ResolveMutagenBin()
-	if bin == "" {
+
+	if s.SessionName != "" && bin != "" {
+		if err := exec.Command(bin, "sync", "flush", s.SessionName).Run(); err != nil {
+			log.Printf("[vfs/sync] Warning: flush failed for %s: %v", s.SessionName, err)
+		}
+		if err := exec.Command(bin, "sync", "terminate", s.SessionName).Run(); err != nil {
+			log.Printf("[vfs/sync] Warning: terminate failed for %s: %v", s.SessionName, err)
+		} else {
+			log.Printf("[vfs/sync] Terminated session: %s", s.SessionName)
+		}
 		s.SessionName = ""
-		return
 	}
-	if err := exec.Command(bin, "sync", "flush", s.SessionName).Run(); err != nil {
-		log.Printf("[vfs/sync] Warning: flush failed for %s: %v", s.SessionName, err)
+
+	// Stop the daemon even if no named session was created.
+	if bin != "" {
+		_ = exec.Command(bin, "daemon", "stop").Run()
 	}
-	if err := exec.Command(bin, "sync", "terminate", s.SessionName).Run(); err != nil {
-		log.Printf("[vfs/sync] Warning: terminate failed for %s: %v", s.SessionName, err)
-	} else {
-		log.Printf("[vfs/sync] Terminated session: %s", s.SessionName)
-	}
-	s.SessionName = ""
 
 	if err := s.DataCache.Cleanup(); err != nil {
 		log.Printf("[vfs/sync] Warning: cache cleanup failed: %v", err)

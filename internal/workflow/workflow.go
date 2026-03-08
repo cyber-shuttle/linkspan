@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -115,9 +116,11 @@ func (e *Engine) Status() Status {
 }
 
 // Run executes every step in the workflow sequentially.
+// ctx is checked between steps so that a shutdown signal can interrupt
+// execution without waiting for the current step to finish.
 // On step failure it logs the error and returns; the caller (main.go) keeps the
 // HTTP server running.
-func (e *Engine) Run(wf *WorkflowConfig) error {
+func (e *Engine) Run(ctx context.Context, wf *WorkflowConfig) error {
 	log.Printf("workflow: starting %q (%d steps)", wf.Name, len(wf.Steps))
 
 	e.mu.Lock()
@@ -125,6 +128,19 @@ func (e *Engine) Run(wf *WorkflowConfig) error {
 	e.mu.Unlock()
 
 	for i, step := range wf.Steps {
+		// Check for cancellation before starting each step so a shutdown
+		// signal can interrupt workflow execution promptly.
+		select {
+		case <-ctx.Done():
+			err := fmt.Errorf("workflow cancelled at step %d (%s): %w", i+1, step.Name, ctx.Err())
+			e.mu.Lock()
+			e.status.State = StateFailed
+			e.status.Error = err.Error()
+			e.mu.Unlock()
+			return err
+		default:
+		}
+
 		log.Printf("workflow: [%d/%d] %s (action=%s)", i+1, len(wf.Steps), step.Name, step.Action)
 
 		e.mu.Lock()
@@ -153,9 +169,8 @@ func (e *Engine) Run(wf *WorkflowConfig) error {
 			return err
 		}
 
-		result, err := fn(resolved)
+		result, err := e.invokeAction(fn, resolved, i+1, step.Name)
 		if err != nil {
-			err = fmt.Errorf("workflow step %d (%s): %w", i+1, step.Name, err)
 			e.mu.Lock()
 			e.status.State = StateFailed
 			e.status.Error = err.Error()
@@ -189,6 +204,22 @@ func (e *Engine) Run(wf *WorkflowConfig) error {
 
 	log.Printf("workflow: %q finished successfully", wf.Name)
 	return nil
+}
+
+// invokeAction calls fn with the given params, recovering from any panic so
+// that a misbehaving action cannot crash the entire process.
+func (e *Engine) invokeAction(fn ActionFunc, params map[string]any, stepNum int, stepName string) (result *ActionResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("workflow: step %d (%s): PANIC recovered: %v", stepNum, stepName, r)
+			err = fmt.Errorf("workflow step %d (%s): panic: %v", stepNum, stepName, r)
+		}
+	}()
+	result, err = fn(params)
+	if err != nil {
+		err = fmt.Errorf("workflow step %d (%s): %w", stepNum, stepName, err)
+	}
+	return result, err
 }
 
 // resolveParams applies Go text/template substitution on every string value

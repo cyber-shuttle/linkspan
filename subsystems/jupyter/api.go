@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"os"
 
-	utils "github.com/cyber-shuttle/linkspan/utils"
+	"github.com/cyber-shuttle/linkspan/utils"
 	"github.com/gorilla/mux"
 )
 
@@ -53,12 +53,12 @@ type KernelShutdownResponse struct {
 }
 
 type KernelStatusRequest struct {
-	KernelID string 
+	KernelID string `json:"kernelId"`
 }
 
 type KernelStatusResponse struct {
-	KernelID string 
-	Status   string 
+	KernelID string `json:"kernelId"`
+	Status   string `json:"status"`
 }
 
 func ListKernels(w http.ResponseWriter, r *http.Request) {
@@ -69,7 +69,6 @@ func ListKernels(w http.ResponseWriter, r *http.Request) {
 }
 
 func ProvisionKernel(w http.ResponseWriter, r *http.Request) {
-	// placeholder: parse request body to create kernel
 	provisionReq := KernelProvisionRequest{}
 	if err := json.NewDecoder(r.Body).Decode(&provisionReq); err != nil {
 		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
@@ -115,7 +114,6 @@ func ProvisionKernel(w http.ResponseWriter, r *http.Request) {
 }
 
 func ShutdownKernel(w http.ResponseWriter, r *http.Request) {
-	// placeholder: shutdown by id
 	shutdownReq := KernelShutdownRequest{}
 	if err := json.NewDecoder(r.Body).Decode(&shutdownReq); err != nil {
 		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
@@ -128,7 +126,6 @@ func ShutdownKernel(w http.ResponseWriter, r *http.Request) {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	// placeholder: shutdown kernel based on shutdownReq.KernelID
 	shutdownResp := KernelShutdownResponse{
 		KernelID: shutdownReq.KernelID,
 		Status:   "shutting down",
@@ -137,7 +134,6 @@ func ShutdownKernel(w http.ResponseWriter, r *http.Request) {
 }
 
 func DeleteKernel(w http.ResponseWriter, r *http.Request) {
-	// placeholder: delete by id
 	deleteReq := KernelShutdownRequest{}
 	if err := json.NewDecoder(r.Body).Decode(&deleteReq); err != nil {
 		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
@@ -169,7 +165,6 @@ func GetKernelStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// placeholder: get kernel status based on statusReq.KernelID
 	statusResp := KernelStatusResponse{
 		KernelID: kernelID,
 		Status:   status,
@@ -178,7 +173,6 @@ func GetKernelStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetKernelConnectionInfo(w http.ResponseWriter, r *http.Request) {
-	// placeholder: get connection info by id
 	vars := mux.Vars(r)
 	kernelID := vars["id"]
 
@@ -206,7 +200,6 @@ func GetKernelConnectionInfo(w http.ResponseWriter, r *http.Request) {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	// placeholder: get kernel connection info based on connInfoReq.KernelID
 	connInfoResp := KernelConnectionInfoResponse{
 		KernelID:       kernelID,
 		ConnectionInfo: connInfo,

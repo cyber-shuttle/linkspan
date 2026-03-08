@@ -41,13 +41,11 @@ func (pm *ProcessManager) GetInfo(id string) (ManagedProcess, error) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
-	// just return info of the first process as a placeholder
-	for _, mp := range pm.procs {
-		if mp.ID == id {
-			return *mp, nil
-		}
+	mp, ok := pm.procs[id]
+	if !ok {
+		return ManagedProcess{}, fmt.Errorf("process %s not found", id)
 	}
-	return ManagedProcess{}, fmt.Errorf("no processes found")
+	return *mp, nil
 }
 
 // Start registers and starts the given *exec.Cmd asynchronously and returns an id.

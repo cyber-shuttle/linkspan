@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
-	utils "github.com/cyber-shuttle/linkspan/utils"
+	"github.com/cyber-shuttle/linkspan/utils"
 	"github.com/gorilla/mux"
 )
 
@@ -46,7 +46,7 @@ func CreateVSCodeSession(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusCreated, s)
 }
 
-func TerminateVSCodeSession(w http.ResponseWriter, r *http.Request) {
+func DeleteVSCodeSession(w http.ResponseWriter, r *http.Request) {
 	// Get session ID from query parameter or path
 	vars := mux.Vars(r)
 	sessionID := vars["id"]

@@ -12,8 +12,8 @@ import (
 	"github.com/fatedier/frp/pkg/util/log"
 )
 
-type FrpTunnelInfo struct {
-	TunnelName   string `json:"tunnelName"`
+type FRPTunnelInfo struct {
+	TunnelName string `json:"tunnelName"`
 	TunnelType string `json:"tunnelType"`
 }
 
@@ -30,7 +30,7 @@ var (
 	activeTunnelsMu sync.Mutex
 )
 
-// Stop gracefully stops the FRP tunnel client.
+// Stop tears down the FRP tunnel client.
 func (c *FRPTunnelClient) Stop() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -48,8 +48,8 @@ func (c *FRPTunnelClient) Stop() error {
 	return nil
 }
 
-// StopTunnelByID stops the FRP tunnel associated with the given tunnel ID.
-func StopFrpTunnelByName(tunnelName string) error {
+// DeleteFRPTunnelByName deletes the FRP tunnel by name and cleans up its resources.
+func DeleteFRPTunnelByName(tunnelName string) error {
 	activeTunnelsMu.Lock()
 	tunnel, exists := activeTunnels[tunnelName]
 	if exists {
@@ -58,14 +58,14 @@ func StopFrpTunnelByName(tunnelName string) error {
 	activeTunnelsMu.Unlock()
 
 	if !exists {
-		return fmt.Errorf("no tunnel found for  %s", tunnelName)
+		return fmt.Errorf("no tunnel found for %s", tunnelName)
 	}
 
 	return tunnel.Stop()
 }
 
-// StopAllTunnels stops all active FRP tunnels.
-func StopFrpAllTunnels() {
+// DeleteAllFRPTunnels stops all active FRP tunnels.
+func DeleteAllFRPTunnels() {
 	activeTunnelsMu.Lock()
 	tunnels := make([]*FRPTunnelClient, 0, len(activeTunnels))
 	for _, tunnel := range activeTunnels {
@@ -79,8 +79,8 @@ func StopFrpAllTunnels() {
 	}
 }
 
-func FrpTunnelProxyCreate(tunnelName string, port int, tunnelType string,
-	tunnelSecret string, discoveryHost string, discoveryPort int, discoveryToken string) (FrpTunnelInfo, error) {
+func FRPTunnelProxyCreate(tunnelName string, port int, tunnelType string,
+	tunnelSecret string, discoveryHost string, discoveryPort int, discoveryToken string) (FRPTunnelInfo, error) {
 	// Create XTCP proxy config with secret key
 	proxyConfig := &v1.XTCPProxyConfig{}
 	proxyConfig.Name = tunnelName
@@ -105,17 +105,17 @@ func FrpTunnelProxyCreate(tunnelName string, port int, tunnelType string,
 
 	warning, err := validation.ValidateAllClientConfig(commonConfig, proxyConfigs, visitorCfgs, unsafeFeatures)
 	if err != nil {
-		fmt.Printf("validation error: %v\n", err)
-		return FrpTunnelInfo{}, err
+		log.Errorf("validation error: %v", err)
+		return FRPTunnelInfo{}, err
 	}
 	if warning != nil {
-		fmt.Printf("validation warning: %s\n", warning.Error())
+		log.Warnf("validation warning: %s", warning.Error())
 	}
 
 	srv, ctx, cancel, err := startService(commonConfig, proxyConfigs, visitorCfgs)
 	if err != nil {
 		log.Errorf("Error starting service: %v", err)
-		return FrpTunnelInfo{}, err
+		return FRPTunnelInfo{}, err
 	}
 
 	tunnelClient := &FRPTunnelClient{
@@ -136,21 +136,21 @@ func FrpTunnelProxyCreate(tunnelName string, port int, tunnelType string,
 		activeTunnelsMu.Unlock()
 	}()
 
-	info := FrpTunnelInfo{
-		TunnelName:   tunnelName,
+	info := FRPTunnelInfo{
+		TunnelName: tunnelName,
 		TunnelType: "xtcp",
 	}
 
 	return info, nil
 }
 
-func FrpTunnelList() ([]FrpTunnelInfo, error) {
+func FRPTunnelList() ([]FRPTunnelInfo, error) {
 	activeTunnelsMu.Lock()
 	defer activeTunnelsMu.Unlock()
 
-	tunnelInfos := make([]FrpTunnelInfo, 0, len(activeTunnels))
-	for tunnelName, _ := range activeTunnels {
-		tunnelInfos = append(tunnelInfos, FrpTunnelInfo{
+	tunnelInfos := make([]FRPTunnelInfo, 0, len(activeTunnels))
+	for tunnelName := range activeTunnels {
+		tunnelInfos = append(tunnelInfos, FRPTunnelInfo{
 			TunnelName: tunnelName,
 			TunnelType: "xtcp", // Assuming all are xtcp for this example
 		})

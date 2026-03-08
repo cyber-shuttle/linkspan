@@ -36,12 +36,12 @@ func registerBuiltinActions(r *Registry) {
 // via tunnel.devtunnel_forward.
 
 func actionDevTunnelCreate(params map[string]any) (*ActionResult, error) {
-	tunnelName, _ := params["tunnel_name"].(string)
-	expiration, _ := params["expiration"].(string)
+	tunnelName := stringParam(params, "tunnel_name")
+	expiration := stringParam(params, "expiration")
 	if expiration == "" {
 		expiration = "1d"
 	}
-	authToken, _ := params["auth_token"].(string)
+	authToken := stringParam(params, "auth_token")
 	if authToken == "" {
 		return nil, fmt.Errorf("tunnel.devtunnel_create: auth_token is required")
 	}
@@ -68,11 +68,11 @@ func actionDevTunnelCreate(params map[string]any) (*ActionResult, error) {
 // --- tunnel.devtunnel_forward ---
 
 func actionDevTunnelForward(params map[string]any) (*ActionResult, error) {
-	tunnelName, _ := params["tunnel_name"].(string)
+	tunnelName := stringParam(params, "tunnel_name")
 	if tunnelName == "" {
 		return nil, fmt.Errorf("tunnel.devtunnel_forward: tunnel_name is required")
 	}
-	authToken, _ := params["auth_token"].(string)
+	authToken := stringParam(params, "auth_token")
 	if authToken == "" {
 		return nil, fmt.Errorf("tunnel.devtunnel_forward: auth_token is required")
 	}
@@ -91,8 +91,8 @@ func actionDevTunnelForward(params map[string]any) (*ActionResult, error) {
 // --- tunnel.devtunnel_delete ---
 
 func actionDevTunnelDelete(params map[string]any) (*ActionResult, error) {
-	tunnelName, _ := params["tunnel_name"].(string)
-	authToken, _ := params["auth_token"].(string)
+	tunnelName := stringParam(params, "tunnel_name")
+	authToken := stringParam(params, "auth_token")
 	if authToken == "" {
 		return nil, fmt.Errorf("tunnel.devtunnel_delete: auth_token is required")
 	}
@@ -106,11 +106,11 @@ func actionDevTunnelDelete(params map[string]any) (*ActionResult, error) {
 // --- tunnel.devtunnel_connect ---
 
 func actionDevTunnelConnect(params map[string]any) (*ActionResult, error) {
-	tunnelID, _ := params["tunnel_id"].(string)
+	tunnelID := stringParam(params, "tunnel_id")
 	if tunnelID == "" {
 		return nil, fmt.Errorf("tunnel.devtunnel_connect: tunnel_id is required")
 	}
-	accessToken, _ := params["access_token"].(string)
+	accessToken := stringParam(params, "access_token")
 	if accessToken == "" {
 		return nil, fmt.Errorf("tunnel.devtunnel_connect: access_token is required")
 	}
@@ -136,13 +136,13 @@ func actionDevTunnelConnect(params map[string]any) (*ActionResult, error) {
 // --- tunnel.frp_proxy_create ---
 
 func actionFrpProxyCreate(params map[string]any) (*ActionResult, error) {
-	tunnelName, _ := params["tunnel_name"].(string)
+	tunnelName := stringParam(params, "tunnel_name")
 	port := toInt(params["port"])
-	tunnelType, _ := params["tunnel_type"].(string)
-	tunnelSecret, _ := params["tunnel_secret"].(string)
-	discoveryHost, _ := params["discovery_host"].(string)
+	tunnelType := stringParam(params, "tunnel_type")
+	tunnelSecret := stringParam(params, "tunnel_secret")
+	discoveryHost := stringParam(params, "discovery_host")
 	discoveryPort := toInt(params["discovery_port"])
-	discoveryToken, _ := params["discovery_token"].(string)
+	discoveryToken := stringParam(params, "discovery_token")
 
 	info, err := tunnel.FRPTunnelProxyCreate(
 		tunnelName, port, tunnelType, tunnelSecret,
@@ -162,7 +162,7 @@ func actionFrpProxyCreate(params map[string]any) (*ActionResult, error) {
 // --- shell.exec ---
 
 func actionShellExec(params map[string]any) (*ActionResult, error) {
-	command, _ := params["command"].(string)
+	command := stringParam(params, "command")
 	if command == "" {
 		return nil, fmt.Errorf("shell.exec: command is required")
 	}
@@ -185,11 +185,11 @@ func actionShellExec(params map[string]any) (*ActionResult, error) {
 // --- mount.setup_overlay ---
 
 func actionSetupOverlay(params map[string]any) (*ActionResult, error) {
-	sessionID, _ := params["session_id"].(string)
+	sessionID := stringParam(params, "session_id")
 	if sessionID == "" {
 		return nil, fmt.Errorf("mount.setup_overlay: session_id is required")
 	}
-	localWorkspace, _ := params["local_workspace"].(string)
+	localWorkspace := stringParam(params, "local_workspace")
 	if localWorkspace == "" {
 		return nil, fmt.Errorf("mount.setup_overlay: local_workspace is required")
 	}
@@ -214,7 +214,7 @@ func actionSetupOverlay(params map[string]any) (*ActionResult, error) {
 // --- tunnel.create (provider-agnostic) ---
 
 func actionTunnelCreate(params map[string]any) (*ActionResult, error) {
-	providerName, _ := params["provider"].(string)
+	providerName := stringParam(params, "provider")
 	if providerName == "" {
 		providerName = "devtunnel"
 	}
@@ -262,7 +262,7 @@ func actionTunnelCreate(params map[string]any) (*ActionResult, error) {
 // --- tunnel.add_port (provider-agnostic) ---
 
 func actionTunnelAddPort(params map[string]any) (*ActionResult, error) {
-	providerName, _ := params["provider"].(string)
+	providerName := stringParam(params, "provider")
 	if providerName == "" {
 		providerName = "devtunnel"
 	}
@@ -286,7 +286,7 @@ func actionTunnelAddPort(params map[string]any) (*ActionResult, error) {
 // --- tunnel.connect (provider-agnostic) ---
 
 func actionTunnelConnect(params map[string]any) (*ActionResult, error) {
-	providerName, _ := params["provider"].(string)
+	providerName := stringParam(params, "provider")
 	if providerName == "" {
 		providerName = "devtunnel"
 	}
@@ -349,7 +349,7 @@ func actionTunnelDisconnect(params map[string]any) (*ActionResult, error) {
 // --- tunnel.delete (provider-agnostic) ---
 
 func actionTunnelDelete(params map[string]any) (*ActionResult, error) {
-	providerName, _ := params["provider"].(string)
+	providerName := stringParam(params, "provider")
 	if providerName == "" {
 		providerName = "devtunnel"
 	}

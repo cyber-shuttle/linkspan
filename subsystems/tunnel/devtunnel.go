@@ -122,12 +122,14 @@ func DevTunnelForward(tunnelName string, port int, authToken string) error {
 		return fmt.Errorf("devtunnel forward: add port %d to %q: %w", port, tunnelName, err)
 	}
 
-	devTunInfo.Ports = append(devTunInfo.Ports, port)
+	if err := GlobalDevTunnelManager.AddPort(tunnelName, port); err != nil {
+		return fmt.Errorf("devtunnel forward: record port: %w", err)
+	}
 
 	// Restart the host CLI so the relay picks up the newly registered port.
 	// No -p flags needed — ports are registered via SDK and forwarded by the relay.
 	if devTunInfo.HostCmdID != "" {
-		log.Printf("devtunnel forward: restarting host for %q (ports registered: %v)", tunnelName, devTunInfo.Ports)
+		log.Printf("devtunnel forward: restarting host for %q", tunnelName)
 		_ = pm.GlobalProcessManager.Kill(devTunInfo.HostCmdID)
 
 		hostToken := devTunInfo.HostToken
@@ -142,7 +144,7 @@ func DevTunnelForward(tunnelName string, port int, authToken string) error {
 		if err != nil {
 			return fmt.Errorf("devtunnel forward: restart host for %q: %w", tunnelName, err)
 		}
-		devTunInfo.HostCmdID = cmdID
+		_ = GlobalDevTunnelManager.UpdateHostCmd(tunnelName, cmdID)
 	}
 
 	log.Printf("devtunnel forward: port %d now forwarded on %q", port, tunnelName)
