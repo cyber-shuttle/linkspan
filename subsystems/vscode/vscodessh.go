@@ -47,14 +47,13 @@ func StartSSHServerForVSCodeConnection(sessionID, addr string) *SSHServer {
 		log.Printf("client connected: user=%s remote=%s", user, remote)
 		defer log.Printf("client disconnected: user=%s remote=%s", user, remote)
 		// Non-interactive command execution: run the command on the host.
-		// Like OpenSSH, join all args into a single string and pass to sh -c
-		// so shell operators (&&, |, etc.) work correctly.
+		// Use RawCommand() to get the exact string the client sent, then
+		// pass it to sh -c like OpenSSH does.
 		if len(s.Command()) > 0 {
-			cmdArgs := s.Command()
-			log.Printf("exec request: user=%s remote=%s cmd=%q", user, remote, cmdArgs)
+			rawCmd := s.RawCommand()
+			log.Printf("exec request: user=%s remote=%s cmd=%q", user, remote, rawCmd)
 
-			cmdStr := strings.Join(cmdArgs, " ")
-			cmd := exec.Command("sh", "-c", cmdStr)
+			cmd := exec.Command("sh", "-c", rawCmd)
 			cmd.Env = os.Environ()
 			cmd.Stdin = s
 			cmd.Stdout = s
