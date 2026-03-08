@@ -20,11 +20,11 @@ import (
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
 	"github.com/cyber-shuttle/linkspan/internal/workflow"
 	"github.com/cyber-shuttle/linkspan/subsystems/mount"
-	jupyter "github.com/cyber-shuttle/linkspan/subsystems/jupyter"
-	tunnel "github.com/cyber-shuttle/linkspan/subsystems/tunnel"
+	"github.com/cyber-shuttle/linkspan/subsystems/jupyter"
+	"github.com/cyber-shuttle/linkspan/subsystems/tunnel"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs"
-	vscode "github.com/cyber-shuttle/linkspan/subsystems/vscode"
-	utils "github.com/cyber-shuttle/linkspan/utils"
+	"github.com/cyber-shuttle/linkspan/subsystems/vscode"
+	"github.com/cyber-shuttle/linkspan/utils"
 	"github.com/gorilla/mux"
 )
 
@@ -119,17 +119,27 @@ func main() {
 	// VS Code remote session management
 	api.HandleFunc("/vscode/sessions", vscode.ListVSCodeSessions).Methods("GET")
 	api.HandleFunc("/vscode/sessions", vscode.CreateVSCodeSession).Methods("POST")
-	api.HandleFunc("/vscode/sessions/{id}", vscode.TerminateVSCodeSession).Methods("DELETE")
+	api.HandleFunc("/vscode/sessions/{id}", vscode.DeleteVSCodeSession).Methods("DELETE")
 	api.HandleFunc("/vscode/sessions/{id}/status", vscode.GetVSCodeSessionStatus).Methods("GET")
 
 	// Tunnel management
 	api.HandleFunc("/tunnels/devtunnels", tunnel.ListDevTunnels).Methods("GET")
 	api.HandleFunc("/tunnels/devtunnels", tunnel.CreateDevTunnel).Methods("POST")
-	api.HandleFunc("/tunnels/devtunnels/{id}", tunnel.CloseDevTunnel).Methods("DELETE")
+	api.HandleFunc("/tunnels/devtunnels/{id}", tunnel.DeleteDevTunnel).Methods("DELETE")
 
-	api.HandleFunc("/tunnels/frp", tunnel.ListFrpTunnels).Methods("GET")
-	api.HandleFunc("/tunnels/frp", tunnel.CreateFrpTunnelProxy).Methods("POST")
-	api.HandleFunc("/tunnels/frp/{id}", tunnel.TerminateFrpTunnel).Methods("DELETE")
+	api.HandleFunc("/tunnels/frp", tunnel.ListFRPTunnels).Methods("GET")
+	api.HandleFunc("/tunnels/frp", tunnel.CreateFRPTunnelProxy).Methods("POST")
+	api.HandleFunc("/tunnels/frp/{id}", tunnel.DeleteFRPTunnel).Methods("DELETE")
+
+	// Provider-agnostic tunnel endpoints
+	// NOTE: /tunnels/connect must be registered before /tunnels/{id} so that
+	// gorilla/mux does not match "connect" as a tunnel ID.
+	api.HandleFunc("/tunnels/connect", tunnel.ConnectTunnel).Methods("POST")
+	api.HandleFunc("/tunnels/connect/{id}", tunnel.DisconnectTunnel).Methods("DELETE")
+	api.HandleFunc("/tunnels", tunnel.ListTunnels).Methods("GET")
+	api.HandleFunc("/tunnels", tunnel.CreateTunnel).Methods("POST")
+	api.HandleFunc("/tunnels/{id}/ports", tunnel.AddTunnelPort).Methods("POST")
+	api.HandleFunc("/tunnels/{id}", tunnel.DeleteTunnel).Methods("DELETE")
 
 	// Health and workflow status
 	api.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -174,6 +184,7 @@ func main() {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(val)
 		case "PUT":
+			r.Body = http.MaxBytesReader(w, r.Body, 10*1024*1024)
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
@@ -262,7 +273,7 @@ func main() {
 			"SessionID":        os.Getenv("CS_SESSION_ID"),
 		})
 		go func() {
-			if err := workflowEngine.Run(wf); err != nil {
+			if err := workflowEngine.Run(ctx, wf); err != nil {
 				log.Printf("workflow: %v", err)
 			}
 		}()
@@ -278,7 +289,7 @@ func main() {
 			log.Println("devtunnel: warning — --tunnel-auth-token not provided; tunnel startup will fail")
 		}
 		go func() {
-			tunnelName := fmt.Sprintf("aget-tunnel-%d", time.Now().UnixNano())
+			tunnelName := fmt.Sprintf("linkspan-tunnel-%d", time.Now().UnixNano())
 
 			// cleanupAttempt kills any host CLI process and removes the tunnel
 			// from the manager so a timed-out or failed attempt doesn't leak.
@@ -358,7 +369,12 @@ func main() {
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Printf("server shutdown error: %v", err)
+		log.Printf("server shutdown error: %v — forcing close", err)
+		// Shutdown did not complete within the deadline; force-close all
+		// remaining connections so the process does not hang indefinitely.
+		if closeErr := srv.Close(); closeErr != nil {
+			log.Printf("server force-close error: %v", closeErr)
+		}
 	}
 
 	cleanupResources()
@@ -375,7 +391,7 @@ func cleanupResources() {
 	mount.CleanupAll()
 	pm.GlobalProcessManager.KillAll()
 	tunnel.GlobalDevTunnelManager.CleanAll(devtunnelAuthTokenForCleanup)
-	tunnel.StopFrpAllTunnels()
+	tunnel.DeleteAllFRPTunnels()
 	vscode.StopAllSSHServers()
 
 	// VFS cleanup

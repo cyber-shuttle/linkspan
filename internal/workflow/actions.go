@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os/exec"
@@ -8,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/cyber-shuttle/linkspan/subsystems/mount"
-	tunnel "github.com/cyber-shuttle/linkspan/subsystems/tunnel"
+	"github.com/cyber-shuttle/linkspan/subsystems/tunnel"
 )
 
 // registerBuiltinActions populates a Registry with all built-in action wrappers.
@@ -20,6 +21,13 @@ func registerBuiltinActions(r *Registry) {
 	r.Register("tunnel.frp_proxy_create", actionFrpProxyCreate)
 	r.Register("shell.exec", actionShellExec)
 	r.Register("mount.setup_overlay", actionSetupOverlay)
+
+	// Provider-agnostic tunnel actions
+	r.Register("tunnel.create", actionTunnelCreate)
+	r.Register("tunnel.add_port", actionTunnelAddPort)
+	r.Register("tunnel.connect", actionTunnelConnect)
+	r.Register("tunnel.disconnect", actionTunnelDisconnect)
+	r.Register("tunnel.delete", actionTunnelDelete)
 }
 
 // --- tunnel.devtunnel_create ---
@@ -136,7 +144,7 @@ func actionFrpProxyCreate(params map[string]any) (*ActionResult, error) {
 	discoveryPort := toInt(params["discovery_port"])
 	discoveryToken, _ := params["discovery_token"].(string)
 
-	info, err := tunnel.FrpTunnelProxyCreate(
+	info, err := tunnel.FRPTunnelProxyCreate(
 		tunnelName, port, tunnelType, tunnelSecret,
 		discoveryHost, discoveryPort, discoveryToken,
 	)
@@ -201,6 +209,169 @@ func actionSetupOverlay(params map[string]any) (*ActionResult, error) {
 		"source_path": overlay.SourceDir,
 	}
 	return &result, nil
+}
+
+// --- tunnel.create (provider-agnostic) ---
+
+func actionTunnelCreate(params map[string]any) (*ActionResult, error) {
+	providerName, _ := params["provider"].(string)
+	if providerName == "" {
+		providerName = "devtunnel"
+	}
+	p, err := tunnel.GetProvider(providerName)
+	if err != nil {
+		return nil, fmt.Errorf("tunnel.create: %w", err)
+	}
+
+	var ports []int
+	if sp := toInt(params["server_port"]); sp > 0 {
+		ports = append(ports, sp)
+	}
+	if sp := toInt(params["ssh_port"]); sp > 0 {
+		ports = append(ports, sp)
+	}
+	if lp := toInt(params["log_port"]); lp > 0 {
+		ports = append(ports, lp)
+	}
+
+	opts := tunnel.CreateOpts{
+		Name:       stringParam(params, "tunnel_name"),
+		AuthToken:  stringParam(params, "auth_token"),
+		Ports:      ports,
+		Expiration: stringParam(params, "expiration"),
+		ServerURL:  stringParam(params, "server_url"),
+	}
+	if opts.Expiration == "" {
+		opts.Expiration = "1d"
+	}
+
+	result, err := p.Create(context.Background(), opts)
+	if err != nil {
+		return nil, fmt.Errorf("tunnel.create: %w", err)
+	}
+
+	return &ActionResult{
+		"tunnel_id":      result.TunnelID,
+		"connection_url": result.ConnectionURL,
+		"token":          result.ConnectToken,
+		"ssh_port":       toInt(params["ssh_port"]),
+		"log_port":       toInt(params["log_port"]),
+	}, nil
+}
+
+// --- tunnel.add_port (provider-agnostic) ---
+
+func actionTunnelAddPort(params map[string]any) (*ActionResult, error) {
+	providerName, _ := params["provider"].(string)
+	if providerName == "" {
+		providerName = "devtunnel"
+	}
+	p, err := tunnel.GetProvider(providerName)
+	if err != nil {
+		return nil, fmt.Errorf("tunnel.add_port: %w", err)
+	}
+
+	tunnelID := stringParam(params, "tunnel_id")
+	port := toInt(params["port"])
+	if port == 0 {
+		return nil, fmt.Errorf("tunnel.add_port: port is required")
+	}
+
+	if err := p.AddPort(context.Background(), tunnelID, port); err != nil {
+		return nil, fmt.Errorf("tunnel.add_port: %w", err)
+	}
+	return &ActionResult{"port": port}, nil
+}
+
+// --- tunnel.connect (provider-agnostic) ---
+
+func actionTunnelConnect(params map[string]any) (*ActionResult, error) {
+	providerName, _ := params["provider"].(string)
+	if providerName == "" {
+		providerName = "devtunnel"
+	}
+	p, err := tunnel.GetProvider(providerName)
+	if err != nil {
+		return nil, fmt.Errorf("tunnel.connect: %w", err)
+	}
+
+	tunnelID := stringParam(params, "tunnel_id")
+	if tunnelID == "" {
+		return nil, fmt.Errorf("tunnel.connect: tunnel_id is required")
+	}
+	accessToken := stringParam(params, "access_token")
+	if accessToken == "" {
+		return nil, fmt.Errorf("tunnel.connect: access_token is required")
+	}
+
+	cr, err := p.Connect(context.Background(), tunnelID, accessToken)
+	if err != nil {
+		return nil, fmt.Errorf("tunnel.connect: %w", err)
+	}
+
+	tunnel.TrackConnection(cr.ConnectionID, providerName)
+
+	portMapStr := make(map[string]any, len(cr.PortMap))
+	for remote, local := range cr.PortMap {
+		portMapStr[strconv.Itoa(remote)] = local
+	}
+
+	return &ActionResult{
+		"connection_id": cr.ConnectionID,
+		"port_map":      portMapStr,
+	}, nil
+}
+
+// --- tunnel.disconnect (provider-agnostic) ---
+
+func actionTunnelDisconnect(params map[string]any) (*ActionResult, error) {
+	connID := stringParam(params, "connection_id")
+	if connID == "" {
+		return nil, fmt.Errorf("tunnel.disconnect: connection_id is required")
+	}
+
+	providerName, ok := tunnel.ConnectionProvider(connID)
+	if !ok {
+		return nil, fmt.Errorf("tunnel.disconnect: unknown connection %s", connID)
+	}
+	p, err := tunnel.GetProvider(providerName)
+	if err != nil {
+		return nil, fmt.Errorf("tunnel.disconnect: %w", err)
+	}
+
+	if err := p.Disconnect(context.Background(), connID); err != nil {
+		return nil, fmt.Errorf("tunnel.disconnect: %w", err)
+	}
+	tunnel.UntrackConnection(connID)
+	return &ActionResult{}, nil
+}
+
+// --- tunnel.delete (provider-agnostic) ---
+
+func actionTunnelDelete(params map[string]any) (*ActionResult, error) {
+	providerName, _ := params["provider"].(string)
+	if providerName == "" {
+		providerName = "devtunnel"
+	}
+	p, err := tunnel.GetProvider(providerName)
+	if err != nil {
+		return nil, fmt.Errorf("tunnel.delete: %w", err)
+	}
+
+	tunnelID := stringParam(params, "tunnel_id")
+	if tunnelID == "" {
+		return nil, fmt.Errorf("tunnel.delete: tunnel_id is required")
+	}
+
+	if err := p.Delete(context.Background(), tunnelID); err != nil {
+		return nil, fmt.Errorf("tunnel.delete: %w", err)
+	}
+	return &ActionResult{}, nil
+}
+
+func stringParam(params map[string]any, key string) string {
+	v, _ := params[key].(string)
+	return v
 }
 
 // --- helpers ---
