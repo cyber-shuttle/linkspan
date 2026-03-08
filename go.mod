@@ -8,7 +8,9 @@ require (
 	github.com/fatedier/frp v0.67.0
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/gorilla/mux v1.8.1
+	github.com/hanwen/go-fuse/v2 v2.9.0
 	github.com/microsoft/dev-tunnels v0.1.19
+	github.com/pkg/sftp v1.13.10
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -34,7 +36,6 @@ require (
 	github.com/pion/transport/v3 v3.0.1 // indirect
 	github.com/pires/go-proxyproto v0.7.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/pkg/sftp v1.13.10 // indirect
 	github.com/quic-go/quic-go v0.55.0 // indirect
 	github.com/rodaine/table v1.2.0 // indirect
 	github.com/rogpeppe/go-internal v1.12.0 // indirect
@@ -68,6 +69,6 @@ require (
 require (
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/creack/pty v1.1.24
-	golang.org/x/crypto v0.42.0 // indirect
+	golang.org/x/crypto v0.42.0
 	golang.org/x/sys v0.36.0 // indirect
 )
