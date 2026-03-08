@@ -19,6 +19,7 @@ import (
 	"github.com/cyber-shuttle/linkspan/internal/logstream"
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
 	"github.com/cyber-shuttle/linkspan/internal/workflow"
+	"github.com/cyber-shuttle/linkspan/subsystems/mount"
 	jupyter "github.com/cyber-shuttle/linkspan/subsystems/jupyter"
 	tunnel "github.com/cyber-shuttle/linkspan/subsystems/tunnel"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs"
@@ -371,6 +372,7 @@ var devtunnelAuthTokenForCleanup string
 
 func cleanupResources() {
 	log.Println("Cleaning up resources before shutdown...")
+	mount.CleanupAll()
 	pm.GlobalProcessManager.KillAll()
 	tunnel.GlobalDevTunnelManager.CleanAll(devtunnelAuthTokenForCleanup)
 	tunnel.StopFrpAllTunnels()
