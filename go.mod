@@ -24,6 +24,7 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.6 // indirect
 	github.com/klauspost/reedsolomon v1.12.0 // indirect
+	github.com/kr/fs v0.1.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.0 // indirect
 	github.com/pion/dtls/v2 v2.2.7 // indirect
@@ -33,6 +34,7 @@ require (
 	github.com/pion/transport/v3 v3.0.1 // indirect
 	github.com/pires/go-proxyproto v0.7.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/pkg/sftp v1.13.10 // indirect
 	github.com/quic-go/quic-go v0.55.0 // indirect
 	github.com/rodaine/table v1.2.0 // indirect
 	github.com/rogpeppe/go-internal v1.12.0 // indirect

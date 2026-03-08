@@ -13,6 +13,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/gliderlabs/ssh"
+	"github.com/pkg/sftp"
 )
 
 // Simple SSH server with no authentication.
@@ -180,6 +181,18 @@ func StartSSHServerForVSCodeConnection(sessionID, addr string) *SSHServer {
 		RequestHandlers: map[string]ssh.RequestHandler{
 			"tcpip-forward":        forwardHandler.HandleSSHRequest,
 			"cancel-tcpip-forward": forwardHandler.HandleSSHRequest,
+		},
+		SubsystemHandlers: map[string]ssh.SubsystemHandler{
+			"sftp": func(s ssh.Session) {
+				server, err := sftp.NewServer(s)
+				if err != nil {
+					log.Printf("[ssh] sftp server init error: %v", err)
+					return
+				}
+				if err := server.Serve(); err != nil && err != io.EOF {
+					log.Printf("[ssh] sftp server error: %v", err)
+				}
+			},
 		},
 	}
 

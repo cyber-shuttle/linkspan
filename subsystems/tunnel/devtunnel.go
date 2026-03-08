@@ -11,7 +11,7 @@ import (
 // DevTunnelCreate creates a tunnel, starts hosting the relay, and forwards the
 // given serverPort so the client can communicate with linkspan immediately.
 // Additional ports (e.g. SSH) can be added later via DevTunnelForward.
-func DevTunnelCreate(tunnelName string, expiration string, authToken string, serverPort int) (DevTunnelConnection, error) {
+func DevTunnelCreate(tunnelName string, expiration string, authToken string, serverPort int, sshPort int) (DevTunnelConnection, error) {
 	if err := InitSDK(authToken); err != nil {
 		return DevTunnelConnection{}, fmt.Errorf("devtunnel create: init SDK: %w", err)
 	}
@@ -41,6 +41,14 @@ func DevTunnelCreate(tunnelName string, expiration string, authToken string, ser
 			return DevTunnelConnection{}, fmt.Errorf("devtunnel create: add server port %d to %q: %w", serverPort, tunnelName, err)
 		}
 		info.Ports = append(info.Ports, serverPort)
+	}
+
+	// 2b. Register the SSH port if provided.
+	if sshPort > 0 {
+		if err := SDKAddPort(ctx, tunnelName, sshPort); err != nil {
+			return DevTunnelConnection{}, fmt.Errorf("devtunnel create: add SSH port %d to %q: %w", sshPort, tunnelName, err)
+		}
+		info.Ports = append(info.Ports, sshPort)
 	}
 
 	// 3. Obtain host token and start the relay.
@@ -147,11 +155,11 @@ func DevTunnelDelete(tunnelName string, authToken string) error {
 
 // DevTunnelConnect connects to an existing hosted tunnel, making its forwarded
 // ports available on localhost.
-func DevTunnelConnect(tunnelID string, accessToken string) (string, error) {
-	cmdID, err := CLIConnectTunnel(tunnelID, accessToken)
+func DevTunnelConnect(tunnelID string, accessToken string) (string, map[int]int, error) {
+	cmdID, portMap, err := CLIConnectTunnel(tunnelID, accessToken)
 	if err != nil {
-		return "", fmt.Errorf("devtunnel connect %q: %w", tunnelID, err)
+		return "", nil, fmt.Errorf("devtunnel connect %q: %w", tunnelID, err)
 	}
-	log.Printf("devtunnel connect: connected to tunnel %q (cmd=%s)", tunnelID, cmdID)
-	return cmdID, nil
+	log.Printf("devtunnel connect: connected to tunnel %q (cmd=%s, ports=%v)", tunnelID, cmdID, portMap)
+	return cmdID, portMap, nil
 }

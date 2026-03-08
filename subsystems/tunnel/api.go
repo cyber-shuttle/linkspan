@@ -88,7 +88,7 @@ func CreateDevTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := DevTunnelCreate(req.TunnelName, req.Expiration, req.AuthToken, req.ServerPort)
+	conn, err := DevTunnelCreate(req.TunnelName, req.Expiration, req.AuthToken, req.ServerPort, 0)
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

@@ -4,42 +4,22 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"strconv"
 	"strings"
 
+	"github.com/cyber-shuttle/linkspan/subsystems/mount"
 	tunnel "github.com/cyber-shuttle/linkspan/subsystems/tunnel"
-	vscode "github.com/cyber-shuttle/linkspan/subsystems/vscode"
-	utils "github.com/cyber-shuttle/linkspan/utils"
 )
 
 // registerBuiltinActions populates a Registry with all built-in action wrappers.
 func registerBuiltinActions(r *Registry) {
-	r.Register("vscode.create_session", actionVSCodeCreateSession)
 	r.Register("tunnel.devtunnel_create", actionDevTunnelCreate)
 	r.Register("tunnel.devtunnel_forward", actionDevTunnelForward)
 	r.Register("tunnel.devtunnel_delete", actionDevTunnelDelete)
 	r.Register("tunnel.devtunnel_connect", actionDevTunnelConnect)
 	r.Register("tunnel.frp_proxy_create", actionFrpProxyCreate)
 	r.Register("shell.exec", actionShellExec)
-}
-
-// --- vscode.create_session ---
-
-func actionVSCodeCreateSession(params map[string]any) (*ActionResult, error) {
-	port, err := utils.GetAvailablePort()
-	if err != nil {
-		return nil, fmt.Errorf("get available port: %w", err)
-	}
-
-	sessionID := fmt.Sprintf("wf-%d", port)
-	addr := fmt.Sprintf(":%d", port)
-
-	vscode.StartSSHServerForVSCodeConnection(sessionID, addr)
-
-	result := ActionResult{
-		"session_id": sessionID,
-		"bind_port":  port,
-	}
-	return &result, nil
+	r.Register("mount.setup_overlay", actionSetupOverlay)
 }
 
 // --- tunnel.devtunnel_create ---
@@ -58,8 +38,9 @@ func actionDevTunnelCreate(params map[string]any) (*ActionResult, error) {
 		return nil, fmt.Errorf("tunnel.devtunnel_create: auth_token is required")
 	}
 	serverPort := toInt(params["server_port"])
+	sshPort := toInt(params["ssh_port"])
 
-	conn, err := tunnel.DevTunnelCreate(tunnelName, expiration, authToken, serverPort)
+	conn, err := tunnel.DevTunnelCreate(tunnelName, expiration, authToken, serverPort, sshPort)
 	if err != nil {
 		return nil, err
 	}
@@ -69,6 +50,7 @@ func actionDevTunnelCreate(params map[string]any) (*ActionResult, error) {
 		"tunnel_name":    conn.DevTunnelInfo.TunnelName,
 		"connection_url": conn.ConnectionURL,
 		"token":          conn.Token,
+		"ssh_port":       sshPort,
 	}
 	return &result, nil
 }
@@ -123,13 +105,20 @@ func actionDevTunnelConnect(params map[string]any) (*ActionResult, error) {
 		return nil, fmt.Errorf("tunnel.devtunnel_connect: access_token is required")
 	}
 
-	cmdID, err := tunnel.DevTunnelConnect(tunnelID, accessToken)
+	cmdID, portMap, err := tunnel.DevTunnelConnect(tunnelID, accessToken)
 	if err != nil {
 		return nil, err
 	}
 
+	// Convert port map to string-keyed map for template access
+	portMapStr := make(map[string]any)
+	for remote, local := range portMap {
+		portMapStr[strconv.Itoa(remote)] = local
+	}
+
 	result := ActionResult{
 		"command_id": cmdID,
+		"port_map":   portMapStr,
 	}
 	return &result, nil
 }
@@ -179,6 +168,35 @@ func actionShellExec(params map[string]any) (*ActionResult, error) {
 
 	result := ActionResult{
 		"output": strings.TrimSpace(string(output)),
+	}
+	return &result, nil
+}
+
+// --- mount.setup_overlay ---
+
+func actionSetupOverlay(params map[string]any) (*ActionResult, error) {
+	sessionID, _ := params["session_id"].(string)
+	if sessionID == "" {
+		return nil, fmt.Errorf("mount.setup_overlay: session_id is required")
+	}
+	localWorkspace, _ := params["local_workspace"].(string)
+	if localWorkspace == "" {
+		return nil, fmt.Errorf("mount.setup_overlay: local_workspace is required")
+	}
+	localSshPort := toInt(params["local_ssh_port"])
+	if localSshPort == 0 {
+		return nil, fmt.Errorf("mount.setup_overlay: local_ssh_port is required")
+	}
+
+	overlay, err := mount.SetupOverlay(sessionID, localSshPort, localWorkspace)
+	if err != nil {
+		return nil, fmt.Errorf("mount.setup_overlay: %w", err)
+	}
+
+	result := ActionResult{
+		"merged_path": overlay.MergedDir,
+		"cache_path":  overlay.CacheDir,
+		"source_path": overlay.SourceDir,
 	}
 	return &result, nil
 }

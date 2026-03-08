@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 	tunnel "github.com/cyber-shuttle/linkspan/subsystems/tunnel"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs"
 	vscode "github.com/cyber-shuttle/linkspan/subsystems/vscode"
+	utils "github.com/cyber-shuttle/linkspan/utils"
 	"github.com/gorilla/mux"
 )
 
@@ -27,6 +30,12 @@ import (
 var (
 	vfsSyncProvider  *vfs.SyncProvider
 	vfsMountProvider *vfs.MountProvider
+)
+
+// In-memory metadata store (key → arbitrary JSON value).
+var (
+	metadataStore = make(map[string]json.RawMessage)
+	metadataMu    sync.RWMutex
 )
 
 func main() {
@@ -136,6 +145,45 @@ func main() {
 		json.NewEncoder(w).Encode(workflowEngine.Status())
 	}).Methods("GET")
 
+	// Metadata store — in-memory key-value for shared state
+	api.HandleFunc("/metadata", func(w http.ResponseWriter, r *http.Request) {
+		metadataMu.RLock()
+		defer metadataMu.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(metadataStore)
+	}).Methods("GET")
+
+	api.HandleFunc("/metadata/{key:.+}", func(w http.ResponseWriter, r *http.Request) {
+		key := mux.Vars(r)["key"]
+		switch r.Method {
+		case "GET":
+			metadataMu.RLock()
+			val, ok := metadataStore[key]
+			metadataMu.RUnlock()
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(val)
+		case "PUT":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			metadataMu.Lock()
+			metadataStore[key] = json.RawMessage(body)
+			metadataMu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		case "DELETE":
+			metadataMu.Lock()
+			delete(metadataStore, key)
+			metadataMu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}).Methods("GET", "PUT", "DELETE")
+
 	// Use the configured server host and port from CLI flags.
 	// Port 0 means "let the OS pick a free port".
 	serverPort := *serverPortFlag
@@ -163,6 +211,16 @@ func main() {
 	}
 	log.Printf("listening on %s:%d", serverHost, serverPort)
 
+	// Start SSH daemon on a random port
+	sshPort, err := utils.GetAvailablePort()
+	if err != nil {
+		log.Fatalf("failed to get available port for SSH: %v", err)
+	}
+	sshAddr := fmt.Sprintf("0.0.0.0:%d", sshPort)
+	sshSessionID := fmt.Sprintf("main-%d", sshPort)
+	vscode.StartSSHServerForVSCodeConnection(sshSessionID, sshAddr)
+	log.Printf("SSH server listening on %s", sshAddr)
+
 	// Run workflow if specified. Use "-" to read from stdin.
 	if *workflowFile != "" {
 		var wf *workflow.WorkflowConfig
@@ -176,10 +234,16 @@ func main() {
 			log.Fatalf("workflow: %v", err)
 		}
 		workflowEngine = workflow.NewEngine(workflow.DefaultRegistry(), map[string]any{
-			"Timestamp":       time.Now().Unix(),
-			"ServerPort":      serverPort,
-			"ServerHost":      serverHost,
-			"TunnelAuthToken": *tunnelAuthToken,
+			"Timestamp":        time.Now().Unix(),
+			"ServerPort":       serverPort,
+			"SshPort":          sshPort,
+			"ServerHost":       serverHost,
+			"TunnelAuthToken":  *tunnelAuthToken,
+			"LocalTunnelID":    os.Getenv("CS_LOCAL_TUNNEL_ID"),
+			"LocalTunnelToken": os.Getenv("CS_LOCAL_TUNNEL_TOKEN"),
+			"LocalSshPort":     os.Getenv("CS_LOCAL_SSH_PORT"),
+			"LocalWorkspace":   os.Getenv("CS_LOCAL_WORKSPACE"),
+			"SessionID":        os.Getenv("CS_SESSION_ID"),
 		})
 		go func() {
 			if err := workflowEngine.Run(wf); err != nil {
@@ -218,7 +282,7 @@ func main() {
 
 				ch := make(chan error, 1)
 				go func() {
-					conn, err := tunnel.DevTunnelCreate(tunnelName, "1d", authToken, serverPort)
+					conn, err := tunnel.DevTunnelCreate(tunnelName, "1d", authToken, serverPort, sshPort)
 					if err != nil {
 						ch <- err
 						return
