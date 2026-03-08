@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 )
 
@@ -32,6 +33,9 @@ func SetupOverlay(sessionID string, localSshPort int, localWorkspace string) (*O
 		CacheDir:  filepath.Join(home, "sessions", sessionID),
 		MergedDir: filepath.Join(home, "overlay", sessionID),
 	}
+
+	// Clean up stale FUSE mount if the directory is a dead mount point
+	_ = exec.Command("fusermount", "-u", m.MergedDir).Run()
 
 	for _, dir := range []string{m.CacheDir, m.MergedDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
