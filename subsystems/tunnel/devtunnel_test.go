@@ -30,7 +30,7 @@ func TestDevTunnelCreateAndHost(t *testing.T) {
 		}
 	}()
 
-	conn, err := DevTunnelCreate(tunnelName, "1d", authToken, 8080)
+	conn, err := DevTunnelCreate(tunnelName, "1d", authToken, 8080, 0)
 	if err != nil {
 		t.Fatalf("failed to create dev tunnel: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestDevTunnelCreateNoPort(t *testing.T) {
 	authToken := authTokenForTest(t)
 	tunnelName := "test-tunnel-noport"
 
-	conn, err := DevTunnelCreate(tunnelName, "1d", authToken, 0)
+	conn, err := DevTunnelCreate(tunnelName, "1d", authToken, 0, 0)
 	if err != nil {
 		t.Fatalf("failed to create dev tunnel: %v", err)
 	}

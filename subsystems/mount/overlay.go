@@ -2,28 +2,27 @@ package mount
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strings"
 
-	pm "github.com/cyber-shuttle/linkspan/internal/process"
+	"github.com/pkg/sftp"
+	"golang.org/x/crypto/ssh"
 )
 
-// OverlayMount holds the state for a single overlay filesystem setup.
+// OverlayMount holds the state for a workspace sync from the local machine.
 type OverlayMount struct {
-	SessionID    string
-	SourceDir    string // sshfs mount of local workspace (lower)
-	CacheDir     string // mutagen-warmed cache (upper)
-	WorkDir      string // overlayfs workdir
-	MergedDir    string // final merged view
-	SshfsCmdID   string // process manager ID for sshfs
-	OverlayCmdID string // process manager ID for fuse-overlayfs
+	SessionID string
+	SourceDir string // local workspace path on the origin machine
+	CacheDir  string // local cache dir on the compute node
+	MergedDir string // final workspace view on the compute node
 }
 
-// SetupOverlay creates the overlay filesystem:
-// 1. sshfs mounts the local workspace via tunnel
-// 2. fuse-overlayfs merges lower (sshfs) + upper (cache)
+// SetupOverlay syncs the local workspace to the compute node via SFTP over
+// the devtunnel-forwarded SSH port.  No external tools (sshfs, fuse-overlayfs)
+// are needed — everything is done in pure Go.
 func SetupOverlay(sessionID string, localSshPort int, localWorkspace string) (*OverlayMount, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -32,70 +31,137 @@ func SetupOverlay(sessionID string, localSshPort int, localWorkspace string) (*O
 
 	m := &OverlayMount{
 		SessionID: sessionID,
-		SourceDir: filepath.Join(os.TempDir(), fmt.Sprintf("cs-source-%s", sessionID)),
+		SourceDir: localWorkspace,
 		CacheDir:  filepath.Join(home, "sessions", sessionID),
-		WorkDir:   filepath.Join(home, "sessions", sessionID, ".overlay-work"),
 		MergedDir: filepath.Join(home, "overlay", sessionID),
 	}
 
-	// Create all directories
-	for _, dir := range []string{m.SourceDir, m.CacheDir, m.WorkDir, m.MergedDir} {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return nil, fmt.Errorf("overlay: mkdir %s: %w", dir, err)
+	if err := os.MkdirAll(m.MergedDir, 0755); err != nil {
+		return nil, fmt.Errorf("overlay: mkdir %s: %w", m.MergedDir, err)
+	}
+
+	log.Printf("[overlay] syncing %s from localhost:%d → %s", localWorkspace, localSshPort, m.MergedDir)
+
+	// Connect to the local linkspan's SSH server via devtunnel-forwarded port.
+	// The linkspan SSH server accepts any key (no auth required).
+	sshConfig := &ssh.ClientConfig{
+		User:            "user",
+		Auth:            []ssh.AuthMethod{ssh.Password("")},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec
+	}
+
+	addr := fmt.Sprintf("127.0.0.1:%d", localSshPort)
+	conn, err := ssh.Dial("tcp", addr, sshConfig)
+	if err != nil {
+		// Retry with no-auth in case password is rejected
+		sshConfig.Auth = []ssh.AuthMethod{}
+		conn, err = ssh.Dial("tcp", addr, sshConfig)
+		if err != nil {
+			return nil, fmt.Errorf("overlay: ssh connect to %s: %w", addr, err)
 		}
 	}
+	defer conn.Close()
 
-	// 1. sshfs mount local workspace via tunnel
-	sshfsArgs := []string{
-		fmt.Sprintf("localhost:%s", localWorkspace),
-		m.SourceDir,
-		"-p", fmt.Sprintf("%d", localSshPort),
-		"-o", "StrictHostKeyChecking=no",
-		"-o", "UserKnownHostsFile=/dev/null",
-		"-o", "reconnect",
-		"-o", "ServerAliveInterval=15",
-		"-o", "ServerAliveCountMax=3",
-	}
-
-	sshfsCmd := exec.Command("sshfs", sshfsArgs...)
-	sshfsCmdID, err := pm.GlobalProcessManager.Start(sshfsCmd)
+	client, err := sftp.NewClient(conn)
 	if err != nil {
-		return nil, fmt.Errorf("overlay: start sshfs: %w", err)
+		return nil, fmt.Errorf("overlay: sftp client: %w", err)
 	}
-	m.SshfsCmdID = sshfsCmdID
-	log.Printf("[overlay] sshfs mounted %s on port %d → %s", localWorkspace, localSshPort, m.SourceDir)
+	defer client.Close()
 
-	// 2. fuse-overlayfs
-	overlayArgs := []string{
-		"-o", fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", m.SourceDir, m.CacheDir, m.WorkDir),
-		m.MergedDir,
-	}
-
-	overlayCmd := exec.Command("fuse-overlayfs", overlayArgs...)
-	overlayCmdID, err := pm.GlobalProcessManager.Start(overlayCmd)
+	// Recursive sync from remote (local machine) to local (compute node)
+	copied, err := syncDir(client, localWorkspace, m.MergedDir)
 	if err != nil {
-		// Clean up sshfs on failure
-		_ = pm.GlobalProcessManager.Kill(sshfsCmdID)
-		return nil, fmt.Errorf("overlay: start fuse-overlayfs: %w", err)
+		return nil, fmt.Errorf("overlay: sync: %w", err)
 	}
-	m.OverlayCmdID = overlayCmdID
-	log.Printf("[overlay] fuse-overlayfs merged at %s (lower=%s, upper=%s)", m.MergedDir, m.SourceDir, m.CacheDir)
 
+	log.Printf("[overlay] synced %d files to %s", copied, m.MergedDir)
 	return m, nil
 }
 
-// Teardown unmounts the overlay and sshfs.
-func (m *OverlayMount) Teardown() {
-	if m.OverlayCmdID != "" {
-		_ = pm.GlobalProcessManager.Kill(m.OverlayCmdID)
-		log.Printf("[overlay] stopped fuse-overlayfs for %s", m.SessionID)
+// syncDir recursively copies files from the SFTP remote path to a local directory.
+func syncDir(client *sftp.Client, remotePath, localPath string) (int, error) {
+	entries, err := client.ReadDir(remotePath)
+	if err != nil {
+		return 0, fmt.Errorf("readdir %s: %w", remotePath, err)
 	}
-	// fusermount -u to cleanly unmount
-	_ = exec.Command("fusermount", "-u", m.MergedDir).Run()
-	_ = exec.Command("fusermount", "-u", m.SourceDir).Run()
 
-	if m.SshfsCmdID != "" {
-		_ = pm.GlobalProcessManager.Kill(m.SshfsCmdID)
-		log.Printf("[overlay] stopped sshfs for %s", m.SessionID)
+	count := 0
+	for _, entry := range entries {
+		name := entry.Name()
+
+		// Skip common non-essential dirs to speed up initial sync
+		if entry.IsDir() && shouldSkipDir(name) {
+			continue
+		}
+
+		remoteFile := filepath.Join(remotePath, name)
+		localFile := filepath.Join(localPath, name)
+
+		if entry.IsDir() {
+			if err := os.MkdirAll(localFile, entry.Mode()|0700); err != nil {
+				return count, fmt.Errorf("mkdir %s: %w", localFile, err)
+			}
+			n, err := syncDir(client, remoteFile, localFile)
+			if err != nil {
+				return count, err
+			}
+			count += n
+		} else if entry.Mode().IsRegular() {
+			if err := syncFile(client, remoteFile, localFile, entry.Mode()); err != nil {
+				log.Printf("[overlay] warning: skip %s: %v", remoteFile, err)
+				continue
+			}
+			count++
+		}
+		// Skip symlinks, devices, etc. for now
 	}
+	return count, nil
 }
+
+// shouldSkipDir returns true for directories that should not be synced.
+func shouldSkipDir(name string) bool {
+	skip := []string{
+		".git", "node_modules", "__pycache__", ".venv", "venv",
+		".tox", ".mypy_cache", ".pytest_cache", ".eggs",
+		"target", "build", "dist", ".gradle", ".idea", ".vscode",
+	}
+	for _, s := range skip {
+		if strings.EqualFold(name, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// syncFile copies a single file from SFTP to local filesystem.
+func syncFile(client *sftp.Client, remotePath, localPath string, mode os.FileMode) error {
+	// Skip if local file exists and has same size (quick check)
+	if info, err := os.Stat(localPath); err == nil {
+		remoteInfo, err := client.Stat(remotePath)
+		if err == nil && info.Size() == remoteInfo.Size() && !info.ModTime().Before(remoteInfo.ModTime()) {
+			return nil // already up to date
+		}
+	}
+
+	src, err := client.Open(remotePath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	dst, err := os.OpenFile(localPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+
+	_, err = io.Copy(dst, src)
+	return err
+}
+
+// Teardown removes the synced directory.
+func (m *OverlayMount) Teardown() {
+	log.Printf("[overlay] cleaning up %s", m.MergedDir)
+	// Don't remove MergedDir — user may have modified files that need to persist
+}
+
