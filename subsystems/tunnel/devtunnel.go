@@ -11,7 +11,7 @@ import (
 // DevTunnelCreate creates a tunnel, starts hosting the relay, and forwards the
 // given serverPort so the client can communicate with linkspan immediately.
 // Additional ports (e.g. SSH) can be added later via DevTunnelForward.
-func DevTunnelCreate(tunnelName string, expiration string, authToken string, serverPort int, sshPort int) (DevTunnelConnection, error) {
+func DevTunnelCreate(tunnelName string, expiration string, authToken string, serverPort int, sshPort int, extraPorts ...int) (DevTunnelConnection, error) {
 	if err := InitSDK(authToken); err != nil {
 		return DevTunnelConnection{}, fmt.Errorf("devtunnel create: init SDK: %w", err)
 	}
@@ -49,6 +49,16 @@ func DevTunnelCreate(tunnelName string, expiration string, authToken string, ser
 			return DevTunnelConnection{}, fmt.Errorf("devtunnel create: add SSH port %d to %q: %w", sshPort, tunnelName, err)
 		}
 		info.Ports = append(info.Ports, sshPort)
+	}
+
+	// 2c. Register any extra ports (e.g. log stream).
+	for _, p := range extraPorts {
+		if p > 0 {
+			if err := SDKAddPort(ctx, tunnelName, p); err != nil {
+				return DevTunnelConnection{}, fmt.Errorf("devtunnel create: add extra port %d to %q: %w", p, tunnelName, err)
+			}
+			info.Ports = append(info.Ports, p)
+		}
 	}
 
 	// 3. Obtain host token and start the relay.

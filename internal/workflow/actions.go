@@ -39,8 +39,9 @@ func actionDevTunnelCreate(params map[string]any) (*ActionResult, error) {
 	}
 	serverPort := toInt(params["server_port"])
 	sshPort := toInt(params["ssh_port"])
+	logPort := toInt(params["log_port"])
 
-	conn, err := tunnel.DevTunnelCreate(tunnelName, expiration, authToken, serverPort, sshPort)
+	conn, err := tunnel.DevTunnelCreate(tunnelName, expiration, authToken, serverPort, sshPort, logPort)
 	if err != nil {
 		return nil, err
 	}
@@ -51,6 +52,7 @@ func actionDevTunnelCreate(params map[string]any) (*ActionResult, error) {
 		"connection_url": conn.ConnectionURL,
 		"token":          conn.Token,
 		"ssh_port":       sshPort,
+		"log_port":       logPort,
 	}
 	return &result, nil
 }

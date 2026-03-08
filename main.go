@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cyber-shuttle/linkspan/internal/logstream"
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
 	"github.com/cyber-shuttle/linkspan/internal/workflow"
 	jupyter "github.com/cyber-shuttle/linkspan/subsystems/jupyter"
@@ -39,6 +40,11 @@ var (
 )
 
 func main() {
+
+	// Install log broadcaster so connected clients receive log output in
+	// real time.  Must happen before any log.* calls.
+	logBroadcaster := logstream.New(os.Stderr)
+	logBroadcaster.Install()
 
 	// parse CLI flags
 	tunnelAPI := flag.String("tunnel-api", "devtunnels", "tunnel API provider name (e.g. devtunnels)")
@@ -221,6 +227,14 @@ func main() {
 	vscode.StartSSHServerForVSCodeConnection(sshSessionID, sshAddr)
 	log.Printf("SSH server listening on %s", sshAddr)
 
+	// Start log stream TCP listener so clients can connect for real-time logs.
+	logListener, err := logBroadcaster.ListenAndServe("0.0.0.0:0")
+	if err != nil {
+		log.Fatalf("failed to start log stream listener: %v", err)
+	}
+	logPort := logListener.Addr().(*net.TCPAddr).Port
+	log.Printf("log stream listening on 0.0.0.0:%d", logPort)
+
 	// Run workflow if specified. Use "-" to read from stdin.
 	if *workflowFile != "" {
 		var wf *workflow.WorkflowConfig
@@ -237,6 +251,7 @@ func main() {
 			"Timestamp":        time.Now().Unix(),
 			"ServerPort":       serverPort,
 			"SshPort":          sshPort,
+			"LogPort":          logPort,
 			"ServerHost":       serverHost,
 			"TunnelAuthToken":  *tunnelAuthToken,
 			"LocalTunnelID":    os.Getenv("CS_LOCAL_TUNNEL_ID"),
