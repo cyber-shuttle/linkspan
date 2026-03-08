@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -16,13 +18,159 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// reconnectingSftpClient wraps an SFTP client with automatic reconnection.
+// All overlay nodes share a single instance so reconnection is transparent.
+type reconnectingSftpClient struct {
+	mu        sync.RWMutex
+	client    *sftp.Client
+	sshClient *ssh.Client
+	sshAddr   string
+	sshConfig *ssh.ClientConfig
+	closed    bool
+}
+
+func newReconnectingSftpClient(sshAddr string, sshConfig *ssh.ClientConfig) (*reconnectingSftpClient, error) {
+	r := &reconnectingSftpClient{
+		sshAddr:   sshAddr,
+		sshConfig: sshConfig,
+	}
+	if err := r.connect(); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+func (r *reconnectingSftpClient) connect() error {
+	sshConn, err := ssh.Dial("tcp", r.sshAddr, r.sshConfig)
+	if err != nil {
+		return fmt.Errorf("ssh dial %s: %w", r.sshAddr, err)
+	}
+	sftpConn, err := sftp.NewClient(sshConn)
+	if err != nil {
+		sshConn.Close()
+		return fmt.Errorf("sftp client: %w", err)
+	}
+	r.sshClient = sshConn
+	r.client = sftpConn
+	return nil
+}
+
+// reconnect attempts to re-establish the SFTP connection with backoff.
+// Caller must hold r.mu write lock.
+func (r *reconnectingSftpClient) reconnect() error {
+	if r.closed {
+		return fmt.Errorf("sftp client closed")
+	}
+	// Close old connections
+	if r.client != nil {
+		r.client.Close()
+		r.client = nil
+	}
+	if r.sshClient != nil {
+		r.sshClient.Close()
+		r.sshClient = nil
+	}
+
+	delays := []time.Duration{500 * time.Millisecond, 1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
+	for i, delay := range delays {
+		if err := r.connect(); err == nil {
+			log.Printf("[overlayfs] SFTP reconnected to %s (attempt %d)", r.sshAddr, i+1)
+			return nil
+		}
+		log.Printf("[overlayfs] SFTP reconnect attempt %d/%d to %s failed, retrying in %s", i+1, len(delays), r.sshAddr, delay)
+		time.Sleep(delay)
+	}
+	return fmt.Errorf("sftp reconnect failed after %d attempts", len(delays))
+}
+
+// withClient runs fn with a live SFTP client. If the client has disconnected,
+// it attempts to reconnect transparently.
+func (r *reconnectingSftpClient) withClient(fn func(*sftp.Client) error) error {
+	// Fast path: try with read lock
+	r.mu.RLock()
+	if r.client != nil {
+		err := fn(r.client)
+		r.mu.RUnlock()
+		if err == nil || !isConnectionError(err) {
+			return err
+		}
+	} else {
+		r.mu.RUnlock()
+	}
+
+	// Slow path: reconnect under write lock, then retry
+	r.mu.Lock()
+	// Double-check: another goroutine may have reconnected
+	if r.client != nil {
+		if err := fn(r.client); err == nil || !isConnectionError(err) {
+			r.mu.Unlock()
+			return err
+		}
+	}
+	if err := r.reconnect(); err != nil {
+		r.mu.Unlock()
+		return err
+	}
+	client := r.client
+	r.mu.Unlock()
+	return fn(client)
+}
+
+// Close shuts down the SFTP and SSH connections permanently.
+func (r *reconnectingSftpClient) Close() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed = true
+	if r.client != nil {
+		r.client.Close()
+		r.client = nil
+	}
+	if r.sshClient != nil {
+		r.sshClient.Close()
+		r.sshClient = nil
+	}
+}
+
+// isConnectionError returns true if the error indicates the SSH/SFTP
+// connection is dead and a reconnect should be attempted.
+func isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Check for common connection-related errors
+	if err == io.EOF || err == io.ErrUnexpectedEOF {
+		return true
+	}
+	if _, ok := err.(*net.OpError); ok {
+		return true
+	}
+	// ssh package errors when the connection is closed
+	msg := err.Error()
+	for _, substr := range []string{
+		"connection reset",
+		"broken pipe",
+		"use of closed network connection",
+		"connection refused",
+		"ssh: disconnect",
+		"session not started",
+	} {
+		if len(msg) >= len(substr) {
+			for i := 0; i <= len(msg)-len(substr); i++ {
+				if msg[i:i+len(substr)] == substr {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // OverlayFS is a userspace overlay FUSE filesystem.
 // Reads check upper (local cache) first, then fall back to lower (SFTP).
 // Writes always go to upper.
 type OverlayFS struct {
 	server   *fuse.Server
-	sshConn  *ssh.Client
-	sftpConn *sftp.Client
+	rsftp    *reconnectingSftpClient
 	mountDir string
 	mu       sync.Mutex
 }
@@ -36,19 +184,13 @@ func MountOverlayFS(sshAddr, remoteRoot, upperDir, mountDir string) (*OverlayFS,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}
 
-	sshConn, err := ssh.Dial("tcp", sshAddr, sshConfig)
+	rsftp, err := newReconnectingSftpClient(sshAddr, sshConfig)
 	if err != nil {
-		return nil, fmt.Errorf("ssh dial %s: %w", sshAddr, err)
-	}
-
-	sftpConn, err := sftp.NewClient(sshConn)
-	if err != nil {
-		sshConn.Close()
-		return nil, fmt.Errorf("sftp client: %w", err)
+		return nil, err
 	}
 
 	root := &overlayNode{
-		sftp:       sftpConn,
+		rsftp:      rsftp,
 		remotePath: remoteRoot,
 		upperPath:  upperDir,
 	}
@@ -61,8 +203,7 @@ func MountOverlayFS(sshAddr, remoteRoot, upperDir, mountDir string) (*OverlayFS,
 		},
 	})
 	if err != nil {
-		sftpConn.Close()
-		sshConn.Close()
+		rsftp.Close()
 		return nil, fmt.Errorf("fuse mount %s: %w", mountDir, err)
 	}
 
@@ -70,8 +211,7 @@ func MountOverlayFS(sshAddr, remoteRoot, upperDir, mountDir string) (*OverlayFS,
 
 	return &OverlayFS{
 		server:   server,
-		sshConn:  sshConn,
-		sftpConn: sftpConn,
+		rsftp:    rsftp,
 		mountDir: mountDir,
 	}, nil
 }
@@ -86,20 +226,16 @@ func (o *OverlayFS) Unmount() {
 		}
 		o.server = nil
 	}
-	if o.sftpConn != nil {
-		o.sftpConn.Close()
-		o.sftpConn = nil
-	}
-	if o.sshConn != nil {
-		o.sshConn.Close()
-		o.sshConn = nil
+	if o.rsftp != nil {
+		o.rsftp.Close()
+		o.rsftp = nil
 	}
 }
 
 // overlayNode implements a FUSE node that overlays a local upper dir on an SFTP lower dir.
 type overlayNode struct {
 	fs.Inode
-	sftp       *sftp.Client
+	rsftp      *reconnectingSftpClient
 	remotePath string // path on the SFTP server (lower)
 	upperPath  string // path on the local filesystem (upper/cache)
 }
@@ -140,16 +276,27 @@ func (n *overlayNode) childRemotePath(name string) string {
 
 func (n *overlayNode) child(name string) *overlayNode {
 	return &overlayNode{
-		sftp:       n.sftp,
+		rsftp:      n.rsftp,
 		remotePath: n.childRemotePath(name),
 		upperPath:  n.childUpperPath(name),
 	}
 }
 
+// sftpLstat wraps SFTP Lstat with automatic reconnection.
+func (n *overlayNode) sftpLstat(path string) (os.FileInfo, error) {
+	var info os.FileInfo
+	err := n.rsftp.withClient(func(c *sftp.Client) error {
+		var e error
+		info, e = c.Lstat(path)
+		return e
+	})
+	return info, err
+}
+
 // locate determines where a path exists (upper, lower, both, or none).
 func (n *overlayNode) locate() source {
 	_, upperErr := os.Lstat(n.upperPath)
-	_, lowerErr := n.sftp.Lstat(n.remotePath)
+	_, lowerErr := n.sftpLstat(n.remotePath)
 	upperOK := upperErr == nil
 	lowerOK := lowerErr == nil
 	switch {
@@ -167,7 +314,7 @@ func (n *overlayNode) locate() source {
 // locateChild determines where a named child exists.
 func (n *overlayNode) locateChild(name string) source {
 	_, upperErr := os.Lstat(n.childUpperPath(name))
-	_, lowerErr := n.sftp.Lstat(n.childRemotePath(name))
+	_, lowerErr := n.sftpLstat(n.childRemotePath(name))
 	upperOK := upperErr == nil
 	lowerOK := lowerErr == nil
 	switch {
@@ -212,7 +359,7 @@ func (n *overlayNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.A
 		localAttrToFuse(info, &out.Attr)
 		return fs.OK
 	}
-	if info, err := n.sftp.Lstat(n.remotePath); err == nil {
+	if info, err := n.sftpLstat(n.remotePath); err == nil {
 		sftpAttrToFuse(info, &out.Attr)
 		return fs.OK
 	}
@@ -231,7 +378,7 @@ func (n *overlayNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 		return n.NewInode(ctx, child, stable), fs.OK
 	}
 	// Fall back to lower
-	if info, err := n.sftp.Lstat(rp); err == nil {
+	if info, err := n.sftpLstat(rp); err == nil {
 		sftpAttrToFuse(info, &out.Attr)
 		stable := fs.StableAttr{Mode: uint32(info.Mode())}
 		return n.NewInode(ctx, child, stable), fs.OK
@@ -259,7 +406,11 @@ func (n *overlayNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 	}
 
 	// Lower entries (skip duplicates)
-	if entries, err := n.sftp.ReadDir(n.remotePath); err == nil {
+	_ = n.rsftp.withClient(func(c *sftp.Client) error {
+		entries, err := c.ReadDir(n.remotePath)
+		if err != nil {
+			return err
+		}
 		for _, e := range entries {
 			if _, dup := seen[e.Name()]; dup {
 				continue
@@ -269,7 +420,8 @@ func (n *overlayNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 				Mode: uint32(e.Mode()),
 			})
 		}
-	}
+		return nil
+	})
 
 	if result == nil {
 		return nil, syscall.ENOENT
@@ -297,8 +449,14 @@ func (n *overlayNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, ui
 	if f, err := os.Open(n.upperPath); err == nil {
 		return &localFileHandle{f: f}, fuse.FOPEN_DIRECT_IO, fs.OK
 	}
-	if f, err := n.sftp.Open(n.remotePath); err == nil {
-		return &sftpFileHandle{f: f}, fuse.FOPEN_DIRECT_IO, fs.OK
+	var sftpFile *sftp.File
+	err := n.rsftp.withClient(func(c *sftp.Client) error {
+		var e error
+		sftpFile, e = c.Open(n.remotePath)
+		return e
+	})
+	if err == nil {
+		return &sftpFileHandle{f: sftpFile}, fuse.FOPEN_DIRECT_IO, fs.OK
 	}
 	return nil, 0, syscall.ENOENT
 }
@@ -310,7 +468,7 @@ func (n *overlayNode) copyUp() error {
 		return nil // already in upper
 	}
 
-	info, err := n.sftp.Lstat(n.remotePath)
+	info, err := n.sftpLstat(n.remotePath)
 	if err != nil {
 		// Doesn't exist in lower either — that's fine, caller will create
 		return nil
@@ -325,24 +483,26 @@ func (n *overlayNode) copyUp() error {
 		return os.MkdirAll(n.upperPath, info.Mode())
 	}
 
-	// Copy file content
-	src, err := n.sftp.Open(n.remotePath)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
+	// Copy file content from SFTP to local
+	return n.rsftp.withClient(func(c *sftp.Client) error {
+		src, err := c.Open(n.remotePath)
+		if err != nil {
+			return err
+		}
+		defer src.Close()
 
-	dst, err := os.OpenFile(n.upperPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
-	if err != nil {
-		return err
-	}
-	defer dst.Close()
+		dst, err := os.OpenFile(n.upperPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+		if err != nil {
+			return err
+		}
+		defer dst.Close()
 
-	if _, err := io.Copy(dst, src); err != nil {
-		os.Remove(n.upperPath)
-		return err
-	}
-	return nil
+		if _, err := io.Copy(dst, src); err != nil {
+			os.Remove(n.upperPath)
+			return err
+		}
+		return nil
+	})
 }
 
 func (n *overlayNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
@@ -457,7 +617,13 @@ func (n *overlayNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
 	if target, err := os.Readlink(n.upperPath); err == nil {
 		return []byte(target), fs.OK
 	}
-	if target, err := n.sftp.ReadLink(n.remotePath); err == nil {
+	var target string
+	err := n.rsftp.withClient(func(c *sftp.Client) error {
+		var e error
+		target, e = c.ReadLink(n.remotePath)
+		return e
+	})
+	if err == nil {
 		return []byte(target), fs.OK
 	}
 	return nil, syscall.ENOENT
