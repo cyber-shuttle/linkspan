@@ -222,8 +222,12 @@ func CLIConnectTunnel(tunnelID string, accessToken string) (commandID string, po
 			// Parse port map from output
 			portMap = make(map[int]int) // remotePort → localPort
 			for _, match := range forwardRe.FindAllStringSubmatch(combined, -1) {
-				localPort, _ := strconv.Atoi(match[1])
-				remotePort, _ := strconv.Atoi(match[2])
+				localPort, err1 := strconv.Atoi(match[1])
+				remotePort, err2 := strconv.Atoi(match[2])
+				if err1 != nil || err2 != nil {
+					log.Printf("devtunnel cli: skipping malformed port mapping %q → %q", match[1], match[2])
+					continue
+				}
 				portMap[remotePort] = localPort
 			}
 			log.Printf("devtunnel cli: connect established for tunnel %s (ports=%v)", tunnelID, portMap)

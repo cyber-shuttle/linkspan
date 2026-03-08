@@ -180,11 +180,26 @@ func MountOverlayFS(sshAddr, remoteRoot, upperDir, mountDir string) (*OverlayFS,
 		User:            "linkspan",
 		Auth:            []ssh.AuthMethod{},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         10 * time.Second,
 	}
 
-	rsftp, err := newReconnectingSftpClient(sshAddr, sshConfig)
-	if err != nil {
-		return nil, err
+	// Retry the initial SSH/SFTP connection — tunnel forwarded ports may
+	// not be ready immediately after devtunnel connect reports them.
+	var rsftp *reconnectingSftpClient
+	delays := []time.Duration{0, 1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
+	var lastErr error
+	for i, delay := range delays {
+		if delay > 0 {
+			log.Printf("[overlayfs] SSH to %s failed (attempt %d/%d), retrying in %s: %v", sshAddr, i+1, len(delays), delay, lastErr)
+			time.Sleep(delay)
+		}
+		rsftp, lastErr = newReconnectingSftpClient(sshAddr, sshConfig)
+		if lastErr == nil {
+			break
+		}
+	}
+	if lastErr != nil {
+		return nil, lastErr
 	}
 
 	root := &overlayNode{

@@ -130,7 +130,9 @@ func DevTunnelForward(tunnelName string, port int, authToken string) error {
 	// No -p flags needed — ports are registered via SDK and forwarded by the relay.
 	if devTunInfo.HostCmdID != "" {
 		log.Printf("devtunnel forward: restarting host for %q", tunnelName)
-		_ = pm.GlobalProcessManager.Kill(devTunInfo.HostCmdID)
+		if err := pm.GlobalProcessManager.Kill(devTunInfo.HostCmdID); err != nil {
+			log.Printf("devtunnel forward: failed to kill old host process %s: %v", devTunInfo.HostCmdID, err)
+		}
 
 		hostToken := devTunInfo.HostToken
 		if hostToken == "" {

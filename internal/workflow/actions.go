@@ -130,6 +130,18 @@ func actionDevTunnelConnect(params map[string]any) (*ActionResult, error) {
 		"command_id": cmdID,
 		"port_map":   portMapStr,
 	}
+
+	// If ssh_port was provided, resolve the mapped local port for the overlay
+	if sshPort := toInt(params["ssh_port"]); sshPort != 0 {
+		if mapped, ok := portMap[sshPort]; ok {
+			result["mapped_ssh_port"] = mapped
+			log.Printf("[tunnel.devtunnel_connect] mapped SSH port %d -> %d", sshPort, mapped)
+		} else {
+			log.Printf("[tunnel.devtunnel_connect] warning: SSH port %d not found in port map", sshPort)
+			result["mapped_ssh_port"] = sshPort // fallback to original
+		}
+	}
+
 	return &result, nil
 }
 
@@ -316,10 +328,23 @@ func actionTunnelConnect(params map[string]any) (*ActionResult, error) {
 		portMapStr[strconv.Itoa(remote)] = local
 	}
 
-	return &ActionResult{
+	result := ActionResult{
 		"connection_id": cr.ConnectionID,
 		"port_map":      portMapStr,
-	}, nil
+	}
+
+	// If ssh_port was provided, resolve the mapped local port for the overlay
+	if sshPort := toInt(params["ssh_port"]); sshPort != 0 {
+		if mapped, ok := cr.PortMap[sshPort]; ok {
+			result["mapped_ssh_port"] = mapped
+			log.Printf("[tunnel.connect] mapped SSH port %d -> %d", sshPort, mapped)
+		} else {
+			log.Printf("[tunnel.connect] warning: SSH port %d not found in port map", sshPort)
+			result["mapped_ssh_port"] = sshPort
+		}
+	}
+
+	return &result, nil
 }
 
 // --- tunnel.disconnect (provider-agnostic) ---
@@ -384,9 +409,10 @@ func toInt(v any) int {
 	case float64:
 		return int(val)
 	case string:
-		// Support template-resolved numeric strings.
-		var n int
-		fmt.Sscanf(val, "%d", &n)
+		n, err := strconv.Atoi(strings.TrimSpace(val))
+		if err != nil {
+			return 0
+		}
 		return n
 	default:
 		return 0
