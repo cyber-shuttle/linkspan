@@ -342,8 +342,42 @@ func (n *overlayNode) locateChild(name string) source {
 	}
 }
 
+// goModeToUnix converts Go's os.FileMode to a Unix mode_t (uint32).
+// Go uses its own bit layout (e.g. ModeDir = 1<<31) which differs from
+// Unix/FUSE mode bits (S_IFDIR = 0040000). This must be used whenever
+// populating fuse.Attr.Mode, fuse.DirEntry.Mode, or fs.StableAttr.Mode.
+func goModeToUnix(m os.FileMode) uint32 {
+	perm := uint32(m.Perm())
+	switch {
+	case m.IsDir():
+		perm |= syscall.S_IFDIR
+	case m&os.ModeSymlink != 0:
+		perm |= syscall.S_IFLNK
+	case m&os.ModeNamedPipe != 0:
+		perm |= syscall.S_IFIFO
+	case m&os.ModeSocket != 0:
+		perm |= syscall.S_IFSOCK
+	case m&os.ModeCharDevice != 0:
+		perm |= syscall.S_IFCHR
+	case m&os.ModeDevice != 0:
+		perm |= syscall.S_IFBLK
+	default:
+		perm |= syscall.S_IFREG
+	}
+	if m&os.ModeSetuid != 0 {
+		perm |= syscall.S_ISUID
+	}
+	if m&os.ModeSetgid != 0 {
+		perm |= syscall.S_ISGID
+	}
+	if m&os.ModeSticky != 0 {
+		perm |= syscall.S_ISVTX
+	}
+	return perm
+}
+
 func localAttrToFuse(info os.FileInfo, out *fuse.Attr) {
-	out.Mode = uint32(info.Mode())
+	out.Mode = goModeToUnix(info.Mode())
 	out.Size = uint64(info.Size())
 	out.Mtime = uint64(info.ModTime().Unix())
 	fillStatFields(info, out)
@@ -352,14 +386,14 @@ func localAttrToFuse(info os.FileInfo, out *fuse.Attr) {
 func sftpAttrToFuse(info os.FileInfo, out *fuse.Attr) {
 	s := info.Sys()
 	if stat, ok := s.(*sftp.FileStat); ok {
-		out.Mode = uint32(info.Mode())
+		out.Mode = goModeToUnix(info.Mode())
 		out.Size = uint64(info.Size())
 		out.Mtime = uint64(stat.Mtime)
 		out.Atime = uint64(stat.Atime)
 		out.Uid = stat.UID
 		out.Gid = stat.GID
 	} else {
-		out.Mode = uint32(info.Mode())
+		out.Mode = goModeToUnix(info.Mode())
 		out.Size = uint64(info.Size())
 		out.Mtime = uint64(info.ModTime().Unix())
 		out.Atime = out.Mtime
@@ -387,13 +421,13 @@ func (n *overlayNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	// Check upper first
 	if info, err := os.Lstat(up); err == nil {
 		localAttrToFuse(info, &out.Attr)
-		stable := fs.StableAttr{Mode: uint32(info.Mode())}
+		stable := fs.StableAttr{Mode: goModeToUnix(info.Mode())}
 		return n.NewInode(ctx, child, stable), fs.OK
 	}
 	// Fall back to lower
 	if info, err := n.sftpLstat(rp); err == nil {
 		sftpAttrToFuse(info, &out.Attr)
-		stable := fs.StableAttr{Mode: uint32(info.Mode())}
+		stable := fs.StableAttr{Mode: goModeToUnix(info.Mode())}
 		return n.NewInode(ctx, child, stable), fs.OK
 	}
 	return nil, syscall.ENOENT
@@ -413,7 +447,7 @@ func (n *overlayNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 			seen[e.Name()] = struct{}{}
 			result = append(result, fuse.DirEntry{
 				Name: e.Name(),
-				Mode: uint32(info.Mode()),
+				Mode: goModeToUnix(info.Mode()),
 			})
 		}
 	}
@@ -431,7 +465,7 @@ func (n *overlayNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 			}
 			result = append(result, fuse.DirEntry{
 				Name: e.Name(),
-				Mode: uint32(e.Mode()),
+				Mode: goModeToUnix(e.Mode()),
 			})
 		}
 		return nil
@@ -563,7 +597,7 @@ func (n *overlayNode) Create(ctx context.Context, name string, flags uint32, mod
 	localAttrToFuse(info, &out.Attr)
 
 	child := n.child(name)
-	stable := fs.StableAttr{Mode: uint32(info.Mode())}
+	stable := fs.StableAttr{Mode: goModeToUnix(info.Mode())}
 	inode := n.NewInode(ctx, child, stable)
 	return inode, &localFileHandle{f: f}, fuse.FOPEN_DIRECT_IO, fs.OK
 }
@@ -581,7 +615,7 @@ func (n *overlayNode) Mkdir(ctx context.Context, name string, mode uint32, out *
 	localAttrToFuse(info, &out.Attr)
 
 	child := n.child(name)
-	stable := fs.StableAttr{Mode: uint32(info.Mode())}
+	stable := fs.StableAttr{Mode: goModeToUnix(info.Mode())}
 	return n.NewInode(ctx, child, stable), fs.OK
 }
 
@@ -684,7 +718,7 @@ func (n *overlayNode) Symlink(ctx context.Context, target, name string, out *fus
 	localAttrToFuse(info, &out.Attr)
 
 	child := n.child(name)
-	stable := fs.StableAttr{Mode: uint32(info.Mode())}
+	stable := fs.StableAttr{Mode: goModeToUnix(info.Mode())}
 	return n.NewInode(ctx, child, stable), fs.OK
 }
 
