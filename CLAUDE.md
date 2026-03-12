@@ -2,11 +2,17 @@
 
 Go agent that orchestrates dev environment setup on compute nodes. Manages VS Code SSH sessions, Dev Tunnels/FRP connectivity, FUSE overlay mounts, and Jupyter kernels via a declarative YAML workflow engine and REST API.
 
+## Prerequisites
+
+- Go 1.24+ (toolchain go1.24.13)
+- Optional: FUSE (Linux) for overlay mounts, goreleaser for release builds
+
 ## Commands
 
 ```bash
 go build -o linkspan .          # Build for current platform
 go test ./...                   # Run tests
+go vet ./...                    # Static analysis
 make                            # Cross-compile all platforms (linux/darwin, amd64/arm64)
 make clean                      # Remove bin/
 goreleaser release --snapshot --clean  # Local snapshot build
