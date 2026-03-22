@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -19,13 +20,21 @@ import (
 	"github.com/cyber-shuttle/linkspan/internal/logstream"
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
 	"github.com/cyber-shuttle/linkspan/internal/workflow"
-	"github.com/cyber-shuttle/linkspan/subsystems/mount"
 	"github.com/cyber-shuttle/linkspan/subsystems/jupyter"
+	"github.com/cyber-shuttle/linkspan/subsystems/mount"
 	"github.com/cyber-shuttle/linkspan/subsystems/tunnel"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs"
 	"github.com/cyber-shuttle/linkspan/subsystems/vscode"
 	"github.com/cyber-shuttle/linkspan/utils"
 	"github.com/gorilla/mux"
+)
+
+// Version information set via ldflags at build time.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+	builtBy = "unknown"
 )
 
 // VFS providers initialized at startup, cleaned up on shutdown.
@@ -41,11 +50,9 @@ var (
 )
 
 func main() {
-
-	// Install log broadcaster so connected clients receive log output in
-	// real time.  Must happen before any log.* calls.
-	logBroadcaster := logstream.New(os.Stderr)
-	logBroadcaster.Install()
+	// Handle version flag early, before other initialization
+	versionFlag := flag.Bool("version", false, "print version information and exit")
+	verboseVersionFlag := flag.Bool("verbose-version", false, "print verbose version information and exit")
 
 	// parse CLI flags
 	tunnelAPI := flag.String("tunnel-api", "devtunnels", "tunnel API provider name (e.g. devtunnels)")
@@ -60,6 +67,26 @@ func main() {
 	vfsMode := flag.String("vfs-mode", "", "VFS mode: 'sync' or 'mount' (also reads CS_VFS_MODE env)")
 	vfsSessionID := flag.String("vfs-session-id", "", "session ID for VFS (also reads CS_SESSION_ID env)")
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("linkspan %s\n", version)
+		os.Exit(0)
+	}
+
+	if *verboseVersionFlag {
+		fmt.Printf("linkspan %s\n", version)
+		fmt.Printf("  commit:    %s\n", commit)
+		fmt.Printf("  built:     %s\n", date)
+		fmt.Printf("  built by:  %s\n", builtBy)
+		fmt.Printf("  go:        %s\n", runtime.Version())
+		fmt.Printf("  platform:  %s/%s\n", runtime.GOOS, runtime.GOARCH)
+		os.Exit(0)
+	}
+
+	// Install log broadcaster so connected clients receive log output in
+	// real time.  Must happen before any log.* calls.
+	logBroadcaster := logstream.New(os.Stderr)
+	logBroadcaster.Install()
 
 	// Initialize VFS if session ID is provided
 	sessionID := *vfsSessionID

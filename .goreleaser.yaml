@@ -13,6 +13,12 @@ builds:
     goarch:
       - amd64
       - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+      - -X main.builtBy={{ if index .Env "BUILT_BY" }}{{ .Env.BUILT_BY }}{{ else }}goreleaser{{ end }}
 
 archives:
   - formats: [tar.gz]
