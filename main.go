@@ -69,12 +69,12 @@ func main() {
 	flag.Parse()
 
 	if *versionFlag {
-		fmt.Printf("linkspan %s\n", version)
+		fmt.Printf("%s\n", version)
 		os.Exit(0)
 	}
 
 	if *verboseVersionFlag {
-		fmt.Printf("linkspan %s\n", version)
+		fmt.Printf("%s\n", version)
 		fmt.Printf("  commit:    %s\n", commit)
 		fmt.Printf("  built:     %s\n", date)
 		fmt.Printf("  built by:  %s\n", builtBy)
