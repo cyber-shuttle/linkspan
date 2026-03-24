@@ -301,7 +301,7 @@ func main() {
 		})
 		go func() {
 			if err := workflowEngine.Run(ctx, wf); err != nil {
-				log.Printf("workflow: %v", err)
+				log.Fatalf("workflow: %v", err)
 			}
 		}()
 	}
