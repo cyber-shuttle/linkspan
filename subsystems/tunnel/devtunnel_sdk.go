@@ -78,9 +78,9 @@ var globalSDK *SDKManager
 // InitSDK initialises the SDK Manager with a Microsoft Entra ID (Azure AD) bearer
 // token.  The manager is stored in the package-level globalSDK variable.
 // It is safe to call InitSDK multiple times; only the first call takes effect.
+// The token can be refreshed later via UpdateAuthToken.
 func InitSDK(authToken string) error {
 	// Re-entrant guard: only initialise once per token value.
-	// If the token changed the caller should create a new process.
 	if globalSDK != nil {
 		return nil
 	}
@@ -95,9 +95,17 @@ func InitSDK(authToken string) error {
 		{Name: "linkspan", Version: "0.1.0"},
 	}
 
-	// tokenProvider returns the bearer token for every outgoing SDK request.
+	sdk := &SDKManager{
+		authToken:  authToken,
+		sdkTunnels: make(map[string]*tunnels.Tunnel),
+	}
+
+	// tokenProvider reads from sdk.authToken so that UpdateAuthToken takes
+	// effect for all subsequent SDK requests without re-initialisation.
 	tokenProvider := func() string {
-		return "Bearer " + authToken
+		sdk.mu.Lock()
+		defer sdk.mu.Unlock()
+		return "Bearer " + sdk.authToken
 	}
 
 	debugClient := &http.Client{Transport: &debugTransport{base: http.DefaultTransport}}
@@ -106,11 +114,23 @@ func InitSDK(authToken string) error {
 		return fmt.Errorf("devtunnel sdk: create manager: %w", err)
 	}
 
-	globalSDK = &SDKManager{
-		manager:    mgr,
-		authToken:  authToken,
-		sdkTunnels: make(map[string]*tunnels.Tunnel),
+	sdk.manager = mgr
+	globalSDK = sdk
+	return nil
+}
+
+// UpdateAuthToken replaces the Entra ID bearer token used for all subsequent
+// SDK requests.  This allows CS-Bridge to push a fresh token before the
+// previous one expires, without restarting linkspan.
+func UpdateAuthToken(newToken string) error {
+	sdk, err := requireSDK()
+	if err != nil {
+		return err
 	}
+	sdk.mu.Lock()
+	defer sdk.mu.Unlock()
+	sdk.authToken = newToken
+	log.Printf("devtunnel sdk: auth token updated (len=%d)", len(newToken))
 	return nil
 }
 

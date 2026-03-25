@@ -152,6 +152,7 @@ func main() {
 	// Tunnel management
 	api.HandleFunc("/tunnels/devtunnels", tunnel.ListDevTunnels).Methods("GET")
 	api.HandleFunc("/tunnels/devtunnels", tunnel.CreateDevTunnel).Methods("POST")
+	api.HandleFunc("/tunnels/devtunnels/auth-token", tunnel.RefreshDevTunnelAuthToken).Methods("POST")
 	api.HandleFunc("/tunnels/devtunnels/{id}", tunnel.DeleteDevTunnel).Methods("DELETE")
 
 	api.HandleFunc("/tunnels/frp", tunnel.ListFRPTunnels).Methods("GET")
