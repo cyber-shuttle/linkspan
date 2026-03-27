@@ -45,11 +45,15 @@ func actionDevTunnelCreate(params map[string]any) (*ActionResult, error) {
 	if authToken == "" {
 		return nil, fmt.Errorf("tunnel.devtunnel_create: auth_token is required")
 	}
-	serverPort := toInt(params["server_port"])
-	sshPort := toInt(params["ssh_port"])
-	logPort := toInt(params["log_port"])
 
-	conn, err := tunnel.DevTunnelCreate(tunnelName, expiration, authToken, serverPort, sshPort, logPort)
+	var ports []int
+	if openPorts, ok := params["open_ports"].([]any); ok {
+		for _, p := range openPorts {
+			ports = append(ports, toInt(p))
+		}
+	}
+
+	conn, err := tunnel.DevTunnelCreate(tunnelName, expiration, authToken, ports...)
 	if err != nil {
 		return nil, err
 	}
@@ -59,8 +63,6 @@ func actionDevTunnelCreate(params map[string]any) (*ActionResult, error) {
 		"tunnel_name":    conn.DevTunnelInfo.TunnelName,
 		"connection_url": conn.ConnectionURL,
 		"token":          conn.Token,
-		"ssh_port":       sshPort,
-		"log_port":       logPort,
 	}
 	return &result, nil
 }
@@ -236,14 +238,10 @@ func actionTunnelCreate(params map[string]any) (*ActionResult, error) {
 	}
 
 	var ports []int
-	if sp := toInt(params["server_port"]); sp > 0 {
-		ports = append(ports, sp)
-	}
-	if sp := toInt(params["ssh_port"]); sp > 0 {
-		ports = append(ports, sp)
-	}
-	if lp := toInt(params["log_port"]); lp > 0 {
-		ports = append(ports, lp)
+	if openPorts, ok := params["open_ports"].([]any); ok {
+		for _, p := range openPorts {
+			ports = append(ports, toInt(p))
+		}
 	}
 
 	opts := tunnel.CreateOpts{

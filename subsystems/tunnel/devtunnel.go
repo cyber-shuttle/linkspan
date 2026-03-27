@@ -11,7 +11,8 @@ import (
 // DevTunnelCreate creates a tunnel, starts hosting the relay, and forwards the
 // given serverPort so the client can communicate with linkspan immediately.
 // Additional ports (e.g. SSH) can be added later via DevTunnelForward.
-func DevTunnelCreate(tunnelName string, expiration string, authToken string, serverPort int, sshPort int, extraPorts ...int) (DevTunnelConnection, error) {
+func DevTunnelCreate(tunnelName string, expiration string, authToken string, portsToOpen ...int) (DevTunnelConnection, error) {
+	log.Printf("devtunnel create: creating tunnel %q with expiration %q and ports %v", tunnelName, expiration, portsToOpen)
 	if err := InitSDK(authToken); err != nil {
 		return DevTunnelConnection{}, fmt.Errorf("devtunnel create: init SDK: %w", err)
 	}
@@ -35,27 +36,11 @@ func DevTunnelCreate(tunnelName string, expiration string, authToken string, ser
 		log.Printf("devtunnel create: warning — failed to register %q in manager: %v", tunnelName, err)
 	}
 
-	// 2. Register the server port so it is forwarded through the tunnel.
-	if serverPort > 0 {
-		if err := SDKAddPort(ctx, tunnelName, serverPort); err != nil {
-			return DevTunnelConnection{}, fmt.Errorf("devtunnel create: add server port %d to %q: %w", serverPort, tunnelName, err)
-		}
-		info.Ports = append(info.Ports, serverPort)
-	}
-
-	// 2b. Register the SSH port if provided.
-	if sshPort > 0 {
-		if err := SDKAddPort(ctx, tunnelName, sshPort); err != nil {
-			return DevTunnelConnection{}, fmt.Errorf("devtunnel create: add SSH port %d to %q: %w", sshPort, tunnelName, err)
-		}
-		info.Ports = append(info.Ports, sshPort)
-	}
-
 	// 2c. Register any extra ports (e.g. log stream).
-	for _, p := range extraPorts {
+	for _, p := range portsToOpen {
 		if p > 0 {
 			if err := SDKAddPort(ctx, tunnelName, p); err != nil {
-				return DevTunnelConnection{}, fmt.Errorf("devtunnel create: add extra port %d to %q: %w", p, tunnelName, err)
+				return DevTunnelConnection{}, fmt.Errorf("devtunnel create: add extra ports %d to %q: %w", p, tunnelName, err)
 			}
 			info.Ports = append(info.Ports, p)
 		}
@@ -91,7 +76,7 @@ func DevTunnelCreate(tunnelName string, expiration string, authToken string, ser
 		conn.Token = connectToken
 	}
 
-	log.Printf("devtunnel create: tunnel %q ready (id=%s, url=%s, port=%d)", tunnelName, sdkTunnel.TunnelID, connectionURL, serverPort)
+	log.Printf("devtunnel create: tunnel %q ready (id=%s, url=%s)", tunnelName, sdkTunnel.TunnelID, connectionURL)
 	return conn, nil
 }
 

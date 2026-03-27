@@ -1,0 +1,16 @@
+name: "cs-bridge-hpc-setup"
+
+steps:
+  - action: "tunnel.create"
+    name: "Create remote tunnel"
+    params:
+      provider: "devtunnel"
+      tunnel_name: "ls-149-165-159-51-session-1774238566439"
+      expiration: "1d"
+      auth_token: "{{.TunnelAuthToken}}"
+      server_url: "https://devtunnels.microsoft.com"
+      open_ports: ["{{.ServerPort}}"]
+    outputs:
+      tunnel_id: "tunnel_id"
+      connection_url: "tunnel_url"
+      token: "tunnel_token"

@@ -25,7 +25,6 @@ import (
 	"github.com/cyber-shuttle/linkspan/subsystems/tunnel"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs"
 	"github.com/cyber-shuttle/linkspan/subsystems/vscode"
-	"github.com/cyber-shuttle/linkspan/utils"
 	"github.com/gorilla/mux"
 )
 
@@ -256,24 +255,6 @@ func main() {
 	}
 	log.Printf("listening on %s:%d", serverHost, serverPort)
 
-	// Start SSH daemon on a random port
-	sshPort, err := utils.GetAvailablePort()
-	if err != nil {
-		log.Fatalf("failed to get available port for SSH: %v", err)
-	}
-	sshAddr := fmt.Sprintf("0.0.0.0:%d", sshPort)
-	sshSessionID := fmt.Sprintf("main-%d", sshPort)
-	vscode.StartSSHServerForVSCodeConnection(sshSessionID, sshAddr)
-	log.Printf("SSH server listening on %s", sshAddr)
-
-	// Start log stream TCP listener so clients can connect for real-time logs.
-	logListener, err := logBroadcaster.ListenAndServe("0.0.0.0:0")
-	if err != nil {
-		log.Fatalf("failed to start log stream listener: %v", err)
-	}
-	logPort := logListener.Addr().(*net.TCPAddr).Port
-	log.Printf("log stream listening on 0.0.0.0:%d", logPort)
-
 	// Run workflow if specified. Use "-" to read from stdin.
 	if *workflowFile != "" {
 		var wf *workflow.WorkflowConfig
@@ -287,17 +268,10 @@ func main() {
 			log.Fatalf("workflow: %v", err)
 		}
 		workflowEngine = workflow.NewEngine(workflow.DefaultRegistry(), map[string]any{
-			"Timestamp":        time.Now().Unix(),
-			"ServerPort":       serverPort,
-			"SshPort":          sshPort,
-			"LogPort":          logPort,
-			"ServerHost":       serverHost,
-			"TunnelAuthToken":  *tunnelAuthToken,
-			"LocalTunnelID":    os.Getenv("CS_LOCAL_TUNNEL_ID"),
-			"LocalTunnelToken": os.Getenv("CS_LOCAL_TUNNEL_TOKEN"),
-			"LocalSshPort":     os.Getenv("CS_LOCAL_SSH_PORT"),
-			"LocalWorkspace":   os.Getenv("CS_LOCAL_WORKSPACE"),
-			"SessionID":        os.Getenv("CS_SESSION_ID"),
+			"Timestamp":       time.Now().Unix(),
+			"ServerPort":      serverPort,
+			"ServerHost":      serverHost,
+			"TunnelAuthToken": *tunnelAuthToken,
 		})
 		go func() {
 			if err := workflowEngine.Run(ctx, wf); err != nil {
@@ -336,7 +310,7 @@ func main() {
 
 				ch := make(chan error, 1)
 				go func() {
-					conn, err := tunnel.DevTunnelCreate(tunnelName, "1d", authToken, serverPort, sshPort)
+					conn, err := tunnel.DevTunnelCreate(tunnelName, "1d", authToken, serverPort)
 					if err != nil {
 						ch <- err
 						return
@@ -369,7 +343,7 @@ func main() {
 				}
 			}
 
-			log.Printf("devtunnel: failed to create tunnel %s after %d attempts", tunnelName, *tunnelRetries)
+			log.Fatalf("devtunnel: failed to create tunnel %s after %d attempts", tunnelName, *tunnelRetries)
 		}()
 	} else if apiTunnelType == "devtunnels" {
 		log.Println("devtunnel startup skipped (disabled via flag)")

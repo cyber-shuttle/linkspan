@@ -24,8 +24,8 @@ type DevTunnelCreateRequest struct {
 	// AuthToken is the Microsoft Entra ID (Azure AD) bearer token used to
 	// authenticate against the Dev Tunnels service.  It is required for all
 	// devtunnel operations.
-	AuthToken  string `json:"authToken"`
-	ServerPort int    `json:"serverPort"` // linkspan HTTP port to forward immediately
+	AuthToken string `json:"authToken"`
+	OpenPorts []int  `json:"open_ports,omitempty"` // Ports to open immediately on tunnel creation (e.g. server port). Optional.
 }
 
 // DevTunnelCreateResponse is the JSON body returned after a successful create+host.
@@ -88,7 +88,7 @@ func CreateDevTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := DevTunnelCreate(req.TunnelName, req.Expiration, req.AuthToken, req.ServerPort, 0)
+	conn, err := DevTunnelCreate(req.TunnelName, req.Expiration, req.AuthToken, req.OpenPorts...)
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

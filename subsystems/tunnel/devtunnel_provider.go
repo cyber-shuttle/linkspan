@@ -16,21 +16,7 @@ func (d *DevTunnelProvider) Create(ctx context.Context, opts CreateOpts) (*Tunne
 		return nil, fmt.Errorf("devtunnel: auth_token is required")
 	}
 
-	// Extract individual port roles from the Ports slice.
-	var serverPort, sshPort int
-	var extraPorts []int
-	for i, p := range opts.Ports {
-		switch i {
-		case 0:
-			serverPort = p
-		case 1:
-			sshPort = p
-		default:
-			extraPorts = append(extraPorts, p)
-		}
-	}
-
-	conn, err := DevTunnelCreate(opts.Name, opts.Expiration, opts.AuthToken, serverPort, sshPort, extraPorts...)
+	conn, err := DevTunnelCreate(opts.Name, opts.Expiration, opts.AuthToken, opts.Ports...)
 	if err != nil {
 		return nil, err
 	}
