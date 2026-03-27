@@ -168,6 +168,34 @@ func ListFRPTunnels(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusOK, FRPTunnelListResponse{FRPTunnelInfos: ts})
 }
 
+// RefreshAuthTokenRequest is the JSON body for POST /tunnels/devtunnels/auth-token.
+type RefreshAuthTokenRequest struct {
+	AuthToken string `json:"authToken"`
+}
+
+// RefreshDevTunnelAuthToken handles POST /tunnels/devtunnels/auth-token.
+// CS-Bridge calls this to push a fresh Entra ID token before the previous one expires.
+func RefreshDevTunnelAuthToken(w http.ResponseWriter, r *http.Request) {
+	var req RefreshAuthTokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	_ = r.Body.Close()
+
+	if req.AuthToken == "" {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "authToken is required"})
+		return
+	}
+
+	if err := UpdateAuthToken(req.AuthToken); err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // DeleteFRPTunnel handles DELETE /tunnels/frp/{id}.
 func DeleteFRPTunnel(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
