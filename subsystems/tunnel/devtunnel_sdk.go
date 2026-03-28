@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	tunnels "github.com/microsoft/dev-tunnels/go/tunnels"
+	// Use tunnels package for types and constants, but not the Manager which has a broken retry loop that causes hangs.
 )
 
 // debugTransport wraps http.RoundTripper to log request/response details for debugging.
@@ -63,17 +64,14 @@ const sdkAPIVersion = "2023-09-27-preview"
 // SDKManager wraps the Dev Tunnels SDK Manager for tunnel lifecycle operations.
 // All management operations (create, delete, token retrieval) go through this type;
 // the relay hosting protocol still requires the devtunnel CLI binary.
-type SDKManager struct {
-	mu        sync.Mutex
-	manager   *tunnels.Manager
-	authToken string
-	// sdkTunnels caches the full Tunnel objects returned by the API so that
-	// operations that require ClusterID + TunnelID can resolve them by name.
+type DevTunnelSDKManager struct {
+	mu         sync.Mutex
+	authToken  string
 	sdkTunnels map[string]*tunnels.Tunnel
 }
 
 // globalSDK is the package-level singleton, initialised by InitSDK.
-var globalSDK *SDKManager
+var globalSDK *DevTunnelSDKManager
 
 // InitSDK initialises the SDK Manager with a Microsoft Entra ID (Azure AD) bearer
 // token.  The manager is stored in the package-level globalSDK variable.
@@ -85,36 +83,11 @@ func InitSDK(authToken string) error {
 		return nil
 	}
 
-	serviceURI := tunnels.ServiceProperties.ServiceURI
-	parsedURL, err := url.Parse(serviceURI)
-	if err != nil {
-		return fmt.Errorf("devtunnel sdk: parse service URI %q: %w", serviceURI, err)
-	}
-
-	userAgents := []tunnels.UserAgent{
-		{Name: "linkspan", Version: "0.1.0"},
-	}
-
-	sdk := &SDKManager{
+	sdk := &DevTunnelSDKManager{
 		authToken:  authToken,
 		sdkTunnels: make(map[string]*tunnels.Tunnel),
 	}
 
-	// tokenProvider reads from sdk.authToken so that UpdateAuthToken takes
-	// effect for all subsequent SDK requests without re-initialisation.
-	tokenProvider := func() string {
-		sdk.mu.Lock()
-		defer sdk.mu.Unlock()
-		return "Bearer " + sdk.authToken
-	}
-
-	debugClient := &http.Client{Transport: &debugTransport{base: http.DefaultTransport}}
-	mgr, err := tunnels.NewManager(userAgents, tokenProvider, parsedURL, debugClient, sdkAPIVersion)
-	if err != nil {
-		return fmt.Errorf("devtunnel sdk: create manager: %w", err)
-	}
-
-	sdk.manager = mgr
 	globalSDK = sdk
 	return nil
 }
@@ -135,7 +108,7 @@ func UpdateAuthToken(newToken string) error {
 }
 
 // requireSDK returns globalSDK or an error if InitSDK has not been called.
-func requireSDK() (*SDKManager, error) {
+func requireSDK() (*DevTunnelSDKManager, error) {
 	if globalSDK == nil {
 		return nil, fmt.Errorf("devtunnel sdk: not initialised — call InitSDK first")
 	}
@@ -183,12 +156,8 @@ func SDKAddPort(ctx context.Context, tunnelName string, port int) error {
 		return fmt.Errorf("devtunnel sdk: resolve tunnel %q for port add: %w", tunnelName, err)
 	}
 
-	portReq := &tunnels.TunnelPort{
-		PortNumber: uint16(port), //nolint:gosec // port numbers fit in uint16
-		Protocol:   string(tunnels.TunnelProtocolAuto),
-	}
 	log.Printf("devtunnel sdk: adding port %d to tunnel %q", port, tunnelName)
-	if _, err := sdk.manager.CreateTunnelPort(ctx, t, portReq, nil); err != nil {
+	if err := sdk.createTunnelPortHTTP(ctx, t, port); err != nil {
 		return fmt.Errorf("devtunnel sdk: CreateTunnelPort %d on %q: %w", port, tunnelName, err)
 	}
 
@@ -198,7 +167,7 @@ func SDKAddPort(ctx context.Context, tunnelName string, port int) error {
 // createTunnelHTTP performs a single PUT /tunnels/{id} request to create a tunnel.
 // Only tunnelId is set in the request body — custom display names are a premium
 // feature.  The logical tunnelName is tracked locally in our sdkTunnels cache.
-func (sdk *SDKManager) createTunnelHTTP(ctx context.Context, tunnelName string) (*tunnels.Tunnel, error) {
+func (sdk *DevTunnelSDKManager) createTunnelHTTP(ctx context.Context, tunnelName string) (*tunnels.Tunnel, error) {
 	serviceURI := tunnels.ServiceProperties.ServiceURI
 	tunnelID := generateID(tunnelName)
 
@@ -265,7 +234,7 @@ func SDKDeleteTunnel(ctx context.Context, tunnelName string) error {
 
 // deleteTunnelHTTP performs a DELETE /tunnels/{id} request, bypassing the SDK's
 // DeleteTunnel which panics on tunnel objects created via createTunnelHTTP.
-func (sdk *SDKManager) deleteTunnelHTTP(ctx context.Context, tunnelName string) error {
+func (sdk *DevTunnelSDKManager) deleteTunnelHTTP(ctx context.Context, tunnelName string) error {
 	tunnelID := generateID(tunnelName)
 
 	// Try to get the cluster ID from the cached tunnel object so we can
@@ -310,6 +279,103 @@ func (sdk *SDKManager) deleteTunnelHTTP(ctx context.Context, tunnelName string) 
 	return nil
 }
 
+// createTunnelPortHTTP performs a single PUT /tunnels/{id}/ports/{port} request,
+// bypassing the SDK's CreateTunnelPort which freezes due to the same broken retry
+// loop as CreateTunnel.
+func (sdk *DevTunnelSDKManager) createTunnelPortHTTP(ctx context.Context, t *tunnels.Tunnel, port int) error {
+	tunnelID := t.TunnelID
+	clusterID := t.ClusterID
+
+	var baseURL string
+	if clusterID != "" {
+		baseURL = fmt.Sprintf("https://%s.rel.tunnels.api.visualstudio.com", url.PathEscape(clusterID))
+	} else {
+		baseURL = tunnels.ServiceProperties.ServiceURI
+	}
+
+	reqURL := fmt.Sprintf("%s/tunnels/%s/ports/%d?api-version=%s",
+		baseURL, url.PathEscape(tunnelID), port, sdkAPIVersion)
+
+	body := map[string]any{
+		"portNumber": port,
+		"protocol":   "auto",
+	}
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, reqURL, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
+	req.Header.Set("Authorization", "Bearer "+sdk.authToken)
+	req.Header.Set("User-Agent", "linkspan/0.1.0")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode > 300 {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+// getTunnelHTTP performs a GET /tunnels/{id} request, bypassing the SDK's
+// GetTunnel which freezes due to the same broken retry loop.
+// If tokenScopes is non-nil the scopes are passed as a query parameter so the
+// response includes the corresponding AccessTokens.
+func (sdk *DevTunnelSDKManager) getTunnelHTTP(ctx context.Context, t *tunnels.Tunnel, tokenScopes []tunnels.TunnelAccessScope) (*tunnels.Tunnel, error) {
+	tunnelID := t.TunnelID
+	clusterID := t.ClusterID
+
+	var baseURL string
+	if clusterID != "" {
+		baseURL = fmt.Sprintf("https://%s.rel.tunnels.api.visualstudio.com", url.PathEscape(clusterID))
+	} else {
+		baseURL = tunnels.ServiceProperties.ServiceURI
+	}
+
+	reqURL := fmt.Sprintf("%s/tunnels/%s?api-version=%s", baseURL, url.PathEscape(tunnelID), sdkAPIVersion)
+
+	if len(tokenScopes) > 0 {
+		for _, s := range tokenScopes {
+			reqURL += "&tokenScopes=" + url.QueryEscape(string(s))
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+sdk.authToken)
+	req.Header.Set("User-Agent", "linkspan/0.1.0")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode > 300 {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result tunnels.Tunnel
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("parse response: %w", err)
+	}
+	return &result, nil
+}
+
 // SDKGetHostToken retrieves a host-scoped access token for the given tunnel.
 // The token is passed to the devtunnel CLI via `host --access-token`.
 func SDKGetHostToken(ctx context.Context, tunnelName string) (string, error) {
@@ -337,12 +403,7 @@ func sdkGetToken(ctx context.Context, tunnelName string, scope tunnels.TunnelAcc
 		return "", err
 	}
 
-	// Request the tunnel again with the desired token scope so the response
-	// includes the AccessTokens map populated with a token for that scope.
-	opts := &tunnels.TunnelRequestOptions{
-		TokenScopes: tunnels.TunnelAccessScopes{scope},
-	}
-	refreshed, err := sdk.manager.GetTunnel(ctx, t, opts)
+	refreshed, err := sdk.getTunnelHTTP(ctx, t, []tunnels.TunnelAccessScope{scope})
 	if err != nil {
 		return "", fmt.Errorf("devtunnel sdk: GetTunnel for %q scope=%s: %w", tunnelName, scope, err)
 	}
@@ -357,32 +418,17 @@ func sdkGetToken(ctx context.Context, tunnelName string, scope tunnels.TunnelAcc
 	return token, nil
 }
 
-// SDKListTunnels returns all tunnels visible to the authenticated user.
-func SDKListTunnels(ctx context.Context) ([]*tunnels.Tunnel, error) {
-	sdk, err := requireSDK()
-	if err != nil {
-		return nil, err
-	}
-
-	// clusterID="" and domain="" means "list all tunnels globally"
-	ts, err := sdk.manager.ListTunnels(ctx, "", "", nil)
-	if err != nil {
-		return nil, fmt.Errorf("devtunnel sdk: ListTunnels: %w", err)
-	}
-	return ts, nil
-}
-
 // resolveTunnel looks up the Tunnel object by logical name (which equals the tunnel ID)
 // from the local cache; if not found it falls back to a network request.
 // Must be called with sdk.mu held.
-func (sdk *SDKManager) resolveTunnel(ctx context.Context, tunnelName string) (*tunnels.Tunnel, error) {
+func (sdk *DevTunnelSDKManager) resolveTunnel(ctx context.Context, tunnelName string) (*tunnels.Tunnel, error) {
 	if t, ok := sdk.sdkTunnels[tunnelName]; ok {
 		return t, nil
 	}
 
 	// Not in cache — query by tunnel ID (we derive the ID from the name).
 	probe := &tunnels.Tunnel{TunnelID: generateID(tunnelName)}
-	t, err := sdk.manager.GetTunnel(ctx, probe, nil)
+	t, err := sdk.getTunnelHTTP(ctx, probe, nil)
 	if err != nil {
 		return nil, fmt.Errorf("devtunnel sdk: resolve tunnel %q: %w", tunnelName, err)
 	}

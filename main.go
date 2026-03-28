@@ -288,7 +288,7 @@ func main() {
 	if apiTunnelType == "devtunnels" && *tunnelEnable {
 		authToken := *tunnelAuthToken
 		if authToken == "" {
-			log.Println("devtunnel: warning — --tunnel-auth-token not provided; tunnel startup will fail")
+			log.Fatalf("devtunnel: warning — --tunnel-auth-token not provided; tunnel startup will fail")
 		}
 		go func() {
 			tunnelName := fmt.Sprintf("linkspan-tunnel-%d", time.Now().UnixNano())
@@ -313,6 +313,7 @@ func main() {
 				go func() {
 					conn, err := tunnel.DevTunnelCreate(tunnelName, "1d", authToken, serverPort)
 					if err != nil {
+						log.Printf("devtunnel create error: %v", err)
 						ch <- err
 						return
 					}

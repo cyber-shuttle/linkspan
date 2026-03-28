@@ -11,10 +11,10 @@ type DevTunnelInfo struct {
 	TunnelID   string
 	ClusterID  string
 	TunnelName string
-	Ports      []int   // ports currently being forwarded
-	HostCmdID  string  // ProcessManager ID of the running host CLI process
-	HostToken  string  // cached host-scoped access token for restarts
-	AuthToken  string  // Microsoft Entra ID bearer token used to create the tunnel
+	Ports      []int  // ports currently being forwarded
+	HostCmdID  string // ProcessManager ID of the running host CLI process
+	HostToken  string // cached host-scoped access token for restarts
+	AuthToken  string // Microsoft Entra ID bearer token used to create the tunnel
 }
 
 // QualifiedID returns the cluster-qualified tunnel ID (e.g. "ls-48.use2")
@@ -134,5 +134,6 @@ func (tm *DevTunnelManager) CleanAll(authToken string) error {
 			tm.mu.Unlock()
 		}
 	}
+	log.Printf("Dev tunnels deleted")
 	return nil
 }
