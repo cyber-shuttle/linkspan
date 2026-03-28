@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 // RespondJSON writes a JSON response with the given status code.
@@ -47,4 +49,37 @@ func GetAvailablePort() (int, error) {
 
 	addr := listener.Addr().(*net.TCPAddr)
 	return addr.Port, nil
+}
+
+func GenerateRandomPassword(length int) string {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	var seededRand = NewLockedSource()
+
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = charset[seededRand.Intn(len(charset))]
+	}
+	return string(b)
+}
+
+// NewLockedSource returns a thread-safe random source.
+func NewLockedSource() *rand.Rand {
+	return rand.New(&lockedSource{src: rand.NewSource(rand.Int63())})
+}
+
+type lockedSource struct {
+	mu  sync.Mutex
+	src rand.Source
+}
+
+func (ls *lockedSource) Int63() int64 {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	return ls.src.Int63()
+}
+
+func (ls *lockedSource) Seed(seed int64) {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	ls.src.Seed(seed)
 }

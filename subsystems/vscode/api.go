@@ -16,6 +16,7 @@ type VSCodeSessionRequest struct {
 type VSCodeSessionResponse struct {
 	ID       string `json:"id"`
 	BindPort int32  `json:"bind_port"`
+	Password string `json:"password,omitempty"` // Password is only returned on creation, not in session status or list responses.
 }
 
 func ListVSCodeSessions(w http.ResponseWriter, r *http.Request) {
@@ -39,10 +40,11 @@ func CreateVSCodeSession(w http.ResponseWriter, r *http.Request) {
 
 	// Generate a session ID (in production, use a proper ID generator)
 	sessionID := fmt.Sprintf("s-%d", availablePort)
+	password := utils.GenerateRandomPassword(16)
 
-	StartSSHServerForVSCodeConnection(sessionID, fmt.Sprintf(":%d", availablePort))
+	StartSSHServerForVSCodeConnection(sessionID, fmt.Sprintf(":%d", availablePort), password)
 
-	s := VSCodeSessionResponse{ID: sessionID, BindPort: int32(availablePort)}
+	s := VSCodeSessionResponse{ID: sessionID, BindPort: int32(availablePort), Password: password}
 	utils.RespondJSON(w, http.StatusCreated, s)
 }
 

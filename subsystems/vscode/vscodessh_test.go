@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 )
+
 func TestVSCodeSSHServer(t *testing.T) {
 	// This is a placeholder for actual tests.
-	sshServer := StartSSHServerForVSCodeConnection("test-session", ":2222")
+	sshServer := StartSSHServerForVSCodeConnection("test-session", ":2222", "testpassword")
 	if sshServer == nil {
 		t.Fatalf("failed to start SSH server for VSCode connection")
 	}
@@ -21,12 +22,12 @@ func TestVSCodeSSHServer(t *testing.T) {
 	}
 	if !status.Active {
 		t.Fatalf("expected session to be active")
-	}	
+	}
 
 	log.Printf("SSH server for VSCode status: %+v", status)
 
 	err = stopSSHServerBySessionID("test-session")
 	if err != nil {
 		t.Fatalf("failed to stop SSH server for VSCode connection: %v", err)
-	}	
+	}
 }
