@@ -321,6 +321,8 @@ func main() {
 					log.Printf("Connect to agent using the URL: %s", conn.ConnectionURL)
 					log.Printf("DevTunnel ID: %s", conn.DevTunnelInfo.TunnelID)
 					log.Printf("DevTunnel Token: %s", conn.Token)
+					log.Printf("DevTunnel forwarded ports: %v", conn.DevTunnelInfo.Ports)
+					log.Printf("Devtunnel cluster id: %s", conn.DevTunnelInfo.ClusterID)
 					ch <- nil
 				}()
 
