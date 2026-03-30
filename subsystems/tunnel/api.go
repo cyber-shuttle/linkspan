@@ -133,7 +133,7 @@ func ForwardDevTunnelPort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	utils.RespondJSON(w, http.StatusOK, ForwardDevTunnelPortResponse{
+	utils.RespondJSON(w, http.StatusCreated, ForwardDevTunnelPortResponse{
 		TunnelName: req.TunnelName,
 		Port:       req.Port,
 	})
