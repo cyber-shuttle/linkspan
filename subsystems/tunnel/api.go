@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
@@ -34,6 +35,17 @@ type DevTunnelCreateResponse struct {
 	TunnelID      string `json:"tunnelID"`
 	ConnectionURL string `json:"connectionURL,omitempty"`
 	Token         string `json:"token,omitempty"`
+}
+
+type ForwardDevTunnelPortRequest struct {
+	TunnelName string `json:"tunnelName"`
+	Port       int    `json:"port"`
+	Token      string `json:"token"` // AAD Token. Not the host token, but the same token used to create the tunnel which has permissions to add ports.
+}
+
+type ForwardDevTunnelPortResponse struct {
+	TunnelName string `json:"tunnelName"`
+	Port       int    `json:"port"`
 }
 
 // FRPTunnelProxyCreateRequest is the JSON body for POST /tunnels/frp.
@@ -99,6 +111,31 @@ func CreateDevTunnel(w http.ResponseWriter, r *http.Request) {
 		TunnelID:      conn.DevTunnelInfo.TunnelID,
 		ConnectionURL: conn.ConnectionURL,
 		Token:         conn.Token,
+	})
+}
+
+func ForwardDevTunnelPort(w http.ResponseWriter, r *http.Request) {
+	var req ForwardDevTunnelPortRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	_ = r.Body.Close()
+
+	if req.Token == "" {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "AAD token is required"})
+		return
+	}
+
+	log.Printf("Forwarding devtunnel port %v", req)
+	if err := DevTunnelForward(req.TunnelName, req.Port, req.Token); err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	utils.RespondJSON(w, http.StatusOK, ForwardDevTunnelPortResponse{
+		TunnelName: req.TunnelName,
+		Port:       req.Port,
 	})
 }
 
