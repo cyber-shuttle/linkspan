@@ -14,9 +14,10 @@ type VSCodeSessionRequest struct {
 }
 
 type VSCodeSessionResponse struct {
-	ID       string `json:"id"`
-	BindPort int32  `json:"bind_port"`
-	Password string `json:"password,omitempty"` // Password is only returned on creation, not in session status or list responses.
+	ID         string `json:"id"`
+	BindPort   int32  `json:"bind_port"`
+	Password   string `json:"password,omitempty"`    // Password is only returned on creation, not in session status or list responses.
+	PrivateKey string `json:"private_key,omitempty"` // privateKey is not exposed in JSON responses, but stored for SSH server use.
 }
 
 func ListVSCodeSessions(w http.ResponseWriter, r *http.Request) {
@@ -42,9 +43,16 @@ func CreateVSCodeSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := fmt.Sprintf("s-%d", availablePort)
 	password := utils.GenerateRandomPassword(16)
 
-	StartSSHServerForVSCodeConnection(sessionID, fmt.Sprintf(":%d", availablePort), password)
+	// Generate SSH keys for this session (if needed) and start the SSH server
+	privateKey, publicKey, err := utils.GenerateSSHKeyPair()
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
 
-	s := VSCodeSessionResponse{ID: sessionID, BindPort: int32(availablePort), Password: password}
+	StartSSHServerForVSCodeConnection(sessionID, fmt.Sprintf(":%d", availablePort), password, publicKey)
+
+	s := VSCodeSessionResponse{ID: sessionID, BindPort: int32(availablePort), Password: password, PrivateKey: privateKey}
 	utils.RespondJSON(w, http.StatusCreated, s)
 }
 

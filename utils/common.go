@@ -2,13 +2,18 @@ package utils
 
 import (
 	"bufio"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
-	"math/rand"
+	mathrand "math/rand"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // RespondJSON writes a JSON response with the given status code.
@@ -62,14 +67,35 @@ func GenerateRandomPassword(length int) string {
 	return string(b)
 }
 
+func GenerateSSHKeyPair() (privateKeyPEM, publicKeyStr string, err error) {
+	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate ed25519 key: %w", err)
+	}
+
+	privPEM, err := ssh.MarshalPrivateKey(privKey, "")
+	if err != nil {
+		return "", "", fmt.Errorf("failed to marshal private key: %w", err)
+	}
+	privateKeyPEM = string(pem.EncodeToMemory(privPEM))
+
+	sshPub, err := ssh.NewPublicKey(pubKey)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create SSH public key: %w", err)
+	}
+	publicKeyStr = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPub)))
+
+	return privateKeyPEM, publicKeyStr, nil
+}
+
 // NewLockedSource returns a thread-safe random source.
-func NewLockedSource() *rand.Rand {
-	return rand.New(&lockedSource{src: rand.NewSource(rand.Int63())})
+func NewLockedSource() *mathrand.Rand {
+	return mathrand.New(&lockedSource{src: mathrand.NewSource(mathrand.Int63())})
 }
 
 type lockedSource struct {
 	mu  sync.Mutex
-	src rand.Source
+	src mathrand.Source
 }
 
 func (ls *lockedSource) Int63() int64 {

@@ -14,6 +14,7 @@ import (
 	"github.com/creack/pty"
 	"github.com/gliderlabs/ssh"
 	"github.com/pkg/sftp"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 // Simple SSH server with no authentication.
@@ -34,7 +35,7 @@ var (
 
 // StartSSHServerForVSCodeConnection starts an SSH server and registers it for later shutdown.
 // Returns the SSHServer instance so it can be stopped.
-func StartSSHServerForVSCodeConnection(sessionID, addr string, password string) *SSHServer {
+func StartSSHServerForVSCodeConnection(sessionID, addr string, password string, publicKey string) *SSHServer {
 
 	// Session handler: support exec (non-interactive) and a tiny interactive REPL.
 	sessionHandler := func(s ssh.Session) {
@@ -156,10 +157,16 @@ func StartSSHServerForVSCodeConnection(sessionID, addr string, password string) 
 		}
 	}
 
-	// Public key auth: accept any key by default; replace with validation as needed.
+	// Parse the authorized public key for validation.
+	authorizedKey, _, _, _, err := gossh.ParseAuthorizedKey([]byte(publicKey))
+	if err != nil {
+		log.Printf("failed to parse authorized public key: %v", err)
+	}
 	publicKeyHandler := func(ctx ssh.Context, key ssh.PublicKey) bool {
-		// Example: reject all keys. For production, compare against known keys.
-		return false
+		if authorizedKey == nil {
+			return false
+		}
+		return ssh.KeysEqual(key, authorizedKey)
 	}
 
 	// Password auth: accept only the configured password.

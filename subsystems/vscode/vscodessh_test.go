@@ -8,7 +8,7 @@ import (
 
 func TestVSCodeSSHServer(t *testing.T) {
 	// This is a placeholder for actual tests.
-	sshServer := StartSSHServerForVSCodeConnection("test-session", ":2222", "testpassword")
+	sshServer := StartSSHServerForVSCodeConnection("test-session", ":2222", "testpassword", "dummy-private-key")
 	if sshServer == nil {
 		t.Fatalf("failed to start SSH server for VSCode connection")
 	}
