@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/gliderlabs/ssh"
@@ -183,6 +185,14 @@ func StartSSHServerForVSCodeConnection(sessionID, addr string, password string, 
 		Handler:          sessionHandler,
 		PublicKeyHandler: publicKeyHandler,
 		PasswordHandler:  passwordHandler,
+		// Keep a quiet/lagging session alive at the TCP layer; IdleTimeout/MaxTimeout stay unset (0).
+		ConnCallback: func(ctx ssh.Context, conn net.Conn) net.Conn {
+			if tc, ok := conn.(*net.TCPConn); ok {
+				_ = tc.SetKeepAlive(true)
+				_ = tc.SetKeepAlivePeriod(30 * time.Second)
+			}
+			return conn
+		},
 		LocalPortForwardingCallback: func(ctx ssh.Context, dhost string, dport uint32) bool {
 			log.Printf("local port forwarding requested: host=%s port=%d", dhost, dport)
 			return true // Allow all local port forwards
