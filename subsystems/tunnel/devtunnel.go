@@ -62,7 +62,10 @@ func DevTunnelSetup(tunnelName string, expiration string, authToken string, exte
 		return DevTunnelConnection{}, fmt.Errorf("devtunnel setup: get host token for %q: %w", tunnelName, err)
 	}
 
-	cmdID, connectionURL, err := CLIHostTunnel(info.TunnelID, hostToken)
+	// Host by cluster-qualified id so the CLI targets the tunnel's cluster directly; a bare id
+	// makes it search the default cluster and fail with "Login required" for a tunnel created
+	// elsewhere (e.g. by the client).
+	cmdID, connectionURL, err := CLIHostTunnel(info.QualifiedID(), hostToken)
 	if err != nil {
 		return DevTunnelConnection{}, fmt.Errorf("devtunnel setup: start host for %q: %w", tunnelName, err)
 	}
