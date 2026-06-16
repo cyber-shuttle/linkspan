@@ -141,6 +141,17 @@ func SDKCreateTunnel(ctx context.Context, tunnelName string) (*tunnels.Tunnel, e
 	return created, nil
 }
 
+// SDKResolveTunnel fetches an existing tunnel's metadata (id + cluster) by id.
+func SDKResolveTunnel(ctx context.Context, tunnelName string) (*tunnels.Tunnel, error) {
+	sdk, err := requireSDK()
+	if err != nil {
+		return nil, err
+	}
+	sdk.mu.Lock()
+	defer sdk.mu.Unlock()
+	return sdk.resolveTunnel(ctx, tunnelName)
+}
+
 // SDKAddPort registers a port on an existing tunnel via the SDK.
 func SDKAddPort(ctx context.Context, tunnelName string, port int) error {
 	sdk, err := requireSDK()

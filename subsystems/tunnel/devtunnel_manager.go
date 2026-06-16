@@ -15,6 +15,7 @@ type DevTunnelInfo struct {
 	HostCmdID  string // ProcessManager ID of the running host CLI process
 	HostToken  string // cached host-scoped access token for restarts
 	AuthToken  string // Microsoft Entra ID bearer token used to create the tunnel
+	External   bool   // created by the client (cs-bridge); linkspan hosts but never deletes it
 }
 
 // QualifiedID returns the cluster-qualified tunnel ID (e.g. "ls-48.use2")
@@ -119,7 +120,10 @@ func (tm *DevTunnelManager) GetAll() ([]*DevTunnelInfo, error) {
 func (tm *DevTunnelManager) CleanAll(authToken string) error {
 	tm.mu.Lock()
 	names := make([]string, 0, len(tm.tunnels))
-	for name := range tm.tunnels {
+	for name, t := range tm.tunnels {
+		if t.External {
+			continue // client-owned; the client deletes it
+		}
 		names = append(names, name)
 	}
 	tm.mu.Unlock()

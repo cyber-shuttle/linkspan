@@ -56,6 +56,7 @@ func main() {
 	// parse CLI flags
 	tunnelAPI := flag.String("tunnel-api", "devtunnels", "tunnel API provider name (e.g. devtunnels)")
 	tunnelEnable := flag.Bool("tunnel-enable", false, "enable tunnel startup")
+	tunnelID := flag.String("tunnel-id", "", "host this client-created dev tunnel id instead of creating one; the client owns its lifecycle")
 	tunnelAuthToken := flag.String("tunnel-auth-token", "", "Microsoft Entra ID bearer token for the Dev Tunnels service")
 	tunnelRetries := flag.Int("tunnel-retries", 3, "number of retries for tunnel startup")
 	tunnelRetryDelay := flag.Duration("tunnel-retry-delay", 2*time.Second, "delay between tunnel startup retries")
@@ -292,7 +293,11 @@ func main() {
 			log.Fatalf("devtunnel: warning — --tunnel-auth-token not provided; tunnel startup will fail")
 		}
 		go func() {
-			tunnelName := fmt.Sprintf("linkspan-tunnel-%d", time.Now().UnixNano())
+			// Host a client-created tunnel when an id is supplied; otherwise create our own.
+			tunnelName := *tunnelID
+			if tunnelName == "" {
+				tunnelName = fmt.Sprintf("linkspan-tunnel-%d", time.Now().UnixNano())
+			}
 
 			// cleanupAttempt kills any host CLI process and removes the tunnel
 			// from the manager so a timed-out or failed attempt doesn't leak.
@@ -308,13 +313,13 @@ func main() {
 			}
 
 			for attempt := 1; attempt <= *tunnelRetries; attempt++ {
-				log.Printf("devtunnel: attempt %d/%d to create tunnel %s", attempt, *tunnelRetries, tunnelName)
+				log.Printf("devtunnel: attempt %d/%d to bring up tunnel %s", attempt, *tunnelRetries, tunnelName)
 
 				ch := make(chan error, 1)
 				go func() {
-					conn, err := tunnel.DevTunnelCreate(tunnelName, "1d", authToken, serverPort)
+					conn, err := tunnel.DevTunnelSetup(tunnelName, "1d", authToken, *tunnelID != "", serverPort)
 					if err != nil {
-						log.Printf("devtunnel create error: %v", err)
+						log.Printf("devtunnel bring-up error: %v", err)
 						ch <- err
 						return
 					}

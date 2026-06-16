@@ -6,21 +6,24 @@ import (
 	"log"
 )
 
-// DevTunnelCreate creates a tunnel, starts hosting the relay, and forwards the
-// given serverPort so the client can communicate with linkspan immediately.
-// Additional ports (e.g. SSH) can be added later via DevTunnelForward.
-func DevTunnelCreate(tunnelName string, expiration string, authToken string, portsToOpen ...int) (DevTunnelConnection, error) {
-	log.Printf("devtunnel create: creating tunnel %q with expiration %q and ports %v", tunnelName, expiration, portsToOpen)
+// DevTunnelSetup creates a tunnel (or resolves a client-created one when external is true) and
+// hosts the relay, forwarding the given ports. An external tunnel is hosted but never deleted.
+func DevTunnelSetup(tunnelName string, expiration string, authToken string, external bool, portsToOpen ...int) (DevTunnelConnection, error) {
+	log.Printf("devtunnel setup: tunnel %q (external=%v) with expiration %q and ports %v", tunnelName, external, expiration, portsToOpen)
 	if err := InitSDK(authToken); err != nil {
-		return DevTunnelConnection{}, fmt.Errorf("devtunnel create: init SDK: %w", err)
+		return DevTunnelConnection{}, fmt.Errorf("devtunnel setup: init SDK: %w", err)
 	}
 
 	ctx := context.Background()
 
-	// 1. Create the tunnel on the service.
-	sdkTunnel, err := SDKCreateTunnel(ctx, tunnelName)
+	// 1. Resolve the client-created tunnel, or create our own.
+	resolveOrCreate := SDKCreateTunnel
+	if external {
+		resolveOrCreate = SDKResolveTunnel
+	}
+	sdkTunnel, err := resolveOrCreate(ctx, tunnelName)
 	if err != nil {
-		return DevTunnelConnection{}, fmt.Errorf("devtunnel create %q: %w", tunnelName, err)
+		return DevTunnelConnection{}, fmt.Errorf("devtunnel setup %q: %w", tunnelName, err)
 	}
 
 	info := &DevTunnelInfo{
@@ -28,17 +31,18 @@ func DevTunnelCreate(tunnelName string, expiration string, authToken string, por
 		ClusterID:  sdkTunnel.ClusterID,
 		TunnelName: tunnelName,
 		AuthToken:  authToken,
+		External:   external,
 	}
 
 	if _, err := GlobalDevTunnelManager.Register(info); err != nil {
-		log.Printf("devtunnel create: warning — failed to register %q in manager: %v", tunnelName, err)
+		log.Printf("devtunnel setup: warning — failed to register %q in manager: %v", tunnelName, err)
 	}
 
 	// 2c. Register any extra ports (e.g. log stream).
 	for _, p := range portsToOpen {
 		if p > 0 {
 			if err := SDKAddPort(ctx, tunnelName, p); err != nil {
-				return DevTunnelConnection{}, fmt.Errorf("devtunnel create: add extra ports %d to %q: %w", p, tunnelName, err)
+				return DevTunnelConnection{}, fmt.Errorf("devtunnel setup: add extra ports %d to %q: %w", p, tunnelName, err)
 			}
 			info.Ports = append(info.Ports, p)
 		}
@@ -50,12 +54,12 @@ func DevTunnelCreate(tunnelName string, expiration string, authToken string, por
 	// The relay forwards SDK-registered ports automatically.
 	hostToken, err := SDKGetHostToken(ctx, tunnelName)
 	if err != nil {
-		return DevTunnelConnection{}, fmt.Errorf("devtunnel create: get host token for %q: %w", tunnelName, err)
+		return DevTunnelConnection{}, fmt.Errorf("devtunnel setup: get host token for %q: %w", tunnelName, err)
 	}
 
 	cmdID, connectionURL, err := CLIHostTunnel(info.TunnelID, hostToken)
 	if err != nil {
-		return DevTunnelConnection{}, fmt.Errorf("devtunnel create: start host for %q: %w", tunnelName, err)
+		return DevTunnelConnection{}, fmt.Errorf("devtunnel setup: start host for %q: %w", tunnelName, err)
 	}
 
 	info.HostCmdID = cmdID
@@ -69,12 +73,12 @@ func DevTunnelCreate(tunnelName string, expiration string, authToken string, por
 	// 4. Get a connect token for the client side.
 	connectToken, tokenErr := SDKGetConnectToken(ctx, tunnelName)
 	if tokenErr != nil {
-		log.Printf("devtunnel create: warning — could not obtain connect token for %q: %v", tunnelName, tokenErr)
+		log.Printf("devtunnel setup: warning — could not obtain connect token for %q: %v", tunnelName, tokenErr)
 	} else {
 		conn.Token = connectToken
 	}
 
-	log.Printf("devtunnel create: tunnel %q ready (id=%s, url=%s)", tunnelName, sdkTunnel.TunnelID, connectionURL)
+	log.Printf("devtunnel setup: tunnel %q ready (id=%s, url=%s)", tunnelName, sdkTunnel.TunnelID, connectionURL)
 	return conn, nil
 }
 
