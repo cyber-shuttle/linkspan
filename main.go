@@ -57,6 +57,7 @@ func main() {
 	tunnelAPI := flag.String("tunnel-api", "devtunnels", "tunnel API provider name (e.g. devtunnels)")
 	tunnelEnable := flag.Bool("tunnel-enable", false, "enable tunnel startup")
 	tunnelID := flag.String("tunnel-id", "", "host this client-created dev tunnel id instead of creating one; the client owns its lifecycle")
+	tunnelCluster := flag.String("tunnel-cluster", "", "cluster id of the client-created tunnel (required with --tunnel-id to resolve it)")
 	tunnelAuthToken := flag.String("tunnel-auth-token", "", "Microsoft Entra ID bearer token for the Dev Tunnels service")
 	tunnelRetries := flag.Int("tunnel-retries", 3, "number of retries for tunnel startup")
 	tunnelRetryDelay := flag.Duration("tunnel-retry-delay", 2*time.Second, "delay between tunnel startup retries")
@@ -317,7 +318,7 @@ func main() {
 
 				ch := make(chan error, 1)
 				go func() {
-					conn, err := tunnel.DevTunnelSetup(tunnelName, "1d", authToken, *tunnelID != "", serverPort)
+					conn, err := tunnel.DevTunnelSetup(tunnelName, "1d", authToken, *tunnelID != "", *tunnelCluster, serverPort)
 					if err != nil {
 						log.Printf("devtunnel bring-up error: %v", err)
 						ch <- err

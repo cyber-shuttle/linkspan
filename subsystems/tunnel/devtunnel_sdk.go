@@ -141,15 +141,16 @@ func SDKCreateTunnel(ctx context.Context, tunnelName string) (*tunnels.Tunnel, e
 	return created, nil
 }
 
-// SDKResolveTunnel fetches an existing tunnel's metadata (id + cluster) by id.
-func SDKResolveTunnel(ctx context.Context, tunnelName string) (*tunnels.Tunnel, error) {
+// SDKResolveTunnel fetches an existing tunnel's metadata (id + cluster) by id, querying the
+// given cluster (required for a tunnel created in another cluster, e.g. by the client).
+func SDKResolveTunnel(ctx context.Context, tunnelName, clusterID string) (*tunnels.Tunnel, error) {
 	sdk, err := requireSDK()
 	if err != nil {
 		return nil, err
 	}
 	sdk.mu.Lock()
 	defer sdk.mu.Unlock()
-	return sdk.resolveTunnel(ctx, tunnelName)
+	return sdk.resolveTunnel(ctx, tunnelName, clusterID)
 }
 
 // SDKAddPort registers a port on an existing tunnel via the SDK.
@@ -162,7 +163,7 @@ func SDKAddPort(ctx context.Context, tunnelName string, port int) error {
 	sdk.mu.Lock()
 	defer sdk.mu.Unlock()
 
-	t, err := sdk.resolveTunnel(ctx, tunnelName)
+	t, err := sdk.resolveTunnel(ctx, tunnelName, "")
 	if err != nil {
 		return fmt.Errorf("devtunnel sdk: resolve tunnel %q for port add: %w", tunnelName, err)
 	}
@@ -409,7 +410,7 @@ func sdkGetToken(ctx context.Context, tunnelName string, scope tunnels.TunnelAcc
 	sdk.mu.Lock()
 	defer sdk.mu.Unlock()
 
-	t, err := sdk.resolveTunnel(ctx, tunnelName)
+	t, err := sdk.resolveTunnel(ctx, tunnelName, "")
 	if err != nil {
 		return "", err
 	}
@@ -432,13 +433,14 @@ func sdkGetToken(ctx context.Context, tunnelName string, scope tunnels.TunnelAcc
 // resolveTunnel looks up the Tunnel object by logical name (which equals the tunnel ID)
 // from the local cache; if not found it falls back to a network request.
 // Must be called with sdk.mu held.
-func (sdk *DevTunnelSDKManager) resolveTunnel(ctx context.Context, tunnelName string) (*tunnels.Tunnel, error) {
+func (sdk *DevTunnelSDKManager) resolveTunnel(ctx context.Context, tunnelName, clusterHint string) (*tunnels.Tunnel, error) {
 	if t, ok := sdk.sdkTunnels[tunnelName]; ok {
 		return t, nil
 	}
 
-	// Not in cache — query by tunnel ID (we derive the ID from the name).
-	probe := &tunnels.Tunnel{TunnelID: generateID(tunnelName)}
+	// Not in cache — query by tunnel ID (we derive the ID from the name). The cluster hint
+	// targets the tunnel's home cluster; the global endpoint 404s for a tunnel created elsewhere.
+	probe := &tunnels.Tunnel{TunnelID: generateID(tunnelName), ClusterID: clusterHint}
 	t, err := sdk.getTunnelHTTP(ctx, probe, nil)
 	if err != nil {
 		return nil, fmt.Errorf("devtunnel sdk: resolve tunnel %q: %w", tunnelName, err)

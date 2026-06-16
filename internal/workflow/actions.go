@@ -53,7 +53,7 @@ func actionDevTunnelCreate(params map[string]any) (*ActionResult, error) {
 		}
 	}
 
-	conn, err := tunnel.DevTunnelSetup(tunnelName, expiration, authToken, false, ports...)
+	conn, err := tunnel.DevTunnelSetup(tunnelName, expiration, authToken, false, "", ports...)
 	if err != nil {
 		return nil, err
 	}
