@@ -16,7 +16,7 @@ func (d *DevTunnelProvider) Create(ctx context.Context, opts CreateOpts) (*Tunne
 		return nil, fmt.Errorf("devtunnel: auth_token is required")
 	}
 
-	conn, err := DevTunnelSetup(opts.Name, opts.Expiration, opts.AuthToken, false, opts.Ports...)
+	conn, err := DevTunnelSetup(opts.Name, opts.Expiration, opts.AuthToken, false, "", opts.Ports...)
 	if err != nil {
 		return nil, err
 	}

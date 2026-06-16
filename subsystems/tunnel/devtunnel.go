@@ -4,24 +4,29 @@ import (
 	"context"
 	"fmt"
 	"log"
+
+	tunnels "github.com/microsoft/dev-tunnels/go/tunnels"
 )
 
-// DevTunnelSetup creates a tunnel (or resolves a client-created one when external is true) and
-// hosts the relay, forwarding the given ports. An external tunnel is hosted but never deleted.
-func DevTunnelSetup(tunnelName string, expiration string, authToken string, external bool, portsToOpen ...int) (DevTunnelConnection, error) {
-	log.Printf("devtunnel setup: tunnel %q (external=%v) with expiration %q and ports %v", tunnelName, external, expiration, portsToOpen)
+// DevTunnelSetup creates a tunnel (or resolves a client-created one in clusterID when external is
+// true) and hosts the relay, forwarding the given ports. An external tunnel is hosted but never
+// deleted.
+func DevTunnelSetup(tunnelName string, expiration string, authToken string, external bool, clusterID string, portsToOpen ...int) (DevTunnelConnection, error) {
+	log.Printf("devtunnel setup: tunnel %q (external=%v, cluster=%q) with expiration %q and ports %v", tunnelName, external, clusterID, expiration, portsToOpen)
 	if err := InitSDK(authToken); err != nil {
 		return DevTunnelConnection{}, fmt.Errorf("devtunnel setup: init SDK: %w", err)
 	}
 
 	ctx := context.Background()
 
-	// 1. Resolve the client-created tunnel, or create our own.
-	resolveOrCreate := SDKCreateTunnel
-	if external {
-		resolveOrCreate = SDKResolveTunnel
+	// 1. Resolve the client-created tunnel (in its cluster), or create our own.
+	resolve := func() (*tunnels.Tunnel, error) {
+		if external {
+			return SDKResolveTunnel(ctx, tunnelName, clusterID)
+		}
+		return SDKCreateTunnel(ctx, tunnelName)
 	}
-	sdkTunnel, err := resolveOrCreate(ctx, tunnelName)
+	sdkTunnel, err := resolve()
 	if err != nil {
 		return DevTunnelConnection{}, fmt.Errorf("devtunnel setup %q: %w", tunnelName, err)
 	}
