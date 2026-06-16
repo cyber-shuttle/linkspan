@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-
-	pm "github.com/cyber-shuttle/linkspan/internal/process"
 )
 
 // DevTunnelCreate creates a tunnel, starts hosting the relay, and forwards the
@@ -80,9 +78,8 @@ func DevTunnelCreate(tunnelName string, expiration string, authToken string, por
 	return conn, nil
 }
 
-// DevTunnelForward adds port forwarding to an existing hosted tunnel.
-// It registers the port via the SDK, then restarts the host CLI with the
-// updated port list so traffic is actually forwarded.
+// DevTunnelForward registers a new port on an existing tunnel. The running host picks it up
+// dynamically (the client refreshes ports on connect), so no rehost is needed. Idempotent.
 func DevTunnelForward(tunnelName string, port int, authToken string) error {
 	if err := InitSDK(authToken); err != nil {
 		return fmt.Errorf("devtunnel forward: init SDK: %w", err)
@@ -109,29 +106,6 @@ func DevTunnelForward(tunnelName string, port int, authToken string) error {
 
 	if err := GlobalDevTunnelManager.AddPort(tunnelName, port); err != nil {
 		return fmt.Errorf("devtunnel forward: record port: %w", err)
-	}
-
-	// Restart the host CLI so the relay picks up the newly registered port.
-	// No -p flags needed — ports are registered via SDK and forwarded by the relay.
-	if devTunInfo.HostCmdID != "" {
-		log.Printf("devtunnel forward: restarting host for %q", tunnelName)
-		if err := pm.GlobalProcessManager.Kill(devTunInfo.HostCmdID); err != nil {
-			log.Printf("devtunnel forward: failed to kill old host process %s: %v", devTunInfo.HostCmdID, err)
-		}
-
-		hostToken := devTunInfo.HostToken
-		if hostToken == "" {
-			hostToken, err = SDKGetHostToken(ctx, tunnelName)
-			if err != nil {
-				return fmt.Errorf("devtunnel forward: get host token for %q: %w", tunnelName, err)
-			}
-		}
-
-		cmdID, _, err := CLIHostTunnel(devTunInfo.TunnelID, hostToken)
-		if err != nil {
-			return fmt.Errorf("devtunnel forward: restart host for %q: %w", tunnelName, err)
-		}
-		_ = GlobalDevTunnelManager.UpdateHostCmd(tunnelName, cmdID)
 	}
 
 	log.Printf("devtunnel forward: port %d now forwarded on %q", port, tunnelName)
