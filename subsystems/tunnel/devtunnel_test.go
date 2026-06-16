@@ -7,6 +7,20 @@ import (
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
 )
 
+// CleanAll must not delete client-owned (External) tunnels.
+func TestCleanAllSkipsExternalTunnels(t *testing.T) {
+	const name = "test-external-tunnel"
+	GlobalDevTunnelManager.Register(&DevTunnelInfo{TunnelName: name, TunnelID: name, External: true})
+	defer GlobalDevTunnelManager.Remove(name)
+
+	if err := GlobalDevTunnelManager.CleanAll("fake-token"); err != nil {
+		t.Fatalf("CleanAll: %v", err)
+	}
+	if _, err := GlobalDevTunnelManager.Find(name); err != nil {
+		t.Error("external tunnel was removed by CleanAll; it must be left for the client to delete")
+	}
+}
+
 // authTokenForTest reads the dev-tunnel auth token from the DEVTUNNEL_AUTH_TOKEN
 // environment variable.  Tests that require a real token are skipped when the
 // variable is not set so that CI stays green without live credentials.
@@ -30,7 +44,7 @@ func TestDevTunnelCreateAndHost(t *testing.T) {
 		}
 	}()
 
-	conn, err := DevTunnelCreate(tunnelName, "1d", authToken, 8080, 0)
+	conn, err := DevTunnelSetup(tunnelName, "1d", authToken, false, 8080, 0)
 	if err != nil {
 		t.Fatalf("failed to create dev tunnel: %v", err)
 	}
@@ -51,7 +65,7 @@ func TestDevTunnelCreateNoPort(t *testing.T) {
 	authToken := authTokenForTest(t)
 	tunnelName := "test-tunnel-noport"
 
-	conn, err := DevTunnelCreate(tunnelName, "1d", authToken, 0, 0)
+	conn, err := DevTunnelSetup(tunnelName, "1d", authToken, false, 0, 0)
 	if err != nil {
 		t.Fatalf("failed to create dev tunnel: %v", err)
 	}
