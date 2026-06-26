@@ -21,7 +21,7 @@ type VSCodeSessionResponse struct {
 }
 
 func ListVSCodeSessions(w http.ResponseWriter, r *http.Request) {
-	sessions := listAllSessions()
+	sessions := listAllSessionStatuses()
 	utils.RespondJSON(w, http.StatusOK, sessions)
 }
 
