@@ -3,7 +3,10 @@ package vscode
 import (
 	"bytes"
 	"io"
+	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -159,7 +162,7 @@ func TestNewServerWiring(t *testing.T) {
 		srv.ConnCallback == nil || srv.LocalPortForwardingCallback == nil || srv.ReversePortForwardingCallback == nil {
 		t.Fatal("a server handler/callback was left unwired")
 	}
-	for _, k := range []string{"session", "direct-tcpip"} {
+	for _, k := range []string{"session", "direct-tcpip", "direct-streamlocal@openssh.com"} {
 		if srv.ChannelHandlers[k] == nil {
 			t.Fatalf("missing channel handler %q", k)
 		}
@@ -171,6 +174,60 @@ func TestNewServerWiring(t *testing.T) {
 	}
 	if srv.SubsystemHandlers["sftp"] == nil {
 		t.Fatal("missing sftp subsystem handler")
+	}
+}
+
+// TestDirectStreamLocalForwarding round-trips bytes through a direct-streamlocal
+// channel to a unix-socket echo server — the path VS Code's
+// remoteServerListenOnSocket mode depends on.
+func TestDirectStreamLocalForwarding(t *testing.T) {
+	dir, err := os.MkdirTemp("", "sl") // not t.TempDir: macOS caps socket paths at 104 chars
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	ul, err := net.Listen("unix", filepath.Join(dir, "e.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ul.Close()
+	go func() {
+		if c, err := ul.Accept(); err == nil {
+			defer c.Close()
+			_, _ = io.Copy(c, c)
+		}
+	}()
+
+	srv := newServer("127.0.0.1:0", withAuth("dummy-key", "pw"), withForwarding())
+	tl, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Serve(tl) }()
+	defer srv.Close()
+
+	client, err := gossh.Dial("tcp", tl.Addr().String(), &gossh.ClientConfig{
+		User: "t", Auth: []gossh.AuthMethod{gossh.Password("pw")}, HostKeyCallback: gossh.InsecureIgnoreHostKey(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	ch, reqs, err := client.OpenChannel("direct-streamlocal@openssh.com",
+		gossh.Marshal(streamLocalChannelData{SocketPath: ul.Addr().String()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	go gossh.DiscardRequests(reqs)
+	defer ch.Close()
+
+	buf := make([]byte, 4)
+	if _, err := ch.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(ch, buf); err != nil || string(buf) != "ping" {
+		t.Fatalf("echo round-trip failed: err=%v got=%q", err, buf)
 	}
 }
 
