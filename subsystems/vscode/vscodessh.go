@@ -73,12 +73,14 @@ func withSubsystem(name string, h func(ssh.Session)) serverOption {
 	return func(srv *ssh.Server) { srv.SubsystemHandlers[name] = recoverSessionHandler(name, h) }
 }
 
-// withForwarding allows client local (direct-tcpip) and reverse (tcpip-forward)
-// port forwards. ForwardedTCPHandler holds per-server state, so it is per build.
+// withForwarding allows client local (direct-tcpip), unix-socket
+// (direct-streamlocal), and reverse (tcpip-forward) port forwards.
+// ForwardedTCPHandler holds per-server state, so it is per build.
 func withForwarding() serverOption {
 	return func(srv *ssh.Server) {
 		fwd := &ssh.ForwardedTCPHandler{}
 		srv.ChannelHandlers["direct-tcpip"] = recoverChannelHandler("direct-tcpip", ssh.DirectTCPIPHandler)
+		srv.ChannelHandlers["direct-streamlocal@openssh.com"] = recoverChannelHandler("direct-streamlocal", directStreamLocalHandler)
 		srv.LocalPortForwardingCallback = func(ctx ssh.Context, dhost string, dport uint32) bool {
 			log.Printf("local port forwarding requested: host=%s port=%d", dhost, dport)
 			return true
@@ -90,6 +92,37 @@ func withForwarding() serverOption {
 		srv.RequestHandlers["tcpip-forward"] = recoverRequestHandler("tcpip-forward", fwd.HandleSSHRequest)
 		srv.RequestHandlers["cancel-tcpip-forward"] = recoverRequestHandler("cancel-tcpip-forward", fwd.HandleSSHRequest)
 	}
+}
+
+// streamLocalChannelData is the direct-streamlocal@openssh.com open payload (OpenSSH PROTOCOL).
+type streamLocalChannelData struct {
+	SocketPath string
+	Reserved0  string
+	Reserved1  uint32
+}
+
+// directStreamLocalHandler bridges a channel to a local unix socket — OpenSSH's
+// AllowStreamLocalForwarding; VS Code's remoteServerListenOnSocket needs it.
+func directStreamLocalHandler(srv *ssh.Server, conn *gossh.ServerConn, newChan gossh.NewChannel, ctx ssh.Context) {
+	var d streamLocalChannelData
+	if err := gossh.Unmarshal(newChan.ExtraData(), &d); err != nil {
+		newChan.Reject(gossh.ConnectionFailed, err.Error())
+		return
+	}
+	log.Printf("streamlocal forwarding requested: path=%s", d.SocketPath)
+	dconn, err := net.Dial("unix", d.SocketPath)
+	if err != nil {
+		newChan.Reject(gossh.ConnectionFailed, err.Error())
+		return
+	}
+	ch, reqs, err := newChan.Accept()
+	if err != nil {
+		dconn.Close()
+		return
+	}
+	go gossh.DiscardRequests(reqs)
+	safeGo("streamlocal copy", func() { defer ch.Close(); defer dconn.Close(); _, _ = io.Copy(dconn, ch) })
+	safeGo("streamlocal copy", func() { defer ch.Close(); defer dconn.Close(); _, _ = io.Copy(ch, dconn) })
 }
 
 // withKeepAlive keeps a quiet session alive at the TCP layer; IdleTimeout and
