@@ -24,6 +24,14 @@ goreleaser release --snapshot --clean  # Local snapshot build
 ./linkspan --port 8080                          # HTTP server only
 ./linkspan --workflow examples/cs-bridge-workflow.yaml --tunnel-auth-token "$TOKEN"
 ./linkspan --port 0                             # OS-assigned random port
+./linkspan --socket /tmp/linkspan.sock          # also serve on a unix socket
+```
+
+The `--socket` path lets you reach the agent from within the cluster without a
+tunnel or a shared TCP port — from a login node, address the job's node with:
+
+```bash
+srun --jobid=<JOBID> --overlap curl --unix-socket /tmp/linkspan.sock http://localhost/api/v1/health
 ```
 
 ## Architecture
@@ -79,6 +87,7 @@ Step failure halts workflow but HTTP server keeps running. Status at `/api/v1/st
 |------|---------|-------------|
 | `--port` | 8080 | HTTP server port (0=random) |
 | `--host` | 0.0.0.0 | HTTP bind address |
+| `--socket` | — | Additional unix socket path to serve on (for `srun --jobid` in-cluster access) |
 | `--workflow` | — | YAML workflow path (`-` for stdin) |
 | `--tunnel-api` | devtunnels | Tunnel provider name |
 | `--tunnel-auth-token` | — | Microsoft Entra ID bearer token |
