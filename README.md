@@ -62,6 +62,7 @@ This starts the REST API without running any workflow.
 |------|---------|-------------|
 | `--port` | `8080` | HTTP server port (`0` = random) |
 | `--host` | `0.0.0.0` | HTTP server bind address |
+| `--socket` | | Also serve on this unix socket path (in-cluster access via `srun --jobid`) |
 | `--workflow` | | Workflow YAML file path (`-` for stdin) |
 | `--tunnel-auth-token` | | Microsoft Entra ID bearer token for Dev Tunnels |
 | `--tunnel-enable` | `false` | Enable standalone tunnel startup (outside workflow) |

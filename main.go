@@ -64,6 +64,7 @@ func main() {
 	tunnelAttemptTimeout := flag.Duration("tunnel-attempt-timeout", 10*time.Second, "timeout per tunnel setup attempt")
 	serverPortFlag := flag.Int("port", 8080, "port for the HTTP server to listen on")
 	serverHostFlag := flag.String("host", "0.0.0.0", "host/IP for the HTTP server to bind to")
+	socketPath := flag.String("socket", "", "also listen on this unix socket path (in-cluster access via `srun --jobid`)")
 	workflowFile := flag.String("workflow", "", "path to workflow YAML file")
 	vfsMode := flag.String("vfs-mode", "", "VFS mode: 'sync' or 'mount' (also reads CS_VFS_MODE env)")
 	vfsSessionID := flag.String("vfs-session-id", "", "session ID for VFS (also reads CS_SESSION_ID env)")
@@ -259,6 +260,13 @@ func main() {
 	}
 	log.Printf("listening on %s:%d", serverHost, serverPort)
 
+	if *socketPath != "" {
+		if _, err := listenUnix(srv, *socketPath); err != nil {
+			log.Fatalf("failed to listen on unix socket %s: %v", *socketPath, err)
+		}
+		log.Printf("also listening on unix socket %s", *socketPath)
+	}
+
 	// Run workflow if specified. Use "-" to read from stdin.
 	if *workflowFile != "" {
 		var wf *workflow.WorkflowConfig
@@ -392,6 +400,21 @@ func main() {
 	cleanupResources()
 
 	log.Println("Server gracefully stopped.")
+}
+
+// listenUnix serves srv on a unix socket in a background goroutine.
+func listenUnix(srv *http.Server, path string) (net.Listener, error) {
+	os.Remove(path) // clear a stale socket; bind fails if the path exists
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			log.Printf("unix socket server error: %v", err)
+		}
+	}()
+	return ln, nil
 }
 
 // devtunnelAuthTokenForCleanup holds the auth token supplied at startup so the
