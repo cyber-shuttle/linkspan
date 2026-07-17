@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"runtime"
 	"sync"
@@ -21,6 +22,7 @@ type ManagedProcess struct {
 	done         chan error
 	Completed    bool
 	ProcessError error
+	printLive    bool
 }
 
 // ProcessManager stores running processes and provides control operations.
@@ -50,7 +52,7 @@ func (pm *ProcessManager) GetInfo(id string) (ManagedProcess, error) {
 
 // Start registers and starts the given *exec.Cmd asynchronously and returns an id.
 // The caller can later call Kill/Interrupt/GetOutput using the returned id.
-func (pm *ProcessManager) Start(cmd *exec.Cmd) (string, error) {
+func (pm *ProcessManager) Start(cmd *exec.Cmd, printLive bool) (string, error) {
 	if cmd == nil {
 		return "", fmt.Errorf("nil cmd")
 	}
@@ -65,6 +67,7 @@ func (pm *ProcessManager) Start(cmd *exec.Cmd) (string, error) {
 		done:         make(chan error, 1),
 		Completed:    false,
 		ProcessError: nil,
+		printLive:    printLive,
 	}
 
 	// set up pipes
@@ -85,12 +88,20 @@ func (pm *ProcessManager) Start(cmd *exec.Cmd) (string, error) {
 	// copy output asynchronously
 	go func() {
 		defer stdoutPipe.Close()
-		defer stderrPipe.Close()
-		// copy stdout
-		_, _ = io.Copy(mp.Stdout, stdoutPipe)
+		if mp.printLive {
+			_, _ = io.Copy(io.MultiWriter(mp.Stdout, os.Stdout), stdoutPipe)
+		} else {
+			_, _ = io.Copy(mp.Stdout, stdoutPipe)
+		}
 	}()
+
 	go func() {
-		_, _ = io.Copy(mp.Stderr, stderrPipe)
+		defer stderrPipe.Close()
+		if mp.printLive {
+			_, _ = io.Copy(io.MultiWriter(mp.Stderr, os.Stderr), stderrPipe)
+		} else {
+			_, _ = io.Copy(mp.Stderr, stderrPipe)
+		}
 	}()
 
 	// wait in background

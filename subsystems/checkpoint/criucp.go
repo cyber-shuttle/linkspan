@@ -65,7 +65,7 @@ func (c *CriuCheckpointer) CheckpointProcess(internalProcessId string) (string, 
 	cmd := exec.Command("sh", "-c", cmdStr)
 
 	// Execute the CRIU command
-	criuProcess, err := pm.GlobalProcessManager.Start(cmd)
+	criuProcess, err := pm.GlobalProcessManager.Start(cmd, true)
 	if err != nil {
 		return "", fmt.Errorf("failed to start CRIU process: %v", err)
 	}
@@ -91,7 +91,7 @@ func (c *CriuCheckpointer) RestoreProcess(internalProcessId string) (string, err
 	cmd := exec.Command("sh", "-c", cmdStr)
 
 	// Execute the CRIU command
-	criuProcess, err := pm.GlobalProcessManager.Start(cmd)
+	criuProcess, err := pm.GlobalProcessManager.Start(cmd, true)
 	if err != nil {
 		return "", fmt.Errorf("failed to start CRIU restore process: %v", err)
 	}

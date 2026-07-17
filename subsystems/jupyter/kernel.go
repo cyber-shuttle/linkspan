@@ -50,12 +50,12 @@ func startKernelWithVenv(kernelName string, venvPath string) (string, int, error
 	)
 
 	// start the kernel process (register with GlobalProcessManager so we can control it later)
-	id, err := pm.GlobalProcessManager.Start(cmd)
+	id, err := pm.GlobalProcessManager.Start(cmd, true)
 	if err != nil {
 		log.Printf("failed to start kernel process: %v", err)
 		return "", 0, err
 	}
-	
+
 	log.Printf("cspyk-kernel started with id=%s pid=%d", id, cmd.Process.Pid)
 
 	time.Sleep(2 * time.Second)

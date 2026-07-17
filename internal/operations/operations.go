@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/cyber-shuttle/linkspan/internal/config"
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
+	"github.com/cyber-shuttle/linkspan/subsystems/fork"
 	"github.com/cyber-shuttle/linkspan/subsystems/mount"
 	"github.com/cyber-shuttle/linkspan/subsystems/tunnel"
 	"github.com/cyber-shuttle/linkspan/subsystems/vscode"
@@ -135,6 +136,7 @@ func ProcessCommandArguments(c config.LinkspanConfig) error {
 func CleanupResources(c config.LinkspanConfig) {
 	log.Println("Cleaning up resources before shutdown...")
 	mount.CleanupAll()
+	fork.GlobalForkProcessManager.KillAllForkProcesses()
 	pm.GlobalProcessManager.KillAll()
 	tunnel.GlobalDevTunnelManager.CleanAll(c.TunnelAuthToken)
 	tunnel.DeleteAllFRPTunnels()
