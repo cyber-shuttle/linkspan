@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/cyber-shuttle/linkspan/utils"
+	"github.com/cyber-shuttle/linkspan/internal/utils"
 	"github.com/gorilla/mux"
 )
 

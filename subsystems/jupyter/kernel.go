@@ -9,8 +9,8 @@ import (
 	"time"
 
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
+	"github.com/cyber-shuttle/linkspan/internal/utils"
 	venv "github.com/cyber-shuttle/linkspan/subsystems/env/venv"
-	"github.com/cyber-shuttle/linkspan/utils"
 )
 
 func startKernelWithVenv(kernelName string, venvPath string) (string, int, error) {
