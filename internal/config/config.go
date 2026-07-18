@@ -26,6 +26,9 @@ type LinkspanConfig struct {
 	BuiltBy string `yaml:"built_by"`
 	Date    string `yaml:"date"`
 	Version string `yaml:"version"`
+
+	ForkCommand              string `yaml:"fork_command"`
+	ShutdownOnForkCompletion bool   `yaml:"shutdown_on_fork_completion"`
 }
 
 func NewDefaultLinkspanConfig() *LinkspanConfig {
@@ -44,5 +47,7 @@ func NewDefaultLinkspanConfig() *LinkspanConfig {
 		TunnelRetries:            3,
 		TunnelRetryDelay:         2 * time.Second,
 		TunnelAttemptTimeout:     10 * time.Second,
+		ForkCommand:              "",
+		ShutdownOnForkCompletion: false,
 	}
 }

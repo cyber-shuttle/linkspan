@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"strconv"
 	"time"
 )
 
@@ -89,7 +90,7 @@ func StartAPIDevTunnel(tunnelToken string, tunnelID string,
 	return nil
 }
 
-func ProcessCommandArguments(c config.LinkspanConfig) error {
+func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	versionFlag := flag.Bool("version", false, "print version information and exit")
 	verboseVersionFlag := flag.Bool("verbose-version", false, "print verbose version information and exit")
 
@@ -103,7 +104,15 @@ func ProcessCommandArguments(c config.LinkspanConfig) error {
 	tunnelAttemptTimeout := flag.Duration("tunnel-attempt-timeout", 10*time.Second, "timeout per tunnel setup attempt")
 	serverPortFlag := flag.Int("port", 8080, "port for the HTTP server to listen on")
 	serverHostFlag := flag.String("host", "0.0.0.0", "host/IP for the HTTP server to bind to")
+	forkCommand := flag.String("fork-command", "", "command to execute as a fork process")
+	shutdownOnForkCompletionFlag := flag.String("shutdown-on-fork-completion", "false", "gracefully shutdown when fork process completes (true/false)")
 	flag.Parse()
+
+	// Parse boolean flag
+	shutdownOnForkCompletion, err := strconv.ParseBool(*shutdownOnForkCompletionFlag)
+	if err != nil {
+		log.Fatalf("invalid value for --shutdown-on-fork-completion: %s (expected true or false)", *shutdownOnForkCompletionFlag)
+	}
 
 	c.TunnelApi = *tunnelAPI
 	c.EnableAPITunnelAtStartup = *tunnelEnable
@@ -115,7 +124,8 @@ func ProcessCommandArguments(c config.LinkspanConfig) error {
 	c.TunnelAttemptTimeout = *tunnelAttemptTimeout
 	c.ServerPort = *serverPortFlag
 	c.ServerHost = *serverHostFlag
-
+	c.ForkCommand = *forkCommand
+	c.ShutdownOnForkCompletion = shutdownOnForkCompletion
 	if *versionFlag {
 		fmt.Printf("%s\n", c.Version)
 		os.Exit(0)
@@ -131,6 +141,23 @@ func ProcessCommandArguments(c config.LinkspanConfig) error {
 		os.Exit(0)
 	}
 	return nil
+}
+
+// StartForkProcess starts a fork process if a command is provided in the config.
+// Returns the process ID if started, or empty string if not started.
+func StartForkProcess(c config.LinkspanConfig) (string, error) {
+	if c.ForkCommand == "" {
+		return "", nil
+	}
+
+	log.Printf("Starting fork process: %s with shutdown on completion: %v", c.ForkCommand, c.ShutdownOnForkCompletion)
+	fp, err := fork.GlobalForkProcessManager.RunForkProcess(c.ForkCommand, c.ShutdownOnForkCompletion)
+	if err != nil {
+		return "", fmt.Errorf("failed to start fork process: %w", err)
+	}
+
+	log.Printf("Fork process started with ID: %s (shutdown on completion: %v)", fp.InternalProcessId, fp.ShutdownOnCompletion)
+	return fp.InternalProcessId, nil
 }
 
 func CleanupResources(c config.LinkspanConfig) {

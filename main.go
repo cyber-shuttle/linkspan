@@ -41,7 +41,7 @@ func main() {
 	c.BuiltBy = builtBy
 	c.Date = date
 	c.Version = version
-	ops.ProcessCommandArguments(*c)
+	ops.ProcessCommandArguments(c)
 
 	// Install log broadcaster so connected clients receive log output in
 	// real time.  Must happen before any log.* calls.
@@ -93,6 +93,15 @@ func main() {
 	} else if apiTunnelType == "devtunnels" {
 		log.Println("devtunnel startup skipped (disabled via flag)")
 	}
+
+	// Start fork process if specified
+	if c.ForkCommand != "" {
+		_, err := ops.StartForkProcess(*c)
+		if err != nil {
+			log.Fatalf("failed to start fork process: %v", err)
+		}
+	}
+
 	// Run server
 	serverErr := make(chan error, 1)
 	go func() {
