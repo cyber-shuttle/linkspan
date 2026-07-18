@@ -102,11 +102,32 @@ func main() {
 		log.Printf("also listening on unix socket %s", c.SocketPath)
 	}
 
+	if c.RestorePath != "" && c.ForkCommand != "" {
+		log.Fatalf("Can not perform restore and fork execution at same time")
+	}
+
+	if c.RestorePath != "" {
+		log.Printf("Restoring from path %s", c.RestorePath)
+		cp := &checkpoint.CriuCheckpointer{CriuPath: c.CRIUPath, SupportGpuCheckpoint: c.SupportGpuCheckpoint,
+			AdditionalCriuOpts: c.AdditionalCriuOpts, DumpDirRoot: c.DumpDirRoot}
+		intProcess, err := cp.RestoreProcess(c.RestorePath, c.ShutdownOnForkCompletion)
+
+		if err != nil {
+			log.Fatalf("Failed to restore process from path %s: %v", c.RestorePath, err)
+		}
+
+		if c.CheckpointForkAfterDelay > 0 {
+			log.Printf("waiting %d seconds before checkpointing restored process %s", c.CheckpointForkAfterDelay, intProcess.InternalProcessId)
+			cp.CheckpointProcessAfterDelay(intProcess, c.CheckpointForkAfterDelay)
+		}
+		log.Printf("Restore completed successfully")
+	}
+
 	// Start fork process if specified
 	if c.ForkCommand != "" {
 		internalProcessId, err := ops.StartForkProcess(*c)
 		if err != nil {
-			log.Fatalf("failed to start fork process: %v", err)
+			log.Fatalf("Failed to start fork process: %v", err)
 		}
 
 		if c.CheckpointForkAfterDelay > 0 && c.CRIUPath != "" {

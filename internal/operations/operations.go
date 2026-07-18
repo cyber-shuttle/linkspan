@@ -113,6 +113,7 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	additionalCriuOptsFlag := flag.String("additional-criu-opts", "", "comma-separated list of additional CRIU options")
 	dumpDirRoot := flag.String("dump-dir-root", "/tmp/linkspan_dumps", "root directory for CRIU checkpoint dumps")
 	checkpointForkAfterDelay := flag.Int64("checkpoint-fork-after-delay", 0, "delay in seconds after fork process start before triggering checkpoint")
+	restorePath := flag.String("restore-path", "", "path to the restore directory")
 	flag.Parse()
 
 	// Parse boolean flags
@@ -147,6 +148,7 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	c.ServerHost = *serverHostFlag
 	c.ForkCommand = *forkCommand
 	c.ShutdownOnForkCompletion = shutdownOnForkCompletion
+	c.RestorePath = *restorePath
 	c.SocketPath = *socketPath
 	c.CRIUPath = *criuPath
 	c.SupportGpuCheckpoint = supportGpuCheckpoint

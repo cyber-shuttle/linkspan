@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/cyber-shuttle/linkspan/internal/controller"
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
 )
 
@@ -103,7 +104,7 @@ func (c *CriuCheckpointer) CheckpointProcess(internalProcessId string) (string, 
 	return criuProcess, nil
 }
 
-func (c *CriuCheckpointer) RestoreProcess(internalProcessId string) (string, error) {
+func (c *CriuCheckpointer) RestoreProcess(internalProcessId string, shutdownOnCompletion bool) (string, error) {
 	// Check if CRIU is installed and available in the system path
 	if err := c.CRIUCheck(); err != nil {
 		return "", err
@@ -125,6 +126,25 @@ func (c *CriuCheckpointer) RestoreProcess(internalProcessId string) (string, err
 	}
 
 	log.Printf("CRIU restore process started with ID: %s", criuProcess)
+
+	proc, err := pm.GlobalProcessManager.GetInfo(criuProcess)
+	if err != nil {
+		return "", fmt.Errorf("failed to get process info: %v", err)
+	}
+
+	go func() {
+		done := <-proc.Done
+		if done != nil {
+			log.Printf("Restore process %s completed with error: %v", internalProcessId, done)
+		} else {
+			log.Printf("Restore process %s completed successfully", internalProcessId)
+		}
+
+		if shutdownOnCompletion {
+			log.Printf("Restore process %s requested shutdown on completion", internalProcessId)
+			controller.TriggerShutdown(fmt.Sprintf("Restore process %s completed", internalProcessId))
+		}
+	}()
 
 	return criuProcess, nil
 }
