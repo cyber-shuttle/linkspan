@@ -5,27 +5,55 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"time"
 
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
 )
 
 type CriuCheckpointer struct {
-	criuPath             string
-	supportGpuCheckpoint bool
-	additionalCriuOpts   []string
-	dumpDirRoot          string
+	CriuPath             string
+	SupportGpuCheckpoint bool
+	AdditionalCriuOpts   []string
+	DumpDirRoot          string
 }
 
 func (c *CriuCheckpointer) CRIUCheck() error {
 	// Check if CRIU is installed and available in the system path
-	if c.criuPath == "" {
+	if c.CriuPath == "" {
 		return fmt.Errorf("CRIU path is not defined in the config")
 	}
 
 	// check if the CRIU binary exists at the specified path
-	if _, err := os.Stat(c.criuPath); err != nil {
-		return fmt.Errorf("CRIU binary not found at path: %s", c.criuPath)
+	if _, err := os.Stat(c.CriuPath); err != nil {
+		return fmt.Errorf("CRIU binary not found at path: %s", c.CriuPath)
 	}
+
+	return nil
+}
+
+func (c *CriuCheckpointer) CheckpointProcessAfterDelay(internalProcessId string, checkpointAfterDelay int64) error {
+
+	if checkpointAfterDelay <= 0 {
+		return fmt.Errorf("checkpointAfterDelay must be greater than 0")
+	}
+
+	go func() {
+		log.Printf("[Checkpoint] Waiting for %d seconds before checkpointing process %s", checkpointAfterDelay, internalProcessId)
+		intProcess, err := pm.GlobalProcessManager.GetInfo(internalProcessId)
+		if err != nil {
+			log.Printf("[Checkpoint] Error getting process info for %s: %v", internalProcessId, err)
+			return
+		}
+		// Wait for the specified delay before checkpointing
+		select {
+		case <-time.After(time.Duration(checkpointAfterDelay) * time.Second):
+			log.Printf("[Checkpoint] Checkpointing process %s after delay of %d seconds", internalProcessId, checkpointAfterDelay)
+		case <-intProcess.Done:
+			log.Printf("[Checkpoint] Process %s completed before checkpointing could occur", internalProcessId)
+		}
+
+		c.CheckpointProcess(internalProcessId)
+	}()
 
 	return nil
 }
@@ -51,14 +79,14 @@ func (c *CriuCheckpointer) CheckpointProcess(internalProcessId string) (string, 
 		return "", fmt.Errorf("invalid PID for process %s", internalProcessId)
 	}
 
-	dumpDir := fmt.Sprintf("%s/%s", c.dumpDirRoot, internalProcessId)
+	dumpDir := fmt.Sprintf("%s/%s", c.DumpDirRoot, internalProcessId)
 
 	if err := os.MkdirAll(dumpDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create dump directory %s: %v", dumpDir, err)
 	}
 
 	// Prepare the CRIU command for checkpointing the process
-	cmdStr := fmt.Sprintf("%s dump -t %d --shell-job --tcp-established --unprivileged --images-dir %s", c.criuPath, pid, dumpDir)
+	cmdStr := fmt.Sprintf("%s dump -t %d --shell-job --tcp-established --unprivileged --images-dir %s", c.CriuPath, pid, dumpDir)
 
 	log.Printf("Executing CRIU command: %s", cmdStr)
 
@@ -81,10 +109,10 @@ func (c *CriuCheckpointer) RestoreProcess(internalProcessId string) (string, err
 		return "", err
 	}
 
-	dumpDir := fmt.Sprintf("%s/%s", c.dumpDirRoot, internalProcessId)
+	dumpDir := fmt.Sprintf("%s/%s", c.DumpDirRoot, internalProcessId)
 
 	// Prepare the CRIU command for restoring the process
-	cmdStr := fmt.Sprintf("%s restore --shell-job --tcp-established --unprivileged --images-dir %s", c.criuPath, dumpDir)
+	cmdStr := fmt.Sprintf("%s restore --shell-job --tcp-established --unprivileged --images-dir %s", c.CriuPath, dumpDir)
 
 	log.Printf("Executing CRIU command: %s", cmdStr)
 

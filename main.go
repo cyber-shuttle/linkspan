@@ -16,6 +16,7 @@ import (
 	"github.com/cyber-shuttle/linkspan/internal/controller"
 	"github.com/cyber-shuttle/linkspan/internal/logstream"
 	ops "github.com/cyber-shuttle/linkspan/internal/operations"
+	"github.com/cyber-shuttle/linkspan/subsystems/checkpoint"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs"
 	"github.com/gorilla/mux"
 )
@@ -103,9 +104,16 @@ func main() {
 
 	// Start fork process if specified
 	if c.ForkCommand != "" {
-		_, err := ops.StartForkProcess(*c)
+		internalProcessId, err := ops.StartForkProcess(*c)
 		if err != nil {
 			log.Fatalf("failed to start fork process: %v", err)
+		}
+
+		if c.CheckpointForkAfterDelay > 0 && c.CRIUPath != "" {
+			log.Printf("waiting %d seconds before checkpointing fork process %s", c.CheckpointForkAfterDelay, internalProcessId)
+			cp := &checkpoint.CriuCheckpointer{CriuPath: c.CRIUPath, SupportGpuCheckpoint: c.SupportGpuCheckpoint,
+				AdditionalCriuOpts: c.AdditionalCriuOpts, DumpDirRoot: c.DumpDirRoot}
+			cp.CheckpointProcessAfterDelay(internalProcessId, c.CheckpointForkAfterDelay)
 		}
 	}
 

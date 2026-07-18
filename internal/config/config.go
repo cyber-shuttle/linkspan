@@ -30,6 +30,7 @@ type LinkspanConfig struct {
 
 	ForkCommand              string `yaml:"fork_command"`
 	ShutdownOnForkCompletion bool   `yaml:"shutdown_on_fork_completion"`
+	CheckpointForkAfterDelay int64  `yaml:"checkpoint_fork_after_delay"`
 }
 
 func NewDefaultLinkspanConfig() *LinkspanConfig {
@@ -37,7 +38,7 @@ func NewDefaultLinkspanConfig() *LinkspanConfig {
 		ServerPort:               8080,
 		ServerHost:               "0.0.0.0",
 		SocketPath:               "",
-		CRIUPath:                 "/usr/sbin/criu",
+		CRIUPath:                 "",
 		SupportGpuCheckpoint:     false,
 		AdditionalCriuOpts:       []string{},
 		DumpDirRoot:              "/tmp/linkspan_dumps",
@@ -51,5 +52,6 @@ func NewDefaultLinkspanConfig() *LinkspanConfig {
 		TunnelAttemptTimeout:     10 * time.Second,
 		ForkCommand:              "",
 		ShutdownOnForkCompletion: false,
+		CheckpointForkAfterDelay: 0,
 	}
 }

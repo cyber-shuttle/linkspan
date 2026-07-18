@@ -14,6 +14,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -107,12 +108,31 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	forkCommand := flag.String("fork-command", "", "command to execute as a fork process")
 	shutdownOnForkCompletionFlag := flag.String("shutdown-on-fork-completion", "false", "gracefully shutdown when fork process completes (true/false)")
 	socketPath := flag.String("socket", "", "also listen on this unix socket path (in-cluster access via `srun --jobid`)")
+	criuPath := flag.String("criu-path", "", "path to the CRIU binary")
+	supportGpuCheckpointFlag := flag.String("support-gpu-checkpoint", "false", "enable GPU checkpoint support (true/false)")
+	additionalCriuOptsFlag := flag.String("additional-criu-opts", "", "comma-separated list of additional CRIU options")
+	dumpDirRoot := flag.String("dump-dir-root", "/tmp/linkspan_dumps", "root directory for CRIU checkpoint dumps")
+	checkpointForkAfterDelay := flag.Int64("checkpoint-fork-after-delay", 0, "delay in seconds after fork process start before triggering checkpoint")
 	flag.Parse()
 
-	// Parse boolean flag
+	// Parse boolean flags
 	shutdownOnForkCompletion, err := strconv.ParseBool(*shutdownOnForkCompletionFlag)
 	if err != nil {
 		log.Fatalf("invalid value for --shutdown-on-fork-completion: %s (expected true or false)", *shutdownOnForkCompletionFlag)
+	}
+
+	supportGpuCheckpoint, err := strconv.ParseBool(*supportGpuCheckpointFlag)
+	if err != nil {
+		log.Fatalf("invalid value for --support-gpu-checkpoint: %s (expected true or false)", *supportGpuCheckpointFlag)
+	}
+
+	// Parse additional CRIU options (comma-separated)
+	var additionalCriuOpts []string
+	if *additionalCriuOptsFlag != "" {
+		additionalCriuOpts = strings.Split(*additionalCriuOptsFlag, ",")
+		for i := range additionalCriuOpts {
+			additionalCriuOpts[i] = strings.TrimSpace(additionalCriuOpts[i])
+		}
 	}
 
 	c.TunnelApi = *tunnelAPI
@@ -128,6 +148,11 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	c.ForkCommand = *forkCommand
 	c.ShutdownOnForkCompletion = shutdownOnForkCompletion
 	c.SocketPath = *socketPath
+	c.CRIUPath = *criuPath
+	c.SupportGpuCheckpoint = supportGpuCheckpoint
+	c.AdditionalCriuOpts = additionalCriuOpts
+	c.DumpDirRoot = *dumpDirRoot
+	c.CheckpointForkAfterDelay = *checkpointForkAfterDelay
 	if *versionFlag {
 		fmt.Printf("%s\n", c.Version)
 		os.Exit(0)
