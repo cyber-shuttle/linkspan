@@ -7,6 +7,7 @@ import (
 type LinkspanConfig struct {
 	ServerPort int    `yaml:"server_port"`
 	ServerHost string `yaml:"server_host"`
+	SocketPath string `yaml:"socket_path"`
 
 	CRIUPath             string   `yaml:"criu_path"`
 	SupportGpuCheckpoint bool     `yaml:"support_gpu_checkpoint"`
@@ -35,6 +36,7 @@ func NewDefaultLinkspanConfig() *LinkspanConfig {
 	return &LinkspanConfig{
 		ServerPort:               8080,
 		ServerHost:               "0.0.0.0",
+		SocketPath:               "",
 		CRIUPath:                 "/usr/sbin/criu",
 		SupportGpuCheckpoint:     false,
 		AdditionalCriuOpts:       []string{},

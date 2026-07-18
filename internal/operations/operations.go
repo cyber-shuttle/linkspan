@@ -106,6 +106,7 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	serverHostFlag := flag.String("host", "0.0.0.0", "host/IP for the HTTP server to bind to")
 	forkCommand := flag.String("fork-command", "", "command to execute as a fork process")
 	shutdownOnForkCompletionFlag := flag.String("shutdown-on-fork-completion", "false", "gracefully shutdown when fork process completes (true/false)")
+	socketPath := flag.String("socket", "", "also listen on this unix socket path (in-cluster access via `srun --jobid`)")
 	flag.Parse()
 
 	// Parse boolean flag
@@ -126,6 +127,7 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	c.ServerHost = *serverHostFlag
 	c.ForkCommand = *forkCommand
 	c.ShutdownOnForkCompletion = shutdownOnForkCompletion
+	c.SocketPath = *socketPath
 	if *versionFlag {
 		fmt.Printf("%s\n", c.Version)
 		os.Exit(0)
