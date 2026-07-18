@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/cyber-shuttle/linkspan/subsystems/fork"
 	"github.com/cyber-shuttle/linkspan/subsystems/jupyter"
 	"github.com/cyber-shuttle/linkspan/subsystems/tunnel"
 	"github.com/cyber-shuttle/linkspan/subsystems/vscode"
@@ -55,6 +56,11 @@ func RegisterRoutes(api *mux.Router) {
 	api.HandleFunc("/tunnels", tunnel.CreateTunnel).Methods("POST")
 	api.HandleFunc("/tunnels/{id}/ports", tunnel.AddTunnelPort).Methods("POST")
 	api.HandleFunc("/tunnels/{id}", tunnel.DeleteTunnel).Methods("DELETE")
+
+	// Fork process management
+	api.HandleFunc("/fork/run", fork.RunForkProcessHandler).Methods("POST")
+	api.HandleFunc("/fork/processes", fork.ListForkProcessesHandler).Methods("GET")
+	api.HandleFunc("/fork/processes/{id}", fork.DeleteForkProcessHandler).Methods("DELETE")
 
 	// Health and workflow status
 	api.HandleFunc("/health", handleHealth).Methods("GET")

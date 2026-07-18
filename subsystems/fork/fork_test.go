@@ -5,13 +5,77 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cyber-shuttle/linkspan/internal/controller"
 	"github.com/cyber-shuttle/linkspan/internal/process"
 )
+
+func TestForkProcessShutdown(t *testing.T) {
+	fm := GlobalForkProcessManager
+
+	fp, err := fm.RunForkProcess("echo 'Hello, World!' && sleep 2", true)
+	if err != nil {
+		t.Fatalf("failed to run fork process: %v", err)
+	}
+
+	if fp == nil {
+		t.Fatalf("fork process is nil")
+	}
+
+	proc, err := process.GlobalProcessManager.GetInfo(fp.InternalProcessId)
+	if err != nil {
+		t.Fatalf("failed to get process info: %v", err)
+	}
+
+	done := <-proc.Done
+
+	if done != nil {
+		t.Fatalf("process completed with error: %v", done)
+	}
+
+	log.Printf("process %s completed successfully", fp.InternalProcessId)
+
+	// wait for a short duration to allow the shutdown signal to be processed
+	time.Sleep(1 * time.Second)
+
+	select {
+	case reason := <-controller.ExternalShutdownChannel:
+		log.Printf("Shutdown triggered due to: %s", reason)
+	default:
+		t.Fatalf("expected shutdown signal, but none received")
+	}
+}
+
+func TestForkProcessCompletion(t *testing.T) {
+	fm := GlobalForkProcessManager
+
+	fp, err := fm.RunForkProcess("echo 'Hello, World!' && sleep 2", false)
+	if err != nil {
+		t.Fatalf("failed to run fork process: %v", err)
+	}
+
+	if fp == nil {
+		t.Fatalf("fork process is nil")
+	}
+
+	proc, err := process.GlobalProcessManager.GetInfo(fp.InternalProcessId)
+	if err != nil {
+		t.Fatalf("failed to get process info: %v", err)
+	}
+
+	done := <-proc.Done
+
+	if done != nil {
+		t.Fatalf("process completed with error: %v", done)
+	}
+
+	log.Printf("process %s completed successfully", fp.InternalProcessId)
+
+}
 
 func TestForkProcess(t *testing.T) {
 	fm := GlobalForkProcessManager
 
-	fp, err := fm.RunForkProcess("echo 'Hello, World!' && sleep 2")
+	fp, err := fm.RunForkProcess("echo 'Hello, World!' && sleep 2", false)
 	if err != nil {
 		t.Fatalf("failed to run fork process: %v", err)
 	}
@@ -62,7 +126,7 @@ func TestForkProcess(t *testing.T) {
 func TestForkProcessCleanup(t *testing.T) {
 	fm := GlobalForkProcessManager
 
-	fp, err := fm.RunForkProcess("echo 'Hello, World!' && sleep 5")
+	fp, err := fm.RunForkProcess("echo 'Hello, World!' && sleep 5", false)
 	if err != nil {
 		t.Fatalf("failed to run fork process: %v", err)
 	}

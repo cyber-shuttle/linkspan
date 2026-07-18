@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cyber-shuttle/linkspan/internal/config"
+	"github.com/cyber-shuttle/linkspan/internal/controller"
 	"github.com/cyber-shuttle/linkspan/internal/logstream"
 	ops "github.com/cyber-shuttle/linkspan/internal/operations"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs"
@@ -92,7 +93,6 @@ func main() {
 	} else if apiTunnelType == "devtunnels" {
 		log.Println("devtunnel startup skipped (disabled via flag)")
 	}
-
 	// Run server
 	serverErr := make(chan error, 1)
 	go func() {
@@ -103,6 +103,8 @@ func main() {
 	select {
 	case <-ctx.Done():
 		log.Println("Shutdown signal received...")
+	case reason := <-controller.ExternalShutdownChannel:
+		log.Printf("Shutdown triggered: %s", reason)
 	case err := <-serverErr:
 		if err != nil && err != http.ErrServerClosed {
 			log.Printf("server error: %v", err)

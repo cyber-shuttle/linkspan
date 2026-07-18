@@ -2,16 +2,17 @@ package fork
 
 import (
 	"fmt"
+	"github.com/cyber-shuttle/linkspan/internal/controller"
+	"github.com/cyber-shuttle/linkspan/internal/process"
 	"log"
 	"os/exec"
 	"sync"
-
-	"github.com/cyber-shuttle/linkspan/internal/process"
 )
 
 type ForkProcess struct {
-	Command           string
-	InternalProcessId string
+	Command              string
+	InternalProcessId    string
+	ShutdownOnCompletion bool
 }
 
 type ForkProcessManager struct {
@@ -27,7 +28,7 @@ func newForkProcessManager() *ForkProcessManager {
 // global fork manager instance for the package
 var GlobalForkProcessManager = newForkProcessManager()
 
-func (m *ForkProcessManager) RunForkProcess(command string) (*ForkProcess, error) {
+func (m *ForkProcessManager) RunForkProcess(command string, shutdownOnCompletion bool) (*ForkProcess, error) {
 	cmd := exec.Command("sh", "-c", command)
 	internalProcessId, err := process.GlobalProcessManager.Start(cmd, true)
 
@@ -39,10 +40,31 @@ func (m *ForkProcessManager) RunForkProcess(command string) (*ForkProcess, error
 	defer m.mu.Unlock()
 
 	fp := &ForkProcess{
-		Command:           command,
-		InternalProcessId: internalProcessId,
+		Command:              command,
+		InternalProcessId:    internalProcessId,
+		ShutdownOnCompletion: shutdownOnCompletion,
 	}
 	m.procs[internalProcessId] = fp
+
+	proc, err := process.GlobalProcessManager.GetInfo(internalProcessId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get process info: %v", err)
+	}
+
+	go func() {
+		done := <-proc.Done
+		if done != nil {
+			log.Printf("Fork process %s completed with error: %v", internalProcessId, done)
+		} else {
+			log.Printf("Fork process %s completed successfully", internalProcessId)
+		}
+
+		if shutdownOnCompletion {
+			log.Printf("Fork process %s requested shutdown on completion", internalProcessId)
+			controller.TriggerShutdown(fmt.Sprintf("Fork process %s completed", internalProcessId))
+		}
+	}()
+
 	return fp, nil
 }
 

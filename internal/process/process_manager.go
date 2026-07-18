@@ -19,7 +19,7 @@ type ManagedProcess struct {
 	Cmd          *exec.Cmd
 	Stdout       *bytes.Buffer
 	Stderr       *bytes.Buffer
-	done         chan error
+	Done         chan error
 	Completed    bool
 	ProcessError error
 	printLive    bool
@@ -64,7 +64,7 @@ func (pm *ProcessManager) Start(cmd *exec.Cmd, printLive bool) (string, error) {
 		Cmd:          cmd,
 		Stdout:       &bytes.Buffer{},
 		Stderr:       &bytes.Buffer{},
-		done:         make(chan error, 1),
+		Done:         make(chan error, 1),
 		Completed:    false,
 		ProcessError: nil,
 		printLive:    printLive,
@@ -107,10 +107,10 @@ func (pm *ProcessManager) Start(cmd *exec.Cmd, printLive bool) (string, error) {
 	// wait in background
 	go func() {
 		err := cmd.Wait()
-		mp.done <- err
+		mp.Done <- err
 		mp.Completed = true
 		mp.ProcessError = err
-		close(mp.done)
+		close(mp.Done)
 	}()
 
 	pm.mu.Lock()
@@ -173,7 +173,7 @@ func (pm *ProcessManager) Wait(id string) error {
 		return fmt.Errorf("process %s not found", id)
 	}
 	// if done channel already closed, receive will return zero value
-	err, ok := <-mp.done
+	err, ok := <-mp.Done
 	if !ok {
 		// channel closed without a value; treat as nil
 		return nil
@@ -201,7 +201,7 @@ func (pm *ProcessManager) KillAll() {
 			// completes).  Use a short timeout so KillAll doesn't hang if a
 			// process refuses to exit.
 			select {
-			case <-mp.done:
+			case <-mp.Done:
 			case <-time.After(2 * time.Second):
 			}
 		}
