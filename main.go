@@ -117,7 +117,7 @@ func main() {
 		}
 
 		if c.CheckpointForkAfterDelay > 0 {
-			log.Printf("waiting %d seconds before checkpointing restored process %s", c.CheckpointForkAfterDelay, intProcess.InternalProcessId)
+			log.Printf("waiting %d seconds before checkpointing restored process %s", c.CheckpointForkAfterDelay, intProcess)
 			cp.CheckpointProcessAfterDelay(intProcess, c.CheckpointForkAfterDelay)
 		}
 		log.Printf("Restore completed successfully")
