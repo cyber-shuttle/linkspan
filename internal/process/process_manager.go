@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"runtime"
 	"sync"
@@ -14,13 +15,14 @@ import (
 // ManagedProcess holds runtime information for a started process so it can
 // be inspected or controlled (kill/interrupt) later.
 type ManagedProcess struct {
-	ID     string
-	Cmd    *exec.Cmd
-	Stdout *bytes.Buffer
-	Stderr *bytes.Buffer
-	done   chan error
-	Completed bool
+	ID           string
+	Cmd          *exec.Cmd
+	Stdout       *bytes.Buffer
+	Stderr       *bytes.Buffer
+	Done         chan error
+	Completed    bool
 	ProcessError error
+	printLive    bool
 }
 
 // ProcessManager stores running processes and provides control operations.
@@ -50,7 +52,7 @@ func (pm *ProcessManager) GetInfo(id string) (ManagedProcess, error) {
 
 // Start registers and starts the given *exec.Cmd asynchronously and returns an id.
 // The caller can later call Kill/Interrupt/GetOutput using the returned id.
-func (pm *ProcessManager) Start(cmd *exec.Cmd) (string, error) {
+func (pm *ProcessManager) Start(cmd *exec.Cmd, printLive bool) (string, error) {
 	if cmd == nil {
 		return "", fmt.Errorf("nil cmd")
 	}
@@ -58,13 +60,14 @@ func (pm *ProcessManager) Start(cmd *exec.Cmd) (string, error) {
 	id := fmt.Sprintf("p-%d", time.Now().UnixNano())
 
 	mp := &ManagedProcess{
-		ID:     id,
-		Cmd:    cmd,
-		Stdout: &bytes.Buffer{},
-		Stderr: &bytes.Buffer{},
-		done:   make(chan error, 1),
-		Completed: false,
+		ID:           id,
+		Cmd:          cmd,
+		Stdout:       &bytes.Buffer{},
+		Stderr:       &bytes.Buffer{},
+		Done:         make(chan error, 1),
+		Completed:    false,
 		ProcessError: nil,
+		printLive:    printLive,
 	}
 
 	// set up pipes
@@ -85,21 +88,29 @@ func (pm *ProcessManager) Start(cmd *exec.Cmd) (string, error) {
 	// copy output asynchronously
 	go func() {
 		defer stdoutPipe.Close()
-		defer stderrPipe.Close()
-		// copy stdout
-		_, _ = io.Copy(mp.Stdout, stdoutPipe)
+		if mp.printLive {
+			_, _ = io.Copy(io.MultiWriter(mp.Stdout, os.Stdout), stdoutPipe)
+		} else {
+			_, _ = io.Copy(mp.Stdout, stdoutPipe)
+		}
 	}()
+
 	go func() {
-		_, _ = io.Copy(mp.Stderr, stderrPipe)
+		defer stderrPipe.Close()
+		if mp.printLive {
+			_, _ = io.Copy(io.MultiWriter(mp.Stderr, os.Stderr), stderrPipe)
+		} else {
+			_, _ = io.Copy(mp.Stderr, stderrPipe)
+		}
 	}()
 
 	// wait in background
 	go func() {
 		err := cmd.Wait()
-		mp.done <- err
+		mp.Done <- err
 		mp.Completed = true
 		mp.ProcessError = err
-		close(mp.done)
+		close(mp.Done)
 	}()
 
 	pm.mu.Lock()
@@ -153,8 +164,6 @@ func (pm *ProcessManager) GetOutput(id string) (stdout string, stderr string, er
 	return mp.Stdout.String(), mp.Stderr.String(), nil
 }
 
-
-
 // Wait waits for the process to finish and returns its error (if any).
 func (pm *ProcessManager) Wait(id string) error {
 	pm.mu.Lock()
@@ -164,15 +173,13 @@ func (pm *ProcessManager) Wait(id string) error {
 		return fmt.Errorf("process %s not found", id)
 	}
 	// if done channel already closed, receive will return zero value
-	err, ok := <-mp.done
+	err, ok := <-mp.Done
 	if !ok {
 		// channel closed without a value; treat as nil
 		return nil
 	}
 	return err
 }
-
-
 
 // KillAll forcefully kills all managed processes, waiting up to 2 seconds for
 // each to exit so the OS can reap them (avoiding zombies).
@@ -194,7 +201,7 @@ func (pm *ProcessManager) KillAll() {
 			// completes).  Use a short timeout so KillAll doesn't hang if a
 			// process refuses to exit.
 			select {
-			case <-mp.done:
+			case <-mp.Done:
 			case <-time.After(2 * time.Second):
 			}
 		}

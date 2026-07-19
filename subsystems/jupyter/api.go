@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/cyber-shuttle/linkspan/utils"
+	"github.com/cyber-shuttle/linkspan/internal/utils"
 	"github.com/gorilla/mux"
 )
 

@@ -58,8 +58,7 @@ jobs:
                 `${body.split("## Verification")[0].trim()}`,
                 ``,
                 `</details>`,
-              ].join("
-");
+              ].join("\n");
               try {
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
@@ -81,4 +80,3 @@ jobs:
                 console.log("Failed to comment on #" + num + ": " + e.message);
               }
             }
-

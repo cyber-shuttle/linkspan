@@ -2,33 +2,22 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
-	"path/filepath"
-	"runtime"
-	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
+	"github.com/cyber-shuttle/linkspan/internal/config"
+	"github.com/cyber-shuttle/linkspan/internal/controller"
 	"github.com/cyber-shuttle/linkspan/internal/logstream"
-	pm "github.com/cyber-shuttle/linkspan/internal/process"
-	"github.com/cyber-shuttle/linkspan/internal/workflow"
-	"github.com/cyber-shuttle/linkspan/subsystems/jupyter"
-	"github.com/cyber-shuttle/linkspan/subsystems/mount"
-	"github.com/cyber-shuttle/linkspan/subsystems/tunnel"
+	ops "github.com/cyber-shuttle/linkspan/internal/operations"
+	"github.com/cyber-shuttle/linkspan/subsystems/checkpoint"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs"
-	"github.com/cyber-shuttle/linkspan/subsystems/vscode"
-	"github.com/cyber-shuttle/linkspan/utils"
 	"github.com/gorilla/mux"
 )
 
@@ -46,91 +35,22 @@ var (
 	vfsMountProvider *vfs.MountProvider
 )
 
-// In-memory metadata store (key → arbitrary JSON value).
-var (
-	metadataStore = make(map[string]json.RawMessage)
-	metadataMu    sync.RWMutex
-)
-
 func main() {
-	// Handle version flag early, before other initialization
-	versionFlag := flag.Bool("version", false, "print version information and exit")
-	verboseVersionFlag := flag.Bool("verbose-version", false, "print verbose version information and exit")
 
-	// parse CLI flags
-	tunnelAPI := flag.String("tunnel-api", "devtunnels", "tunnel API provider name (e.g. devtunnels)")
-	tunnelEnable := flag.Bool("tunnel-enable", false, "enable tunnel startup")
-	tunnelID := flag.String("tunnel-id", "", "host this client-created dev tunnel id instead of creating one; the client owns its lifecycle")
-	tunnelCluster := flag.String("tunnel-cluster", "", "cluster id of the client-created tunnel (required with --tunnel-id to resolve it)")
-	tunnelAuthToken := flag.String("tunnel-auth-token", "", "Microsoft Entra ID bearer token for the Dev Tunnels service")
-	tunnelRetries := flag.Int("tunnel-retries", 3, "number of retries for tunnel startup")
-	tunnelRetryDelay := flag.Duration("tunnel-retry-delay", 2*time.Second, "delay between tunnel startup retries")
-	tunnelAttemptTimeout := flag.Duration("tunnel-attempt-timeout", 10*time.Second, "timeout per tunnel setup attempt")
-	serverPortFlag := flag.Int("port", 8080, "port for the HTTP server to listen on")
-	serverHostFlag := flag.String("host", "0.0.0.0", "host/IP for the HTTP server to bind to")
-	socketPath := flag.String("socket", "", "also listen on this unix socket path (in-cluster access via `srun --jobid`)")
-	workflowFile := flag.String("workflow", "", "path to workflow YAML file")
-	vfsMode := flag.String("vfs-mode", "", "VFS mode: 'sync' or 'mount' (also reads CS_VFS_MODE env)")
-	vfsSessionID := flag.String("vfs-session-id", "", "session ID for VFS (also reads CS_SESSION_ID env)")
-	flag.Parse()
-
-	if *versionFlag {
-		fmt.Printf("%s\n", version)
-		os.Exit(0)
-	}
-
-	if *verboseVersionFlag {
-		fmt.Printf("%s\n", version)
-		fmt.Printf("  commit:    %s\n", commit)
-		fmt.Printf("  built:     %s\n", date)
-		fmt.Printf("  built by:  %s\n", builtBy)
-		fmt.Printf("  go:        %s\n", runtime.Version())
-		fmt.Printf("  platform:  %s/%s\n", runtime.GOOS, runtime.GOARCH)
-		os.Exit(0)
-	}
+	c := config.NewDefaultLinkspanConfig()
+	c.Commit = commit
+	c.BuiltBy = builtBy
+	c.Date = date
+	c.Version = version
+	ops.ProcessCommandArguments(c)
 
 	// Install log broadcaster so connected clients receive log output in
 	// real time.  Must happen before any log.* calls.
 	logBroadcaster := logstream.New(os.Stderr)
 	logBroadcaster.Install()
 
-	// Initialize VFS if session ID is provided
-	sessionID := *vfsSessionID
-	if sessionID == "" {
-		sessionID = os.Getenv("CS_SESSION_ID")
-	}
-	vfsModeName := *vfsMode
-	if vfsModeName == "" {
-		vfsModeName = os.Getenv("CS_VFS_MODE")
-	}
-
-	if sessionID != "" && vfsModeName != "" {
-		dc, err := vfs.NewDataCache(sessionID)
-		if err != nil {
-			log.Fatalf("failed to initialize VFS data cache: %v", err)
-		}
-
-		vfsSyncProvider = vfs.NewSyncProvider(dc)
-		vfsMountProvider = vfs.NewMountProvider(dc)
-
-		switch vfsModeName {
-		case "sync":
-			if err := vfsSyncProvider.Start(); err != nil {
-				log.Fatalf("failed to start VFS sync provider: %v", err)
-			}
-			log.Printf("[vfs] Sync provider started for session %s", sessionID)
-		case "mount":
-			if err := vfsMountProvider.Start(); err != nil {
-				log.Fatalf("failed to start VFS mount provider: %v", err)
-			}
-			log.Printf("[vfs] Mount provider started for session %s", sessionID)
-		default:
-			log.Fatalf("unknown VFS mode: %s (expected 'sync' or 'mount')", vfsModeName)
-		}
-	}
-
 	// Support users passing `--tunnel-api=devtunnels` by trimming leading '='
-	apiTunnelType := strings.TrimLeft(*tunnelAPI, "=")
+	apiTunnelType := strings.TrimLeft(c.TunnelApi, "=")
 
 	ctx, stop := signal.NotifyContext(context.Background(),
 		os.Interrupt,    // Ctrl+C
@@ -140,114 +60,14 @@ func main() {
 
 	r := mux.NewRouter()
 	api := r.PathPrefix("/api/v1").Subrouter()
-
-	// Jupyter kernel management
-	api.HandleFunc("/jupyter/kernels", jupyter.ListKernels).Methods("GET")
-	api.HandleFunc("/jupyter/kernels", jupyter.ProvisionKernel).Methods("POST")
-	api.HandleFunc("/jupyter/kernels/{id}", jupyter.DeleteKernel).Methods("DELETE")
-	api.HandleFunc("/jupyter/kernels/{id}/connection", jupyter.GetKernelConnectionInfo).Methods("GET")
-	api.HandleFunc("/jupyter/kernels/{id}/status", jupyter.GetKernelStatus).Methods("GET")
-	api.HandleFunc("/jupyter/kernels/shutdown", jupyter.ShutdownKernel).Methods("POST")
-
-	// VS Code remote session management
-	api.HandleFunc("/vscode/sessions", vscode.ListVSCodeSessions).Methods("GET")
-	api.HandleFunc("/vscode/sessions", vscode.CreateVSCodeSession).Methods("POST")
-	api.HandleFunc("/vscode/sessions/{id}", vscode.DeleteVSCodeSession).Methods("DELETE")
-	api.HandleFunc("/vscode/sessions/{id}/status", vscode.GetVSCodeSessionStatus).Methods("GET")
-
-	// Tunnel management
-	api.HandleFunc("/tunnels/devtunnels", tunnel.ListDevTunnels).Methods("GET")
-	api.HandleFunc("/tunnels/devtunnels", tunnel.CreateDevTunnel).Methods("POST")
-	api.HandleFunc("/tunnels/devtunnels/forward", tunnel.ForwardDevTunnelPort).Methods("POST")
-	api.HandleFunc("/tunnels/devtunnels/auth-token", tunnel.RefreshDevTunnelAuthToken).Methods("POST")
-	api.HandleFunc("/tunnels/devtunnels/{id}", tunnel.DeleteDevTunnel).Methods("DELETE")
-
-	api.HandleFunc("/tunnels/frp", tunnel.ListFRPTunnels).Methods("GET")
-	api.HandleFunc("/tunnels/frp", tunnel.CreateFRPTunnelProxy).Methods("POST")
-	api.HandleFunc("/tunnels/frp/{id}", tunnel.DeleteFRPTunnel).Methods("DELETE")
-
-	// Provider-agnostic tunnel endpoints
-	// NOTE: /tunnels/connect must be registered before /tunnels/{id} so that
-	// gorilla/mux does not match "connect" as a tunnel ID.
-	api.HandleFunc("/tunnels/connect", tunnel.ConnectTunnel).Methods("POST")
-	api.HandleFunc("/tunnels/connect/{id}", tunnel.DisconnectTunnel).Methods("DELETE")
-	api.HandleFunc("/tunnels", tunnel.ListTunnels).Methods("GET")
-	api.HandleFunc("/tunnels", tunnel.CreateTunnel).Methods("POST")
-	api.HandleFunc("/tunnels/{id}/ports", tunnel.AddTunnelPort).Methods("POST")
-	api.HandleFunc("/tunnels/{id}", tunnel.DeleteTunnel).Methods("DELETE")
-
-	// Health and workflow status
-	api.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{"status":"ok"}`)
-	}).Methods("GET")
-
-	// Live resource metrics for the running job (cgroup mem/cpu + nvidia-smi).
-	api.HandleFunc("/metrics", metricsHandler).Methods("GET")
-
-	// Workflow status — set up after engine creation below.
-	var workflowEngine *workflow.Engine
-	api.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
-		if workflowEngine == nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			fmt.Fprintf(w, `{"state":"idle","currentStep":0,"totalSteps":0,"outputs":{}}`)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(workflowEngine.Status())
-	}).Methods("GET")
-
-	// Metadata store — in-memory key-value for shared state
-	api.HandleFunc("/metadata", func(w http.ResponseWriter, r *http.Request) {
-		metadataMu.RLock()
-		defer metadataMu.RUnlock()
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(metadataStore)
-	}).Methods("GET")
-
-	api.HandleFunc("/metadata/{key:.+}", func(w http.ResponseWriter, r *http.Request) {
-		key := mux.Vars(r)["key"]
-		switch r.Method {
-		case "GET":
-			metadataMu.RLock()
-			val, ok := metadataStore[key]
-			metadataMu.RUnlock()
-			if !ok {
-				http.NotFound(w, r)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(val)
-		case "PUT":
-			r.Body = http.MaxBytesReader(w, r.Body, 10*1024*1024)
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			metadataMu.Lock()
-			metadataStore[key] = json.RawMessage(body)
-			metadataMu.Unlock()
-			w.WriteHeader(http.StatusNoContent)
-		case "DELETE":
-			metadataMu.Lock()
-			delete(metadataStore, key)
-			metadataMu.Unlock()
-			w.WriteHeader(http.StatusNoContent)
-		}
-	}).Methods("GET", "PUT", "DELETE")
+	RegisterRoutes(api)
 
 	// Use the configured server host and port from CLI flags.
 	// Port 0 means "let the OS pick a free port".
-	serverPort := *serverPortFlag
-	serverHost := *serverHostFlag
-	if serverPort < 0 || serverPort > 65535 {
-		log.Fatalf("invalid server port: %d", serverPort)
+	if c.ServerPort < 0 || c.ServerPort > 65535 {
+		log.Fatalf("invalid server port: %d", c.ServerPort)
 	}
-	addr := fmt.Sprintf("%s:%d", serverHost, serverPort)
+	addr := fmt.Sprintf("%s:%d", c.ServerHost, c.ServerPort)
 
 	srv := &http.Server{
 		Addr:    addr,
@@ -262,117 +82,60 @@ func main() {
 	}
 
 	// When port 0 was requested, update serverPort to the actual bound port.
-	if serverPort == 0 {
-		serverPort = listener.Addr().(*net.TCPAddr).Port
+	if c.ServerPort == 0 {
+		c.ServerPort = listener.Addr().(*net.TCPAddr).Port
 	}
-	log.Printf("listening on %s:%d", serverHost, serverPort)
+	log.Printf("listening on %s:%d", c.ServerHost, c.ServerPort)
 
-	if *socketPath != "" {
-		if _, err := listenUnix(srv, *socketPath); err != nil {
-			log.Fatalf("failed to listen on unix socket %s: %v", *socketPath, err)
-		}
-		log.Printf("also listening on unix socket %s", *socketPath)
-	}
-
-	// Run workflow if specified. Use "-" to read from stdin.
-	if *workflowFile != "" {
-		var wf *workflow.WorkflowConfig
-		var err error
-		if *workflowFile == "-" {
-			wf, err = workflow.LoadReader(os.Stdin)
-		} else {
-			wf, err = workflow.LoadFile(*workflowFile)
-		}
-		if err != nil {
-			log.Fatalf("workflow: %v", err)
-		}
-		workflowEngine = workflow.NewEngine(workflow.DefaultRegistry(), map[string]any{
-			"Timestamp":       time.Now().Unix(),
-			"ServerPort":      serverPort,
-			"ServerHost":      serverHost,
-			"TunnelAuthToken": *tunnelAuthToken,
-		})
-		go func() {
-			if err := workflowEngine.Run(ctx, wf); err != nil {
-				log.Fatalf("workflow: %v", err)
-			}
-		}()
-	}
-
-	// Start tunnel helper after the listener is bound so the port is open
-	// when the tunnel attempts to connect or forward traffic.
-	devtunnelAuthTokenForCleanup = *tunnelAuthToken
-
-	if apiTunnelType == "devtunnels" && *tunnelEnable {
-		authToken := *tunnelAuthToken
-		if authToken == "" {
-			log.Fatalf("devtunnel: warning — --tunnel-auth-token not provided; tunnel startup will fail")
-		}
-		go func() {
-			// Host a client-created tunnel when an id is supplied; otherwise create our own.
-			tunnelName := *tunnelID
-			if tunnelName == "" {
-				tunnelName = fmt.Sprintf("linkspan-tunnel-%d", time.Now().UnixNano())
-			}
-
-			// cleanupAttempt kills any host CLI process and removes the tunnel
-			// from the manager so a timed-out or failed attempt doesn't leak.
-			cleanupAttempt := func() {
-				info, err := tunnel.GlobalDevTunnelManager.Find(tunnelName)
-				if err != nil {
-					return // not registered yet, nothing to clean up
-				}
-				if info.HostCmdID != "" {
-					_ = pm.GlobalProcessManager.Kill(info.HostCmdID)
-				}
-				tunnel.GlobalDevTunnelManager.Remove(tunnelName)
-			}
-
-			for attempt := 1; attempt <= *tunnelRetries; attempt++ {
-				log.Printf("devtunnel: attempt %d/%d to bring up tunnel %s", attempt, *tunnelRetries, tunnelName)
-
-				ch := make(chan error, 1)
-				go func() {
-					conn, err := tunnel.DevTunnelSetup(tunnelName, "1d", authToken, *tunnelID != "", *tunnelCluster, serverPort)
-					if err != nil {
-						log.Printf("devtunnel bring-up error: %v", err)
-						ch <- err
-						return
-					}
-
-					log.Printf("Connect to agent using the URL: %s", conn.ConnectionURL)
-					log.Printf("DevTunnel ID: %s", conn.DevTunnelInfo.TunnelID)
-					log.Printf("DevTunnel Token: %s", conn.Token)
-					log.Printf("DevTunnel forwarded ports: %v", conn.DevTunnelInfo.Ports)
-					log.Printf("Devtunnel cluster id: %s", conn.DevTunnelInfo.ClusterID)
-					ch <- nil
-				}()
-
-				attemptCtx, cancel := context.WithTimeout(ctx, *tunnelAttemptTimeout)
-				select {
-				case err := <-ch:
-					cancel()
-					if err == nil {
-						log.Printf("devtunnel: successfully created %s", tunnelName)
-						return
-					}
-					log.Printf("devtunnel: attempt %d failed: %v", attempt, err)
-					cleanupAttempt()
-				case <-attemptCtx.Done():
-					log.Printf("devtunnel: attempt %d timed out after %s", attempt, tunnelAttemptTimeout.String())
-					cancel()
-					cleanupAttempt()
-				}
-
-				if attempt < *tunnelRetries {
-					time.Sleep(*tunnelRetryDelay)
-				}
-			}
-
-			log.Fatalf("devtunnel: failed to create tunnel %s after %d attempts", tunnelName, *tunnelRetries)
-		}()
+	if apiTunnelType == "devtunnels" && c.EnableAPITunnelAtStartup {
+		ops.StartAPIDevTunnel(c.TunnelAuthToken, c.TunnelId, c.TunnelRetries,
+			c.TunnelRetryDelay, c.TunnelAttemptTimeout, c.TunnelCluster,
+			c.ServerPort, ctx)
 	} else if apiTunnelType == "devtunnels" {
 		log.Println("devtunnel startup skipped (disabled via flag)")
+	}
+
+	if c.SocketPath != "" {
+		if _, err := listenUnix(srv, c.SocketPath); err != nil {
+			log.Fatalf("failed to listen on unix socket %s: %v", c.SocketPath, err)
+		}
+		log.Printf("also listening on unix socket %s", c.SocketPath)
+	}
+
+	if c.RestorePath != "" && c.ForkCommand != "" {
+		log.Fatalf("Can not perform restore and fork execution at same time")
+	}
+
+	if c.RestorePath != "" {
+		log.Printf("Restoring from path %s", c.RestorePath)
+		cp := &checkpoint.CriuCheckpointer{CriuPath: c.CRIUPath, SupportGpuCheckpoint: c.SupportGpuCheckpoint,
+			AdditionalCriuOpts: c.AdditionalCriuOpts, DumpDirRoot: c.DumpDirRoot}
+		intProcess, err := cp.RestoreProcess(c.RestorePath, c.ShutdownOnForkCompletion)
+
+		if err != nil {
+			log.Fatalf("Failed to restore process from path %s: %v", c.RestorePath, err)
+		}
+
+		if c.CheckpointForkAfterDelay > 0 {
+			log.Printf("waiting %d seconds before checkpointing restored process %s", c.CheckpointForkAfterDelay, intProcess)
+			cp.CheckpointProcessAfterDelay(intProcess, c.CheckpointForkAfterDelay)
+		}
+		log.Printf("Restore completed successfully")
+	}
+
+	// Start fork process if specified
+	if c.ForkCommand != "" {
+		internalProcessId, err := ops.StartForkProcess(*c)
+		if err != nil {
+			log.Fatalf("Failed to start fork process: %v", err)
+		}
+
+		if c.CheckpointForkAfterDelay > 0 && c.CRIUPath != "" {
+			log.Printf("waiting %d seconds before checkpointing fork process %s", c.CheckpointForkAfterDelay, internalProcessId)
+			cp := &checkpoint.CriuCheckpointer{CriuPath: c.CRIUPath, SupportGpuCheckpoint: c.SupportGpuCheckpoint,
+				AdditionalCriuOpts: c.AdditionalCriuOpts, DumpDirRoot: c.DumpDirRoot}
+			cp.CheckpointProcessAfterDelay(internalProcessId, c.CheckpointForkAfterDelay)
+		}
 	}
 
 	// Run server
@@ -385,6 +148,8 @@ func main() {
 	select {
 	case <-ctx.Done():
 		log.Println("Shutdown signal received...")
+	case reason := <-controller.ExternalShutdownChannel:
+		log.Printf("Shutdown triggered: %s", reason)
 	case err := <-serverErr:
 		if err != nil && err != http.ErrServerClosed {
 			log.Printf("server error: %v", err)
@@ -404,7 +169,7 @@ func main() {
 		}
 	}
 
-	cleanupResources()
+	ops.CleanupResources(*c)
 
 	log.Println("Server gracefully stopped.")
 }
@@ -422,142 +187,4 @@ func listenUnix(srv *http.Server, path string) (net.Listener, error) {
 		}
 	}()
 	return ln, nil
-}
-
-// devtunnelAuthTokenForCleanup holds the auth token supplied at startup so the
-// shutdown path can call CleanAll without needing a separate flag reference.
-var devtunnelAuthTokenForCleanup string
-
-func cleanupResources() {
-	log.Println("Cleaning up resources before shutdown...")
-	mount.CleanupAll()
-	pm.GlobalProcessManager.KillAll()
-	tunnel.GlobalDevTunnelManager.CleanAll(devtunnelAuthTokenForCleanup)
-	tunnel.DeleteAllFRPTunnels()
-	vscode.StopAllSSHServers()
-
-	// VFS cleanup
-	if vfsSyncProvider != nil {
-		vfsSyncProvider.Stop()
-	}
-	if vfsMountProvider != nil {
-		vfsMountProvider.Stop()
-	}
-
-	log.Println("Resource cleanup completed.")
-}
-
-// --- Live job metrics (GET /api/v1/metrics) -------------------------------------------------------------------------
-
-type gpuMetric struct {
-	Index       int `json:"index"`
-	UtilPct     int `json:"utilPct"`
-	MemUsedMiB  int `json:"memUsedMiB"`
-	MemTotalMiB int `json:"memTotalMiB"`
-}
-
-// liveMetrics mirrors the csbridge MetricSample live fields. Each source is read independently and omitted (omitempty)
-// when unavailable, so the client sees an absent field (undefined) rather than a misleading zero.
-type liveMetrics struct {
-	MemBytes     *int64      `json:"memBytes,omitempty"`
-	CPUUsageUsec *int64      `json:"cpuUsageUsec,omitempty"`
-	GPUs         []gpuMetric `json:"gpus,omitempty"`
-}
-
-// metricsHandler reports the running job's live resource use: cgroup-v2 memory + cpu and per-GPU nvidia-smi. Every
-// source degrades independently — a missing cgroup file or absent nvidia-smi (CPU node) just omits that field; it
-// never fails the request. Replaces the srun-driven bash probe csbridge used to run over SSH.
-func metricsHandler(w http.ResponseWriter, r *http.Request) {
-	m := liveMetrics{GPUs: readGPUMetrics()}
-	if cg, err := jobCgroupDir(); err == nil {
-		if b, err := readInt64File(filepath.Join(cg, "memory.current")); err == nil {
-			m.MemBytes = &b
-		}
-		if u, err := readCPUUsageUsec(filepath.Join(cg, "cpu.stat")); err == nil {
-			m.CPUUsageUsec = &u
-		}
-	}
-	utils.RespondJSON(w, http.StatusOK, m)
-}
-
-// jobCgroupDir resolves this process's cgroup-v2 directory stripped to the job level (dropping any /step_* leaf), so
-// memory/cpu reflect the whole allocation rather than one step. Mirrors `sed 's|^0::||; s|/step_.*||' /proc/self/cgroup`.
-func jobCgroupDir() (string, error) {
-	b, err := os.ReadFile("/proc/self/cgroup")
-	if err != nil {
-		return "", err
-	}
-	return "/sys/fs/cgroup" + jobCgroupSuffix(string(b)), nil
-}
-
-// jobCgroupSuffix is the pure path-munging half of jobCgroupDir (unit-tested).
-func jobCgroupSuffix(procCgroup string) string {
-	lines := strings.Split(strings.TrimSpace(procCgroup), "\n")
-	p := strings.TrimPrefix(strings.TrimSpace(lines[len(lines)-1]), "0::")
-	if i := strings.Index(p, "/step_"); i >= 0 {
-		p = p[:i]
-	}
-	return p
-}
-
-func readInt64File(path string) (int64, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return 0, err
-	}
-	return strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
-}
-
-func readCPUUsageUsec(path string) (int64, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return 0, err
-	}
-	return parseCPUUsageUsec(string(b))
-}
-
-// parseCPUUsageUsec pulls the cumulative `usage_usec` line out of a cgroup cpu.stat body.
-func parseCPUUsageUsec(cpuStat string) (int64, error) {
-	for ln := range strings.SplitSeq(cpuStat, "\n") {
-		if v, ok := strings.CutPrefix(ln, "usage_usec "); ok {
-			return strconv.ParseInt(strings.TrimSpace(v), 10, 64)
-		}
-	}
-	return 0, fmt.Errorf("usage_usec not found in cpu.stat")
-}
-
-// readGPUMetrics returns per-GPU stats via nvidia-smi, or nil if it's absent or errors (CPU nodes have no driver).
-func readGPUMetrics() []gpuMetric {
-	out, err := exec.Command("nvidia-smi",
-		"--query-gpu=index,utilization.gpu,memory.used,memory.total",
-		"--format=csv,noheader,nounits").Output()
-	if err != nil {
-		return nil
-	}
-	return parseGPUMetrics(string(out))
-}
-
-// parseGPUMetrics parses `index, util, memUsed, memTotal` CSV rows; malformed rows are skipped.
-func parseGPUMetrics(out string) []gpuMetric {
-	var gpus []gpuMetric
-	for ln := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
-		f := strings.Split(ln, ",")
-		if len(f) != 4 {
-			continue
-		}
-		var n [4]int
-		ok := true
-		for i := range f {
-			v, err := strconv.Atoi(strings.TrimSpace(f[i]))
-			if err != nil {
-				ok = false
-				break
-			}
-			n[i] = v
-		}
-		if ok {
-			gpus = append(gpus, gpuMetric{Index: n[0], UtilPct: n[1], MemUsedMiB: n[2], MemTotalMiB: n[3]})
-		}
-	}
-	return gpus
 }

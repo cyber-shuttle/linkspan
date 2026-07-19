@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
-	"github.com/cyber-shuttle/linkspan/utils"
+	"github.com/cyber-shuttle/linkspan/internal/utils"
 	"github.com/gorilla/mux"
 )
 
