@@ -71,38 +71,47 @@ This starts the REST API without running any workflow.
 | `--tunnel-attempt-timeout` | `10s` | Timeout per tunnel attempt |
 | `--vfs-mode` | | VFS mode: `sync` or `mount` (also reads `CS_VFS_MODE` env) |
 | `--vfs-session-id` | | Session ID for VFS (also reads `CS_SESSION_ID` env) |
+| `--version` | | Print the version string and exit |
+| `--verbose-version` | | Print version, commit, build date, builder, Go version, and platform, then exit |
 
 ## REST API
 
 All endpoints are under `/api/v1/`.
 
 ### Jupyter Kernels
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/jupyter/kernels` | List running kernels |
-| POST | `/jupyter/kernels` | Provision a new kernel |
-| DELETE | `/jupyter/kernels/{id}` | Delete a kernel |
-| GET | `/jupyter/kernels/{id}/connection` | Get kernel connection info |
-| GET | `/jupyter/kernels/{id}/status` | Get kernel status |
-| POST | `/jupyter/kernels/shutdown` | Shutdown a kernel |
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| GET | `/jupyter/kernels` | – | List running kernels |
+| POST | `/jupyter/kernels` | `{kernelName, venvPath}` | Provision a new kernel |
+| DELETE | `/jupyter/kernels/{id}` | – | Delete a kernel |
+| GET | `/jupyter/kernels/{id}/connection` | – | Get kernel connection info |
+| GET | `/jupyter/kernels/{id}/status` | – | Get kernel status |
+| POST | `/jupyter/kernels/shutdown` | `{kernelId, signal}` | Shutdown a kernel |
+
+> `kernelName` must be a pre-registered Jupyter kernelspec (e.g. `python3`, auto-registered by `ipykernel`), not a free-form label. If `venvPath` doesn't exist yet, it's auto-created and bootstrapped with `pip install cspyk jupyter` on first use (no timeout, requires PyPI access); pre-install both on air-gapped nodes.
 
 ### VS Code Sessions
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/vscode/sessions` | List active sessions |
-| POST | `/vscode/sessions` | Create a new session |
-| DELETE | `/vscode/sessions/{id}` | Terminate a session |
-| GET | `/vscode/sessions/{id}/status` | Get session status |
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| GET | `/vscode/sessions` | – | List active sessions |
+| POST | `/vscode/sessions` | `{mount_user_home}` | Create a new session |
+| DELETE | `/vscode/sessions/{id}` | – | Terminate a session |
+| GET | `/vscode/sessions/{id}/status` | – | Get session status |
 
 ### Tunnels
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| GET | `/tunnels/devtunnels` | – | List active Dev Tunnels |
+| POST | `/tunnels/devtunnels` | `{tunnelName, expiration, authToken, open_ports?}` | Create a Dev Tunnel |
+| DELETE | `/tunnels/devtunnels/{id}` | – | Close a Dev Tunnel |
+| GET | `/tunnels/frp` | – | List FRP tunnels |
+| POST | `/tunnels/frp` | `{tunnelName, port, tunnelType, tunnelSecret, discoveryHost, discoveryPort, discoveryToken}` | Create an FRP tunnel proxy |
+| DELETE | `/tunnels/frp/{id}` | – | Terminate an FRP tunnel |
+
+### System
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/tunnels/devtunnels` | List active Dev Tunnels |
-| POST | `/tunnels/devtunnels` | Create a Dev Tunnel |
-| DELETE | `/tunnels/devtunnels/{id}` | Close a Dev Tunnel |
-| GET | `/tunnels/frp` | List FRP tunnels |
-| POST | `/tunnels/frp` | Create an FRP tunnel proxy |
-| DELETE | `/tunnels/frp/{id}` | Terminate an FRP tunnel |
+| GET | `/health` | Liveness check — `{"status":"ok"}` |
 
 ## Workflow Actions
 
