@@ -134,14 +134,16 @@ func ShutdownKernel(w http.ResponseWriter, r *http.Request) {
 }
 
 func DeleteKernel(w http.ResponseWriter, r *http.Request) {
-	deleteReq := KernelShutdownRequest{}
-	if err := json.NewDecoder(r.Body).Decode(&deleteReq); err != nil {
-		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+	// read id from URL path
+	vars := mux.Vars(r)
+	kernelID := vars["id"]
+
+	if kernelID == "" {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "KernelID is required"})
 		return
 	}
-	_ = r.Body.Close()
 
-	err := stopKernel(deleteReq.KernelID)
+	err := stopKernel(kernelID)
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
