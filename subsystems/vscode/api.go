@@ -1,23 +1,24 @@
 package vscode
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
 
 	"github.com/cyber-shuttle/linkspan/utils"
 	"github.com/gorilla/mux"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 type VSCodeSessionRequest struct {
-	MountUserHome bool `json:"mount_user_home"`
+	MountUserHome bool   `json:"mount_user_home"`
+	AuthorizedKey string `json:"authorized_key"` // caller-generated public key; the private half never leaves the client
 }
 
 type VSCodeSessionResponse struct {
-	ID         string `json:"id"`
-	BindPort   int32  `json:"bind_port"`
-	Password   string `json:"password,omitempty"`    // Password is only returned on creation, not in session status or list responses.
-	PrivateKey string `json:"private_key,omitempty"` // privateKey is not exposed in JSON responses, but stored for SSH server use.
+	ID       string `json:"id"`
+	BindPort int32  `json:"bind_port"`
 }
 
 func ListVSCodeSessions(w http.ResponseWriter, r *http.Request) {
@@ -33,6 +34,11 @@ func CreateVSCodeSession(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.Body.Close()
 
+	if _, _, _, rest, err := gossh.ParseAuthorizedKey([]byte(sessionReq.AuthorizedKey)); err != nil || len(bytes.TrimSpace(rest)) != 0 {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "authorized_key is missing or invalid"})
+		return
+	}
+
 	availablePort, err := utils.GetAvailablePort()
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -41,19 +47,11 @@ func CreateVSCodeSession(w http.ResponseWriter, r *http.Request) {
 
 	// Generate a session ID (in production, use a proper ID generator)
 	sessionID := fmt.Sprintf("s-%d", availablePort)
-	password := utils.GenerateRandomPassword(16)
 
-	// Generate SSH keys for this session (if needed) and start the SSH server
-	privateKey, publicKey, err := utils.GenerateSSHKeyPair()
-	if err != nil {
-		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	// Bind loopback only: the port reaches clients through the tunnel, never the node's network.
+	StartSSHServerForVSCodeConnection(sessionID, fmt.Sprintf("127.0.0.1:%d", availablePort), sessionReq.AuthorizedKey)
 
-	StartSSHServerForVSCodeConnection(sessionID, fmt.Sprintf(":%d", availablePort), password, publicKey)
-
-	s := VSCodeSessionResponse{ID: sessionID, BindPort: int32(availablePort), Password: password, PrivateKey: privateKey}
-	utils.RespondJSON(w, http.StatusCreated, s)
+	utils.RespondJSON(w, http.StatusCreated, VSCodeSessionResponse{ID: sessionID, BindPort: int32(availablePort)})
 }
 
 func DeleteVSCodeSession(w http.ResponseWriter, r *http.Request) {

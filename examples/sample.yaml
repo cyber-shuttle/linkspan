@@ -13,4 +13,3 @@ steps:
     outputs:
       tunnel_id: "tunnel_id"
       connection_url: "tunnel_url"
-      token: "tunnel_token"

@@ -63,6 +63,7 @@ func main() {
 	tunnelID := flag.String("tunnel-id", "", "host this client-created dev tunnel id instead of creating one; the client owns its lifecycle")
 	tunnelCluster := flag.String("tunnel-cluster", "", "cluster id of the client-created tunnel (required with --tunnel-id to resolve it)")
 	tunnelAuthToken := flag.String("tunnel-auth-token", "", "Microsoft Entra ID bearer token for the Dev Tunnels service")
+	tunnelHostToken := flag.String("tunnel-host-token", "", "host-scoped access token for --tunnel-id; the client owns the tunnel and its ports, so no Entra bearer is needed here")
 	tunnelRetries := flag.Int("tunnel-retries", 3, "number of retries for tunnel startup")
 	tunnelRetryDelay := flag.Duration("tunnel-retry-delay", 2*time.Second, "delay between tunnel startup retries")
 	tunnelAttemptTimeout := flag.Duration("tunnel-attempt-timeout", 10*time.Second, "timeout per tunnel setup attempt")
@@ -305,8 +306,11 @@ func main() {
 
 	if apiTunnelType == "devtunnels" && *tunnelEnable {
 		authToken := *tunnelAuthToken
-		if authToken == "" {
-			log.Fatalf("devtunnel: warning — --tunnel-auth-token not provided; tunnel startup will fail")
+		if authToken == "" && *tunnelHostToken == "" {
+			log.Fatalf("devtunnel: neither --tunnel-auth-token nor --tunnel-host-token provided; tunnel startup will fail")
+		}
+		if *tunnelHostToken != "" && *tunnelID == "" {
+			log.Fatalf("devtunnel: --tunnel-host-token requires --tunnel-id")
 		}
 		go func() {
 			// Host a client-created tunnel when an id is supplied; otherwise create our own.
@@ -333,7 +337,7 @@ func main() {
 
 				ch := make(chan error, 1)
 				go func() {
-					conn, err := tunnel.DevTunnelSetup(tunnelName, "1d", authToken, *tunnelID != "", *tunnelCluster, serverPort)
+					conn, err := hostOrCreateTunnel(tunnelName, authToken, *tunnelHostToken, *tunnelID, *tunnelCluster, serverPort)
 					if err != nil {
 						log.Printf("devtunnel bring-up error: %v", err)
 						ch <- err
@@ -342,7 +346,6 @@ func main() {
 
 					log.Printf("Connect to agent using the URL: %s", conn.ConnectionURL)
 					log.Printf("DevTunnel ID: %s", conn.DevTunnelInfo.TunnelID)
-					log.Printf("DevTunnel Token: %s", conn.Token)
 					log.Printf("DevTunnel forwarded ports: %v", conn.DevTunnelInfo.Ports)
 					log.Printf("Devtunnel cluster id: %s", conn.DevTunnelInfo.ClusterID)
 					ch <- nil
@@ -407,6 +410,16 @@ func main() {
 	cleanupResources()
 
 	log.Println("Server gracefully stopped.")
+}
+
+// hostOrCreateTunnel hosts a client-created tunnel with a host-scoped token when one is
+// supplied, so a Microsoft Entra bearer never has to reach the compute node. Otherwise it
+// falls back to the Entra-authenticated create/resolve path.
+func hostOrCreateTunnel(tunnelName, authToken, hostToken, tunnelID, cluster string, serverPort int) (tunnel.DevTunnelConnection, error) {
+	if hostToken != "" {
+		return tunnel.DevTunnelHost(tunnelID, cluster, hostToken)
+	}
+	return tunnel.DevTunnelSetup(tunnelName, "1d", authToken, tunnelID != "", cluster, serverPort)
 }
 
 // listenUnix serves srv on a unix socket in a background goroutine.
