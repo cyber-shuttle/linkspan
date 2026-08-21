@@ -9,10 +9,11 @@ type LinkspanConfig struct {
 	ServerHost string `yaml:"server_host"`
 	SocketPath string `yaml:"socket_path"`
 
-	CRIUPath             string   `yaml:"criu_path"`
-	SupportGpuCheckpoint bool     `yaml:"support_gpu_checkpoint"`
-	AdditionalCriuOpts   []string `yaml:"additional_criu_opts"`
-	DumpDirRoot          string   `yaml:"dump_dir_root"`
+	CRIUPath               string   `yaml:"criu_path"`
+	SupportGpuCheckpoint   bool     `yaml:"support_gpu_checkpoint"`
+	AdditionalCriuOpts     []string `yaml:"additional_criu_opts"`
+	DumpDirRoot            string   `yaml:"dump_dir_root"`
+	AllowedCheckpointUsers []string `yaml:"allowed_checkpoint_users"`
 
 	TunnelApi                string        `yaml:"tunnel_api"`
 	EnableAPITunnelAtStartup bool          `yaml:"enable_api_tunnel_at_startup"`
@@ -43,6 +44,7 @@ func NewDefaultLinkspanConfig() *LinkspanConfig {
 		SupportGpuCheckpoint:     false,
 		AdditionalCriuOpts:       []string{},
 		DumpDirRoot:              "/tmp/linkspan_dumps",
+		AllowedCheckpointUsers:   []string{},
 		TunnelApi:                "devtunnels",
 		EnableAPITunnelAtStartup: false,
 		TunnelId:                 "",
