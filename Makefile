@@ -1,12 +1,12 @@
 MODULE := github.com/cyber-shuttle/linkspan
 BIN    := bin
 
-# Every binary carries the tag it was built from. A tag is X.Y.Z for a release,
-# or X.Y.Z.<commit> for a build ahead of one: the commit makes every such build
-# a different version, so a newer one always replaces an older one and two
-# binaries can never claim the same version. A build with no tag to name would
-# report "dev", which sorts above every release wherever it is installed and
-# would never be replaced, so an untagged commit is refused here instead.
+# Every binary carries the tag it was built from. A release is X.Y.Z and never
+# carries a commit; a build ahead of one is X.Y.Z.<commit>, and that commit makes
+# every such build a different version, so a newer one always replaces an older
+# one and two binaries can never claim the same version. A build with no tag to
+# name would report "dev", which sorts above every release wherever it is
+# installed and would never be replaced, so an untagged commit is refused here.
 VERSION := $(patsubst v%,%,$(shell git describe --tags --exact-match 2>/dev/null))
 VALID   := $(shell printf '%s' '$(VERSION)' | grep -Eo '^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9a-f]{7,40})?$$')
 COMMIT  := $(shell git rev-parse HEAD 2>/dev/null)
