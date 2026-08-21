@@ -108,19 +108,29 @@ func main() {
 
 	if c.RestorePath != "" {
 		log.Printf("Restoring from path %s", c.RestorePath)
-		cp := &checkpoint.CriuCheckpointer{CriuPath: c.CRIUPath, SupportGpuCheckpoint: c.SupportGpuCheckpoint,
-			AdditionalCriuOpts: c.AdditionalCriuOpts, DumpDirRoot: c.DumpDirRoot}
-		intProcess, err := cp.RestoreProcess(c.RestorePath, c.ShutdownOnForkCompletion)
-
+		cp := &checkpoint.CriuCheckpointer{
+			CriuPath:               c.CRIUPath,
+			SupportGpuCheckpoint:   c.SupportGpuCheckpoint,
+			AdditionalCriuOpts:     c.AdditionalCriuOpts,
+			DumpDirRoot:            c.DumpDirRoot,
+			AllowedCheckpointUsers: c.AllowedCheckpointUsers,
+		}
+		result, err := cp.Restore(ctx, c.RestorePath)
 		if err != nil {
 			log.Fatalf("Failed to restore process from path %s: %v", c.RestorePath, err)
 		}
+		log.Printf("Restore completed successfully (pid=%d)", result.Pid)
 
 		if c.CheckpointForkAfterDelay > 0 {
-			log.Printf("waiting %d seconds before checkpointing restored process %s", c.CheckpointForkAfterDelay, intProcess)
-			cp.CheckpointProcessAfterDelay(intProcess, c.CheckpointForkAfterDelay)
+			// The restored process is detached from CRIU and is not a child of
+			// linkspan's ProcessManager, so it cannot be looked up by internal
+			// process id for a follow-up checkpoint.
+			log.Printf("warning: --checkpoint-fork-after-delay is not supported for a restored process; ignoring")
 		}
-		log.Printf("Restore completed successfully")
+
+		if c.ShutdownOnForkCompletion && result.Pid > 0 {
+			go watchPidAndShutdown(result.Pid, fmt.Sprintf("restored process %d exited", result.Pid))
+		}
 	}
 
 	// Start fork process if specified
@@ -132,9 +142,17 @@ func main() {
 
 		if c.CheckpointForkAfterDelay > 0 && c.CRIUPath != "" {
 			log.Printf("waiting %d seconds before checkpointing fork process %s", c.CheckpointForkAfterDelay, internalProcessId)
-			cp := &checkpoint.CriuCheckpointer{CriuPath: c.CRIUPath, SupportGpuCheckpoint: c.SupportGpuCheckpoint,
-				AdditionalCriuOpts: c.AdditionalCriuOpts, DumpDirRoot: c.DumpDirRoot}
-			cp.CheckpointProcessAfterDelay(internalProcessId, c.CheckpointForkAfterDelay)
+			cp := &checkpoint.CriuCheckpointer{
+				CriuPath:               c.CRIUPath,
+				SupportGpuCheckpoint:   c.SupportGpuCheckpoint,
+				AdditionalCriuOpts:     c.AdditionalCriuOpts,
+				DumpDirRoot:            c.DumpDirRoot,
+				AllowedCheckpointUsers: c.AllowedCheckpointUsers,
+			}
+			delay := time.Duration(c.CheckpointForkAfterDelay) * time.Second
+			if err := cp.CheckpointProcessAfterDelay(ctx, internalProcessId, delay); err != nil {
+				log.Printf("failed to schedule checkpoint for process %s: %v", internalProcessId, err)
+			}
 		}
 	}
 
@@ -187,4 +205,16 @@ func listenUnix(srv *http.Server, path string) (net.Listener, error) {
 		}
 	}()
 	return ln, nil
+}
+
+// Used for the restore path, where the restored process is detached from CRIU and therefore not a child linkspan can Wait() on.
+func watchPidAndShutdown(pid int, reason string) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		if err := syscall.Kill(pid, 0); err != nil && err != syscall.EPERM {
+			controller.TriggerShutdown(reason)
+			return
+		}
+	}
 }
