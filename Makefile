@@ -1,12 +1,15 @@
 MODULE := github.com/cyber-shuttle/linkspan
 BIN    := bin
 
-# Every binary carries the tag it was built from, and a tag is X.Y.Z or
-# X.Y.Z.pre. A build with no tag to name would report "dev", which sorts above
-# every release wherever it is installed and would never be replaced, so an
-# untagged or oddly tagged commit is refused here instead.
+# Every binary carries the tag it was built from. A tag is X.Y.Z for a release,
+# or X.Y.Z.<commit> for a build ahead of one: the commit makes every such build
+# a different version, so a newer one always replaces an older one and two
+# binaries can never claim the same version. A build with no tag to name would
+# report "dev", which sorts above every release wherever it is installed and
+# would never be replaced, so an untagged commit is refused here instead.
 VERSION := $(patsubst v%,%,$(shell git describe --tags --exact-match 2>/dev/null))
-VALID   := $(shell printf '%s' '$(patsubst v%,%,$(shell git describe --tags --exact-match 2>/dev/null))' | grep -Eo '^[0-9]+\.[0-9]+\.[0-9]+(\.pre)?$$')
+VALID   := $(shell printf '%s' '$(VERSION)' | grep -Eo '^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9a-f]{7,40})?$$')
+COMMIT  := $(shell git rev-parse HEAD 2>/dev/null)
 
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
@@ -18,7 +21,9 @@ $(BIN)/linkspan-%:
 	$(eval GOOS   := $(word 1,$(subst -, ,$*)))
 	$(eval GOARCH := $(word 2,$(subst -, ,$*)))
 	@mkdir -p $(BIN)
-	@[ -n "$(VALID)" ] || { echo "refusing to build: HEAD needs a tag of the form X.Y.Z or X.Y.Z.pre (found '$(VERSION)')"; exit 1; }
+	@[ -n "$(VALID)" ] || { echo "refusing to build: HEAD needs a tag of the form X.Y.Z or X.Y.Z.<commit> (found '$(VERSION)')"; exit 1; }
+	@case "$(VERSION)" in *.*.*.*) case "$(COMMIT)" in "$(lastword $(subst ., ,$(VERSION)))"*) ;; \
+	  *) echo "refusing to build: tag $(VERSION) does not name this commit $(COMMIT)"; exit 1 ;; esac ;; esac
 	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=0 go build -ldflags "-X main.version=$(patsubst v%,%,$(VERSION))" -o $@ $(MODULE)
 	@echo "built $@"
 
