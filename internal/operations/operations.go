@@ -114,6 +114,7 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	dumpDirRoot := flag.String("dump-dir-root", "/tmp/linkspan_dumps", "root directory for CRIU checkpoint dumps")
 	checkpointForkAfterDelay := flag.Int64("checkpoint-fork-after-delay", 0, "delay in seconds after fork process start before triggering checkpoint")
 	restorePath := flag.String("restore-path", "", "path to the restore directory")
+	allowedCheckpointUsersFlag := flag.String("allowed-checkpoint-users", "", "comma-separated list of usernames/uids allowed to be checkpointed (default: linkspan's own user only); use \"*\" to allow any user")
 	flag.Parse()
 
 	// Parse boolean flags
@@ -136,6 +137,15 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 		}
 	}
 
+	// Parse allowed checkpoint users (comma-separated)
+	var allowedCheckpointUsers []string
+	if *allowedCheckpointUsersFlag != "" {
+		allowedCheckpointUsers = strings.Split(*allowedCheckpointUsersFlag, ",")
+		for i := range allowedCheckpointUsers {
+			allowedCheckpointUsers[i] = strings.TrimSpace(allowedCheckpointUsers[i])
+		}
+	}
+
 	c.TunnelApi = *tunnelAPI
 	c.EnableAPITunnelAtStartup = *tunnelEnable
 	c.TunnelId = *tunnelID
@@ -154,6 +164,7 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	c.SupportGpuCheckpoint = supportGpuCheckpoint
 	c.AdditionalCriuOpts = additionalCriuOpts
 	c.DumpDirRoot = *dumpDirRoot
+	c.AllowedCheckpointUsers = allowedCheckpointUsers
 	c.CheckpointForkAfterDelay = *checkpointForkAfterDelay
 	if *versionFlag {
 		fmt.Printf("%s\n", c.Version)
