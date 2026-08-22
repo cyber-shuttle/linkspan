@@ -2,18 +2,11 @@ package utils
 
 import (
 	"bufio"
-	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
-	mathrand "math/rand"
 	"net"
 	"net/http"
 	"strings"
-	"sync"
-
-	"golang.org/x/crypto/ssh"
 )
 
 // RespondJSON writes a JSON response with the given status code.
@@ -54,58 +47,4 @@ func GetAvailablePort() (int, error) {
 
 	addr := listener.Addr().(*net.TCPAddr)
 	return addr.Port, nil
-}
-
-func GenerateRandomPassword(length int) string {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	var seededRand = NewLockedSource()
-
-	b := make([]byte, length)
-	for i := range b {
-		b[i] = charset[seededRand.Intn(len(charset))]
-	}
-	return string(b)
-}
-
-func GenerateSSHKeyPair() (privateKeyPEM, publicKeyStr string, err error) {
-	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to generate ed25519 key: %w", err)
-	}
-
-	privPEM, err := ssh.MarshalPrivateKey(privKey, "")
-	if err != nil {
-		return "", "", fmt.Errorf("failed to marshal private key: %w", err)
-	}
-	privateKeyPEM = string(pem.EncodeToMemory(privPEM))
-
-	sshPub, err := ssh.NewPublicKey(pubKey)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to create SSH public key: %w", err)
-	}
-	publicKeyStr = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPub)))
-
-	return privateKeyPEM, publicKeyStr, nil
-}
-
-// NewLockedSource returns a thread-safe random source.
-func NewLockedSource() *mathrand.Rand {
-	return mathrand.New(&lockedSource{src: mathrand.NewSource(mathrand.Int63())})
-}
-
-type lockedSource struct {
-	mu  sync.Mutex
-	src mathrand.Source
-}
-
-func (ls *lockedSource) Int63() int64 {
-	ls.mu.Lock()
-	defer ls.mu.Unlock()
-	return ls.src.Int63()
-}
-
-func (ls *lockedSource) Seed(seed int64) {
-	ls.mu.Lock()
-	defer ls.mu.Unlock()
-	ls.src.Seed(seed)
 }

@@ -149,10 +149,7 @@ func DevTunnelConnect(tunnelID string, accessToken string) (string, map[int]int,
 	return cmdID, portMap, nil
 }
 
-// DevTunnelHost hosts a client-created tunnel using only a host-scoped access token.
-// The client owns the tunnel and registers its ports, so the compute node never needs
-// a Microsoft Entra ID bearer — the host token authorizes running the relay and nothing
-// else. The relay picks up ports registered by the client dynamically.
+// DevTunnelHost runs the relay for a tunnel the client owns and registers ports on; the host token authorizes hosting and nothing else.
 func DevTunnelHost(tunnelID, clusterID, hostToken string) (DevTunnelConnection, error) {
 	info := &DevTunnelInfo{TunnelID: tunnelID, ClusterID: clusterID, TunnelName: tunnelID, HostToken: hostToken, External: true}
 	cmdID, connectionURL, err := CLIHostTunnel(info.QualifiedID(), hostToken)

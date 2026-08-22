@@ -412,9 +412,7 @@ func main() {
 	log.Println("Server gracefully stopped.")
 }
 
-// hostOrCreateTunnel hosts a client-created tunnel with a host-scoped token when one is
-// supplied, so a Microsoft Entra bearer never has to reach the compute node. Otherwise it
-// falls back to the Entra-authenticated create/resolve path.
+// A host token hosts the client's tunnel, so no Entra bearer reaches the compute node.
 func hostOrCreateTunnel(tunnelName, authToken, hostToken, tunnelID, cluster string, serverPort int) (tunnel.DevTunnelConnection, error) {
 	if hostToken != "" {
 		return tunnel.DevTunnelHost(tunnelID, cluster, hostToken)

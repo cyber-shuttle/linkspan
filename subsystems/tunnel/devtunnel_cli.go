@@ -91,17 +91,6 @@ func cliCommand(binary string, args ...string) *exec.Cmd {
 	return exec.Command(binary, args...) //nolint:gosec // binary path is controlled by us
 }
 
-// redactedArgs hides access tokens so a CLI invocation can be logged verbatim.
-func redactedArgs(args []string) []string {
-	out := append([]string(nil), args...)
-	for i, a := range out {
-		if a == "--access-token" && i+1 < len(out) {
-			out[i+1] = "[redacted]"
-		}
-	}
-	return out
-}
-
 // downloadFile fetches src (following redirects) and writes the response body to
 // dst, replacing any existing file.
 func downloadFile(dst, src string) error {
@@ -158,7 +147,7 @@ func CLIHostTunnel(tunnelID string, hostToken string) (commandID string, connect
 	}
 
 	args := []string{"host", tunnelID, "--access-token", hostToken}
-	log.Printf("devtunnel cli: running: %s %v", binPath, redactedArgs(args))
+	log.Printf("devtunnel cli: running: %s host %s --access-token [redacted]", binPath, tunnelID)
 
 	cmd := cliCommand(binPath, args...)
 	cmdID, err := pm.GlobalProcessManager.Start(cmd)
@@ -207,7 +196,7 @@ func CLIConnectTunnel(tunnelID string, accessToken string) (commandID string, po
 	}
 
 	args := []string{"connect", tunnelID, "--access-token", accessToken}
-	log.Printf("devtunnel cli: running: %s %v", binPath, redactedArgs(args))
+	log.Printf("devtunnel cli: running: %s connect %s --access-token [redacted]", binPath, tunnelID)
 
 	cmd := cliCommand(binPath, args...)
 	cmdID, err := pm.GlobalProcessManager.Start(cmd)

@@ -2,6 +2,8 @@ package vscode
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"io"
 	"net"
 	"os"
@@ -11,9 +13,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"crypto/ed25519"
-	"crypto/rand"
 
 	"github.com/gliderlabs/ssh"
 	gossh "golang.org/x/crypto/ssh"
@@ -309,8 +308,7 @@ func waitFor(t *testing.T, cond func() bool) bool {
 	return false
 }
 
-// testKeyPair returns a signer and its authorized_keys line, so auth tests use the
-// same caller-owned-public-key path production does.
+// testKeyPair returns a signer and its authorized_keys line.
 func testKeyPair(t *testing.T) (gossh.Signer, string) {
 	t.Helper()
 	_, private, err := ed25519.GenerateKey(rand.Reader)

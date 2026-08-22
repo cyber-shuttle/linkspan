@@ -1,7 +1,6 @@
 package vscode
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,7 +12,7 @@ import (
 
 type VSCodeSessionRequest struct {
 	MountUserHome bool   `json:"mount_user_home"`
-	AuthorizedKey string `json:"authorized_key"` // caller-generated public key; the private half never leaves the client
+	AuthorizedKey string `json:"authorized_key"` // the private half never leaves the caller
 }
 
 type VSCodeSessionResponse struct {
@@ -34,7 +33,7 @@ func CreateVSCodeSession(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.Body.Close()
 
-	if _, _, _, rest, err := gossh.ParseAuthorizedKey([]byte(sessionReq.AuthorizedKey)); err != nil || len(bytes.TrimSpace(rest)) != 0 {
+	if _, _, _, _, err := gossh.ParseAuthorizedKey([]byte(sessionReq.AuthorizedKey)); err != nil {
 		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "authorized_key is missing or invalid"})
 		return
 	}
@@ -48,7 +47,7 @@ func CreateVSCodeSession(w http.ResponseWriter, r *http.Request) {
 	// Generate a session ID (in production, use a proper ID generator)
 	sessionID := fmt.Sprintf("s-%d", availablePort)
 
-	// Bind loopback only: the port reaches clients through the tunnel, never the node's network.
+	// Loopback only: the port reaches clients through the tunnel, never the node's network.
 	StartSSHServerForVSCodeConnection(sessionID, fmt.Sprintf("127.0.0.1:%d", availablePort), sessionReq.AuthorizedKey)
 
 	utils.RespondJSON(w, http.StatusCreated, VSCodeSessionResponse{ID: sessionID, BindPort: int32(availablePort)})

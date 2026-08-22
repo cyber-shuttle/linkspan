@@ -27,8 +27,7 @@ import (
 // ═══════════════════════════ SERVER START ═══════════════════════════
 
 // StartSSHServerForVSCodeConnection starts a supervised, auto-restarting SSH
-// server for a session and registers it for later shutdown. Only the caller's
-// authorized public key can authenticate; linkspan holds no private key.
+// server for a session and registers it for later shutdown.
 func StartSSHServerForVSCodeConnection(sessionID, addr string, publicKey string) *SSHServer {
 	return supervise(sessionID, addr, func() *ssh.Server {
 		return newServer(addr,
@@ -63,8 +62,7 @@ func onConnect(h func(ssh.Session)) serverOption {
 	return func(srv *ssh.Server) { srv.Handler = recoverSessionHandler("session", h) }
 }
 
-// withAuth accepts the caller's public key only. PasswordHandler stays nil so
-// password authentication is never offered.
+// PasswordHandler stays nil, so the caller's public key is the only way in.
 func withAuth(publicKey string) serverOption {
 	return func(srv *ssh.Server) { srv.PublicKeyHandler = newPublicKeyHandler(publicKey) }
 }
