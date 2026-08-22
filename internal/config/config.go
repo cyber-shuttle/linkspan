@@ -12,7 +12,8 @@ type LinkspanConfig struct {
 	CRIUPath               string   `yaml:"criu_path"`
 	SupportGpuCheckpoint   bool     `yaml:"support_gpu_checkpoint"`
 	AdditionalCriuOpts     []string `yaml:"additional_criu_opts"`
-	DumpDirRoot            string   `yaml:"dump_dir_root"`
+	CheckpointRoot         string   `yaml:"checkpoint_root"`
+	WorkloadID             string   `yaml:"workload_id"`
 	AllowedCheckpointUsers []string `yaml:"allowed_checkpoint_users"`
 
 	TunnelApi                string        `yaml:"tunnel_api"`
@@ -32,7 +33,8 @@ type LinkspanConfig struct {
 	ForkCommand              string `yaml:"fork_command"`
 	ShutdownOnForkCompletion bool   `yaml:"shutdown_on_fork_completion"`
 	CheckpointForkAfterDelay int64  `yaml:"checkpoint_fork_after_delay"`
-	RestorePath              string `yaml:"restore_path"`
+	RestoreWorkloadID        string `yaml:"restore_workload_id"`
+	RestoreCheckpointID      string `yaml:"restore_checkpoint_id"`
 }
 
 func NewDefaultLinkspanConfig() *LinkspanConfig {
@@ -43,7 +45,8 @@ func NewDefaultLinkspanConfig() *LinkspanConfig {
 		CRIUPath:                 "",
 		SupportGpuCheckpoint:     false,
 		AdditionalCriuOpts:       []string{},
-		DumpDirRoot:              "/tmp/linkspan_dumps",
+		CheckpointRoot:           "",
+		WorkloadID:               "",
 		AllowedCheckpointUsers:   []string{},
 		TunnelApi:                "devtunnels",
 		EnableAPITunnelAtStartup: false,
@@ -56,6 +59,7 @@ func NewDefaultLinkspanConfig() *LinkspanConfig {
 		ForkCommand:              "",
 		ShutdownOnForkCompletion: false,
 		CheckpointForkAfterDelay: 0,
-		RestorePath:              "",
+		RestoreWorkloadID:        "",
+		RestoreCheckpointID:      "",
 	}
 }
