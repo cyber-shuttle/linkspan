@@ -58,12 +58,12 @@ func main() {
 		utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("GET /api/v1/metrics", metricsHandler)
-	mux.HandleFunc("GET /api/v1/vscode/sessions", vscode.ListVSCodeSessions)
-	mux.HandleFunc("POST /api/v1/vscode/sessions", vscode.CreateVSCodeSession)
+	mux.HandleFunc("GET /api/v1/vscode/sessions", vscode.ListSessions)
+	mux.HandleFunc("POST /api/v1/vscode/sessions", vscode.CreateSession)
 
 	serverPort := *serverPortFlag
 	if serverPort < 0 || serverPort > 65535 {
-		log.Fatalf("invalid server port: %d", serverPort)
+		log.Fatalf("--port must be between 0 and 65535, got %d", serverPort)
 	}
 	addr := fmt.Sprintf("0.0.0.0:%d", serverPort)
 	srv := &http.Server{Addr: addr, Handler: mux}
@@ -72,9 +72,6 @@ func main() {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("failed to listen on %s: %v", addr, err)
-	}
-	if serverPort == 0 {
-		serverPort = listener.Addr().(*net.TCPAddr).Port
 	}
 	log.Printf("listening on %s", listener.Addr())
 
@@ -136,13 +133,13 @@ func hostTunnel(ctx context.Context, tunnelID, clusterID, hostToken string) {
 	for attempt := 1; attempt <= tunnelRetries; attempt++ {
 		log.Printf("devtunnel: attempt %d/%d to host tunnel %s", attempt, tunnelRetries, tunnelID)
 		type hosted struct {
-			cmdID, url string
-			err        error
+			cmdID string
+			err   error
 		}
 		ch := make(chan hosted, 1)
 		go func() {
-			cmdID, url, err := tunnel.DevTunnelHost(tunnelID, clusterID, hostToken)
-			ch <- hosted{cmdID, url, err}
+			cmdID, err := tunnel.DevTunnelHost(tunnelID, clusterID, hostToken)
+			ch <- hosted{cmdID, err}
 		}()
 
 		attemptCtx, cancel := context.WithTimeout(ctx, tunnelAttemptTimeout)
@@ -150,7 +147,7 @@ func hostTunnel(ctx context.Context, tunnelID, clusterID, hostToken string) {
 		case h := <-ch:
 			cancel()
 			if h.err == nil {
-				log.Printf("devtunnel: successfully hosting %s at %s", tunnelID, h.url)
+				log.Printf("devtunnel: successfully hosting %s", tunnelID)
 				return
 			}
 			log.Printf("devtunnel: attempt %d failed: %v", attempt, h.err)

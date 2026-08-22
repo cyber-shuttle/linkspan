@@ -2,7 +2,6 @@ name: goreleaser
 
 on:
   pull_request:
-  push:
   release:
     types: [published]
 
@@ -11,7 +10,7 @@ permissions:
 
 jobs:
   dry-run:
-    name: GoReleaser dry-run (push & PR)
+    name: GoReleaser dry-run (PR)
     if: github.event_name != 'release'
     runs-on: ubuntu-latest
     steps:
