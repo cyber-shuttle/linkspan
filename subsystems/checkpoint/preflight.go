@@ -26,7 +26,7 @@ checkpoint root is writable, checks for the Linux capabilities CRIU needs
 in unprivileged mode, and (when GPU checkpointing is requested) validates
 GPU prerequisites separately.
 */
-func (c *CriuCheckpointer) CRIUCheck(ctx context.Context) error {
+func (c *criuCheckpointer) CRIUCheck(ctx context.Context) error {
 	if err := c.checkBinary(); err != nil {
 		return err
 	}
@@ -53,7 +53,7 @@ func (c *CriuCheckpointer) CRIUCheck(ctx context.Context) error {
 	return nil
 }
 
-func (c *CriuCheckpointer) checkBinary() error {
+func (c *criuCheckpointer) checkBinary() error {
 	if c.CriuPath == "" {
 		return fmt.Errorf("CRIU path is not configured")
 	}
@@ -70,7 +70,7 @@ func (c *CriuCheckpointer) checkBinary() error {
 	return nil
 }
 
-func (c *CriuCheckpointer) runCriuCheck(ctx context.Context) error {
+func (c *criuCheckpointer) runCriuCheck(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, c.CriuPath, "check", "--unprivileged")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -129,20 +129,6 @@ func hasEffectiveCapability(bit uint) (bool, error) {
 		return mask&(1<<bit) != 0, nil
 	}
 	return false, fmt.Errorf("CapEff not found in /proc/self/status")
-}
-
-func checkGpuPrerequisites(ctx context.Context) error {
-	path, err := exec.LookPath("nvidia-smi")
-	if err != nil {
-		return fmt.Errorf("GPU checkpoint requested but nvidia-smi was not found on PATH: %w", err)
-	}
-	cmd := exec.CommandContext(ctx, path, "-L")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("GPU checkpoint requested but nvidia-smi failed: %w: %s", err, strings.TrimSpace(stderr.String()))
-	}
-	return nil
 }
 
 func checkPidExists(pid int) error {
