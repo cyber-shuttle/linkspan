@@ -114,8 +114,7 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	checkpointRoot := flag.String("checkpoint-root", "", "root directory for durable checkpoint storage; must be shared storage reachable from any allocation (e.g. Lustre, GPFS, NFS, project scratch)")
 	workloadID := flag.String("workload-id", "", "logical workload identity checkpoints are grouped under; auto-generated and logged if not provided")
 	checkpointForkAfterDelay := flag.Int64("checkpoint-fork-after-delay", 0, "delay in seconds after fork process start before triggering checkpoint")
-	restoreWorkloadID := flag.String("restore-workload-id", "", "workload id of the checkpoint to restore")
-	restoreCheckpointID := flag.String("restore-checkpoint-id", "", "checkpoint id (within --restore-workload-id) to restore")
+	restoreCheckpointID := flag.String("restore-checkpoint-id", "", "checkpoint id to restore (its workload is resolved automatically)")
 	allowedCheckpointUsersFlag := flag.String("allowed-checkpoint-users", "", "comma-separated list of usernames/uids allowed to be checkpointed (default: linkspan's own user only); use \"*\" to allow any user")
 	flag.Parse()
 
@@ -160,7 +159,6 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	c.ServerHost = *serverHostFlag
 	c.ForkCommand = *forkCommand
 	c.ShutdownOnForkCompletion = shutdownOnForkCompletion
-	c.RestoreWorkloadID = *restoreWorkloadID
 	c.RestoreCheckpointID = *restoreCheckpointID
 	c.SocketPath = *socketPath
 	c.CRIUPath = *criuPath

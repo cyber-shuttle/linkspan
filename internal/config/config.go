@@ -33,7 +33,6 @@ type LinkspanConfig struct {
 	ForkCommand              string `yaml:"fork_command"`
 	ShutdownOnForkCompletion bool   `yaml:"shutdown_on_fork_completion"`
 	CheckpointForkAfterDelay int64  `yaml:"checkpoint_fork_after_delay"`
-	RestoreWorkloadID        string `yaml:"restore_workload_id"`
 	RestoreCheckpointID      string `yaml:"restore_checkpoint_id"`
 }
 
@@ -59,7 +58,6 @@ func NewDefaultLinkspanConfig() *LinkspanConfig {
 		ForkCommand:              "",
 		ShutdownOnForkCompletion: false,
 		CheckpointForkAfterDelay: 0,
-		RestoreWorkloadID:        "",
 		RestoreCheckpointID:      "",
 	}
 }
