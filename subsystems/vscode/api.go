@@ -9,22 +9,22 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-type VSCodeSessionRequest struct {
+type SessionRequest struct {
 	AuthorizedKey string `json:"authorized_key"` // the private half never leaves the caller
 }
 
-type VSCodeSessionResponse struct {
+type SessionResponse struct {
 	ID       string `json:"id"`
 	BindPort int32  `json:"bind_port"`
 }
 
-func ListVSCodeSessions(w http.ResponseWriter, r *http.Request) {
+func ListSessions(w http.ResponseWriter, r *http.Request) {
 	sessions := listAllSessionStatuses()
 	utils.RespondJSON(w, http.StatusOK, sessions)
 }
 
-func CreateVSCodeSession(w http.ResponseWriter, r *http.Request) {
-	sessionReq := VSCodeSessionRequest{}
+func CreateSession(w http.ResponseWriter, r *http.Request) {
+	sessionReq := SessionRequest{}
 	if err := json.NewDecoder(r.Body).Decode(&sessionReq); err != nil {
 		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
@@ -42,11 +42,12 @@ func CreateVSCodeSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate a session ID (in production, use a proper ID generator)
+	// The port is the identity: it is unique while the server is up, and it is
+	// what the client reads back out of the id to reach the sshd.
 	sessionID := fmt.Sprintf("s-%d", availablePort)
 
 	// Loopback only: the port reaches clients through the tunnel, never the node's network.
-	StartSSHServerForVSCodeConnection(sessionID, fmt.Sprintf("127.0.0.1:%d", availablePort), sessionReq.AuthorizedKey)
+	StartSSHServer(sessionID, fmt.Sprintf("127.0.0.1:%d", availablePort), sessionReq.AuthorizedKey)
 
-	utils.RespondJSON(w, http.StatusCreated, VSCodeSessionResponse{ID: sessionID, BindPort: int32(availablePort)})
+	utils.RespondJSON(w, http.StatusCreated, SessionResponse{ID: sessionID, BindPort: int32(availablePort)})
 }

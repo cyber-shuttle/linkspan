@@ -26,9 +26,9 @@ import (
 
 // ═══════════════════════════ SERVER START ═══════════════════════════
 
-// StartSSHServerForVSCodeConnection starts a supervised, auto-restarting SSH
+// StartSSHServer starts a supervised, auto-restarting SSH
 // server for a session and registers it for later shutdown.
-func StartSSHServerForVSCodeConnection(sessionID, addr string, publicKey string) *SSHServer {
+func StartSSHServer(sessionID, addr string, publicKey string) *SSHServer {
 	return supervise(sessionID, addr, func() *ssh.Server {
 		return newServer(addr,
 			onConnect(handleSession),
@@ -306,8 +306,6 @@ type SSHServer struct {
 	mu        sync.Mutex
 	current   *ssh.Server // rebuilt on each restart
 	state     string
-	restarts  int
-	lastError string
 	addr      string
 	sessionID string
 	stopCh    chan struct{}
@@ -352,10 +350,6 @@ func (s *SSHServer) run(build func() *ssh.Server) {
 			s.state = stateStopped
 			s.mu.Unlock()
 			break
-		}
-		s.restarts++
-		if err != nil {
-			s.lastError = err.Error()
 		}
 		if ranFor >= healthyRunThreshold {
 			consecutive, backoff = 0, minRestartBackoff
@@ -462,7 +456,7 @@ type SessionStatus struct {
 	Addr  string `json:"addr,omitempty"`
 }
 
-// status snapshots supervisor state; Active is true only while the listener is up.
+// status snapshots what a caller of GET /vscode/sessions is shown.
 func (s *SSHServer) status() *SessionStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()

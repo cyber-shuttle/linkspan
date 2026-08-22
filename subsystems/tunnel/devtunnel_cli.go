@@ -19,12 +19,17 @@ import (
 // devtunnelDownloadURLs maps GOOS/GOARCH pairs to the Azure blob storage URLs
 // for the latest devtunnel CLI binary for each supported platform.
 var devtunnelDownloadURLs = map[string]string{
-	"linux/amd64":   "https://tunnelsassetsprod.blob.core.windows.net/cli/linux-x64-devtunnel",
-	"linux/arm64":   "https://tunnelsassetsprod.blob.core.windows.net/cli/linux-arm64-devtunnel",
-	"darwin/amd64":  "https://tunnelsassetsprod.blob.core.windows.net/cli/osx-x64-devtunnel",
-	"darwin/arm64":  "https://tunnelsassetsprod.blob.core.windows.net/cli/osx-arm64-devtunnel",
-	"windows/amd64": "https://tunnelsassetsprod.blob.core.windows.net/cli/win-x64-devtunnel.exe",
+	"linux/amd64":  "https://tunnelsassetsprod.blob.core.windows.net/cli/linux-x64-devtunnel",
+	"linux/arm64":  "https://tunnelsassetsprod.blob.core.windows.net/cli/linux-arm64-devtunnel",
+	"darwin/amd64": "https://tunnelsassetsprod.blob.core.windows.net/cli/osx-x64-devtunnel",
+	"darwin/arm64": "https://tunnelsassetsprod.blob.core.windows.net/cli/osx-arm64-devtunnel",
 }
+
+const (
+	hostReadyMarker  = "Ready to accept connections"
+	hostReadyTimeout = 30 * time.Second
+	hostReadyPoll    = 500 * time.Millisecond
+)
 
 // binaryDownloadMu prevents concurrent downloads of the same binary.
 var binaryDownloadMu sync.Mutex
@@ -39,9 +44,6 @@ func devtunnelBinPath() (string, error) {
 	}
 
 	binName := "devtunnel"
-	if runtime.GOOS == "windows" {
-		binName = "devtunnel.exe"
-	}
 
 	binDir := filepath.Join(home, ".linkspan", "bin")
 	binPath := filepath.Join(binDir, binName)
@@ -82,11 +84,6 @@ func devtunnelBinPath() (string, error) {
 
 	log.Printf("devtunnel cli: binary ready at %s", binPath)
 	return binPath, nil
-}
-
-// cliCommand builds an *exec.Cmd for the given binary and arguments.
-func cliCommand(binary string, args ...string) *exec.Cmd {
-	return exec.Command(binary, args...) //nolint:gosec // binary path is controlled by us
 }
 
 // downloadFile fetches src (following redirects) and writes the response body to
@@ -130,70 +127,41 @@ func downloadFile(dst, src string) error {
 	return nil
 }
 
-// CLIHostTunnel starts hosting a tunnel using the managed devtunnel binary and a
-// host-scoped access token obtained from the SDK.
-//
-// Ports are NOT passed via -p; they are registered on the service via the SDK
-// before calling this function.  The relay forwards SDK-registered ports
-// automatically.
-//
-// Returns the ProcessManager command ID and a constructed connection URL.
-func CLIHostTunnel(tunnelID string, hostToken string) (commandID string, connectionURL string, err error) {
-	binPath, err := devtunnelBinPath()
-	if err != nil {
-		return "", "", fmt.Errorf("devtunnel cli: get binary: %w", err)
-	}
-
-	args := []string{"host", tunnelID, "--access-token", hostToken}
-	log.Printf("devtunnel cli: running: %s host %s --access-token [redacted]", binPath, tunnelID)
-
-	cmd := cliCommand(binPath, args...)
-	cmdID, err := pm.GlobalProcessManager.Start(cmd)
-	if err != nil {
-		return "", "", fmt.Errorf("devtunnel cli: start host command: %w", err)
-	}
-
-	// Wait for "Ready to accept connections" which signals the relay is up.
-	const pollInterval = 500 * time.Millisecond
-	const maxWait = 30 * time.Second
-	deadline := time.Now().Add(maxWait)
-
-	for time.Now().Before(deadline) {
-		time.Sleep(pollInterval)
-
-		stdout, stderr, _ := pm.GlobalProcessManager.GetOutput(cmdID)
-
-		if strings.Contains(stdout, "Ready to accept connections") {
-			connURL := fmt.Sprintf("https://%s.devtunnels.ms", tunnelID)
-			return cmdID, connURL, nil
-		}
-
-		// Check if process exited with an error early.
-		if stderr != "" && !strings.Contains(stderr, "Warning") {
-			return "", "", fmt.Errorf("devtunnel cli: host failed (stderr=%q)", stderr)
-		}
-	}
-
-	// Timed out — collect what we have for the error message.
-	stdout, stderr, _ := pm.GlobalProcessManager.GetOutput(cmdID)
-	return "", "", fmt.Errorf(
-		"devtunnel cli: timed out waiting for ready signal (stdout=%q stderr=%q)",
-		stdout, stderr,
-	)
-}
-
 // DevTunnelHost runs the relay for a tunnel the client owns and registers ports
-// on; the host token authorizes hosting and nothing else. linkspan never creates
-// or deletes a tunnel — the client owns its lifecycle.
-func DevTunnelHost(tunnelID, clusterID, hostToken string) (cmdID, connectionURL string, err error) {
+// on. The host token authorizes hosting and nothing else: linkspan never
+// creates, forwards or deletes a tunnel, so no ports are passed here -- the
+// relay forwards whatever the client already registered on the service.
+func DevTunnelHost(tunnelID, clusterID, hostToken string) (string, error) {
 	qualified := tunnelID
 	if clusterID != "" {
 		qualified = tunnelID + "." + clusterID
 	}
-	cmdID, connectionURL, err = CLIHostTunnel(qualified, hostToken)
+	binPath, err := devtunnelBinPath()
 	if err != nil {
-		return "", "", fmt.Errorf("devtunnel host %q: %w", qualified, err)
+		return "", fmt.Errorf("devtunnel host %q: %w", qualified, err)
 	}
-	log.Printf("devtunnel host: tunnel %q ready (url=%s)", qualified, connectionURL)
-	return cmdID, connectionURL, nil
+	log.Printf("devtunnel host: running %s host %s --access-token [redacted]", binPath, qualified)
+	//nolint:gosec // the binary path is one we downloaded to a path we chose
+	cmdID, err := pm.GlobalProcessManager.Start(exec.Command(binPath, "host", qualified, "--access-token", hostToken))
+	if err != nil {
+		return "", fmt.Errorf("devtunnel host %q: start: %w", qualified, err)
+	}
+
+	deadline := time.Now().Add(hostReadyTimeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(hostReadyPoll)
+		stdout, stderr, _ := pm.GlobalProcessManager.GetOutput(cmdID)
+		if strings.Contains(stdout, hostReadyMarker) {
+			log.Printf("devtunnel host: tunnel %q ready at https://%s.devtunnels.ms", qualified, qualified)
+			return cmdID, nil
+		}
+		// The CLI warns about things that do not stop it hosting; anything else
+		// on stderr means it gave up, and waiting out the deadline adds nothing.
+		if stderr != "" && !strings.Contains(stderr, "Warning") {
+			return "", fmt.Errorf("devtunnel host %q: %s", qualified, stderr)
+		}
+	}
+	stdout, stderr, _ := pm.GlobalProcessManager.GetOutput(cmdID)
+	return "", fmt.Errorf("devtunnel host %q: no ready signal within %s (stdout=%q stderr=%q)",
+		qualified, hostReadyTimeout, stdout, stderr)
 }

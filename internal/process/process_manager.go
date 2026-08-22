@@ -9,16 +9,13 @@ import (
 	"time"
 )
 
-// ManagedProcess holds runtime information for a started process so it can
-// be inspected or controlled (kill/interrupt) later.
+// ManagedProcess is a started process the manager can kill or read output from.
 type ManagedProcess struct {
-	ID           string
-	Cmd          *exec.Cmd
-	Stdout       *bytes.Buffer
-	Stderr       *bytes.Buffer
-	done         chan error
-	Completed    bool
-	ProcessError error
+	ID     string
+	Cmd    *exec.Cmd
+	Stdout *bytes.Buffer
+	Stderr *bytes.Buffer
+	done   chan error
 }
 
 // ProcessManager stores running processes and provides control operations.
@@ -35,19 +32,7 @@ func newProcessManager() *ProcessManager {
 // global manager instance for the package
 var GlobalProcessManager = newProcessManager()
 
-func (pm *ProcessManager) GetInfo(id string) (ManagedProcess, error) {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-
-	mp, ok := pm.procs[id]
-	if !ok {
-		return ManagedProcess{}, fmt.Errorf("process %s not found", id)
-	}
-	return *mp, nil
-}
-
-// Start registers and starts the given *exec.Cmd asynchronously and returns an id.
-// The caller can later call Kill/Interrupt/GetOutput using the returned id.
+// Start runs cmd asynchronously and returns the id Kill and GetOutput take.
 func (pm *ProcessManager) Start(cmd *exec.Cmd) (string, error) {
 	if cmd == nil {
 		return "", fmt.Errorf("nil cmd")
@@ -56,13 +41,11 @@ func (pm *ProcessManager) Start(cmd *exec.Cmd) (string, error) {
 	id := fmt.Sprintf("p-%d", time.Now().UnixNano())
 
 	mp := &ManagedProcess{
-		ID:           id,
-		Cmd:          cmd,
-		Stdout:       &bytes.Buffer{},
-		Stderr:       &bytes.Buffer{},
-		done:         make(chan error, 1),
-		Completed:    false,
-		ProcessError: nil,
+		ID:     id,
+		Cmd:    cmd,
+		Stdout: &bytes.Buffer{},
+		Stderr: &bytes.Buffer{},
+		done:   make(chan error, 1),
 	}
 
 	// set up pipes
@@ -95,8 +78,6 @@ func (pm *ProcessManager) Start(cmd *exec.Cmd) (string, error) {
 	go func() {
 		err := cmd.Wait()
 		mp.done <- err
-		mp.Completed = true
-		mp.ProcessError = err
 		close(mp.done)
 	}()
 
