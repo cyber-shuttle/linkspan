@@ -13,9 +13,10 @@ type DevTunnelInfo struct {
 	TunnelName string
 	Ports      []int  // ports currently being forwarded
 	HostCmdID  string // ProcessManager ID of the running host CLI process
-	HostToken  string // cached host-scoped access token for restarts
-	AuthToken  string // Microsoft Entra ID bearer token used to create the tunnel
-	External   bool   // created by the client (cs-bridge); linkspan hosts but never deletes it
+	// Tokens stay in the process: this struct is served by GET /tunnels/devtunnels.
+	HostToken string `json:"-"` // cached host-scoped access token for restarts
+	AuthToken string `json:"-"` // Microsoft Entra ID bearer token used to create the tunnel
+	External  bool   // created by the client (cs-bridge); linkspan hosts but never deletes it
 }
 
 // QualifiedID returns the cluster-qualified tunnel ID (e.g. "ls-48.use2")
