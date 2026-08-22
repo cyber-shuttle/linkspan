@@ -102,12 +102,9 @@ func main() {
 		log.Printf("also listening on unix socket %s", c.SocketPath)
 	}
 
-	restoreRequested := c.RestoreWorkloadID != "" || c.RestoreCheckpointID != ""
+	restoreRequested := c.RestoreCheckpointID != ""
 	if restoreRequested && c.ForkCommand != "" {
 		log.Fatalf("Can not perform restore and fork execution at same time")
-	}
-	if restoreRequested && (c.RestoreWorkloadID == "" || c.RestoreCheckpointID == "") {
-		log.Fatalf("Both --restore-workload-id and --restore-checkpoint-id must be provided together")
 	}
 
 	if c.WorkloadID == "" {
@@ -115,24 +112,25 @@ func main() {
 		log.Printf("No --workload-id provided; generated workload id %s (record this to restore this workload later)", c.WorkloadID)
 	}
 
+	// svc is the only thing main.go talks to for checkpoint/restore — all
+	// CRIU mechanics live behind it in the checkpoint package.
+	svc := checkpoint.NewCheckpointService(c)
+
 	if restoreRequested {
-		log.Printf("Restoring workload %s checkpoint %s", c.RestoreWorkloadID, c.RestoreCheckpointID)
-		cp := checkpoint.NewCriuCheckpointer(c)
-		result, err := cp.Restore(ctx, c.RestoreWorkloadID, c.RestoreCheckpointID)
+		log.Printf("Restoring checkpoint %s", c.RestoreCheckpointID)
+		result, err := svc.RestoreCheckpoint(ctx, c.RestoreCheckpointID, checkpoint.RestoreOptions{
+			ShutdownOnCompletion: c.ShutdownOnForkCompletion,
+		})
 		if err != nil {
-			log.Fatalf("Failed to restore workload %s checkpoint %s: %v", c.RestoreWorkloadID, c.RestoreCheckpointID, err)
+			log.Fatalf("Failed to restore checkpoint %s: %v", c.RestoreCheckpointID, err)
 		}
-		log.Printf("Restore completed successfully (pid=%d)", result.Pid)
+		log.Printf("Restore completed successfully (workload=%s pid=%d)", result.WorkloadID, result.Pid)
 
 		if c.CheckpointForkAfterDelay > 0 {
-			// The restored process is detached from CRIU and is not a child of
-			// linkspan's ProcessManager, so it cannot be looked up by internal
-			// process id for a follow-up checkpoint.
+			// The restored process is detached from CRIU and is not tracked
+			// by linkspan's ProcessManager, so ScheduleCheckpoint (which
+			// currently only supports process_id targets) cannot target it.
 			log.Printf("warning: --checkpoint-fork-after-delay is not supported for a restored process; ignoring")
-		}
-
-		if c.ShutdownOnForkCompletion && result.Pid > 0 {
-			go watchPidAndShutdown(result.Pid, fmt.Sprintf("restored process %d exited", result.Pid))
 		}
 	}
 
@@ -145,9 +143,10 @@ func main() {
 
 		if c.CheckpointForkAfterDelay > 0 && c.CRIUPath != "" {
 			log.Printf("waiting %d seconds before checkpointing fork process %s", c.CheckpointForkAfterDelay, internalProcessId)
-			cp := checkpoint.NewCriuCheckpointer(c)
+			target := checkpoint.TargetFromProcessID(internalProcessId)
+			opts := checkpoint.CreateOptions{WorkloadID: c.WorkloadID, Trigger: checkpoint.TriggerManual}
 			delay := time.Duration(c.CheckpointForkAfterDelay) * time.Second
-			if err := cp.CheckpointProcessAfterDelay(ctx, internalProcessId, delay, checkpoint.TriggerManual); err != nil {
+			if err := svc.ScheduleCheckpoint(ctx, target, opts, delay); err != nil {
 				log.Printf("failed to schedule checkpoint for process %s: %v", internalProcessId, err)
 			}
 		}
@@ -202,16 +201,4 @@ func listenUnix(srv *http.Server, path string) (net.Listener, error) {
 		}
 	}()
 	return ln, nil
-}
-
-// Used for the restore path, where the restored process is detached from CRIU and therefore not a child linkspan can Wait() on.
-func watchPidAndShutdown(pid int, reason string) {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-	for range ticker.C {
-		if err := syscall.Kill(pid, 0); err != nil && err != syscall.EPERM {
-			controller.TriggerShutdown(reason)
-			return
-		}
-	}
 }
