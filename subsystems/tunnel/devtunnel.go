@@ -148,3 +148,18 @@ func DevTunnelConnect(tunnelID string, accessToken string) (string, map[int]int,
 	log.Printf("devtunnel connect: connected to tunnel %q (cmd=%s, ports=%v)", tunnelID, cmdID, portMap)
 	return cmdID, portMap, nil
 }
+
+// DevTunnelHost runs the relay for a tunnel the client owns and registers ports on; the host token authorizes hosting and nothing else.
+func DevTunnelHost(tunnelID, clusterID, hostToken string) (DevTunnelConnection, error) {
+	info := &DevTunnelInfo{TunnelID: tunnelID, ClusterID: clusterID, TunnelName: tunnelID, HostToken: hostToken, External: true}
+	cmdID, connectionURL, err := CLIHostTunnel(info.QualifiedID(), hostToken)
+	if err != nil {
+		return DevTunnelConnection{}, fmt.Errorf("devtunnel host %q: %w", info.QualifiedID(), err)
+	}
+	info.HostCmdID = cmdID
+	if _, err := GlobalDevTunnelManager.Register(info); err != nil {
+		log.Printf("devtunnel host: warning — failed to register %q in manager: %v", tunnelID, err)
+	}
+	log.Printf("devtunnel host: tunnel %q ready (url=%s)", info.QualifiedID(), connectionURL)
+	return DevTunnelConnection{ConnectionURL: connectionURL, DevTunnelInfo: info}, nil
+}

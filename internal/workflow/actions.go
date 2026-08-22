@@ -62,7 +62,6 @@ func actionDevTunnelCreate(params map[string]any) (*ActionResult, error) {
 		"tunnel_id":      conn.DevTunnelInfo.QualifiedID(),
 		"tunnel_name":    conn.DevTunnelInfo.TunnelName,
 		"connection_url": conn.ConnectionURL,
-		"token":          conn.Token,
 	}
 	return &result, nil
 }
@@ -263,7 +262,6 @@ func actionTunnelCreate(params map[string]any) (*ActionResult, error) {
 	return &ActionResult{
 		"tunnel_id":      result.TunnelID,
 		"connection_url": result.ConnectionURL,
-		"token":          result.ConnectToken,
 		"ssh_port":       toInt(params["ssh_port"]),
 		"log_port":       toInt(params["log_port"]),
 	}, nil

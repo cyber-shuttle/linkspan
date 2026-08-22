@@ -147,7 +147,7 @@ func CLIHostTunnel(tunnelID string, hostToken string) (commandID string, connect
 	}
 
 	args := []string{"host", tunnelID, "--access-token", hostToken}
-	log.Printf("devtunnel cli: running: %s %v", binPath, args)
+	log.Printf("devtunnel cli: running: %s host %s --access-token [redacted]", binPath, tunnelID)
 
 	cmd := cliCommand(binPath, args...)
 	cmdID, err := pm.GlobalProcessManager.Start(cmd)
@@ -196,7 +196,7 @@ func CLIConnectTunnel(tunnelID string, accessToken string) (commandID string, po
 	}
 
 	args := []string{"connect", tunnelID, "--access-token", accessToken}
-	log.Printf("devtunnel cli: running: %s %v", binPath, args)
+	log.Printf("devtunnel cli: running: %s connect %s --access-token [redacted]", binPath, tunnelID)
 
 	cmd := cliCommand(binPath, args...)
 	cmdID, err := pm.GlobalProcessManager.Start(cmd)

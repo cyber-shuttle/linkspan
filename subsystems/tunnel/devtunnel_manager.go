@@ -13,9 +13,10 @@ type DevTunnelInfo struct {
 	TunnelName string
 	Ports      []int  // ports currently being forwarded
 	HostCmdID  string // ProcessManager ID of the running host CLI process
-	HostToken  string // cached host-scoped access token for restarts
-	AuthToken  string // Microsoft Entra ID bearer token used to create the tunnel
-	External   bool   // created by the client (cs-bridge); linkspan hosts but never deletes it
+	// Tokens stay in the process: this struct is served by GET /tunnels/devtunnels.
+	HostToken string `json:"-"` // cached host-scoped access token for restarts
+	AuthToken string `json:"-"` // Microsoft Entra ID bearer token used to create the tunnel
+	External  bool   // created by the client (cs-bridge); linkspan hosts but never deletes it
 }
 
 // QualifiedID returns the cluster-qualified tunnel ID (e.g. "ls-48.use2")
@@ -115,20 +116,19 @@ func (tm *DevTunnelManager) GetAll() ([]*DevTunnelInfo, error) {
 	return out, nil
 }
 
-// CleanAll deletes every tracked tunnel via the SDK.  authToken must be the same
-// Microsoft Entra ID token that was used when the tunnels were created.
-func (tm *DevTunnelManager) CleanAll(authToken string) error {
+// CleanAll deletes every tunnel this process created, each with the token it was
+// created with. Client-owned tunnels are left alone; the client deletes those.
+func (tm *DevTunnelManager) CleanAll() error {
 	tm.mu.Lock()
-	names := make([]string, 0, len(tm.tunnels))
+	owned := make(map[string]string, len(tm.tunnels))
 	for name, t := range tm.tunnels {
-		if t.External {
-			continue // client-owned; the client deletes it
+		if !t.External {
+			owned[name] = t.AuthToken
 		}
-		names = append(names, name)
 	}
 	tm.mu.Unlock()
 
-	for _, name := range names {
+	for name, authToken := range owned {
 		log.Printf("devtunnel manager: cleaning up tunnel %s", name)
 		if err := DevTunnelDelete(name, authToken); err != nil {
 			log.Printf("devtunnel manager: failed to delete tunnel %s: %v", name, err)

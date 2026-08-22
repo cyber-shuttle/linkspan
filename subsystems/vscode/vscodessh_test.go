@@ -2,6 +2,8 @@ package vscode
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"io"
 	"net"
 	"os"
@@ -19,7 +21,7 @@ import (
 // TestVSCodeSSHServerLifecycle starts a real supervised server, checks it reports
 // running, then stops it and confirms it is deregistered.
 func TestVSCodeSSHServerLifecycle(t *testing.T) {
-	s := StartSSHServerForVSCodeConnection("test-session", "127.0.0.1:0", "pw", "dummy-key")
+	s := StartSSHServerForVSCodeConnection("test-session", "127.0.0.1:0", "dummy-key")
 	if s == nil {
 		t.Fatal("failed to start SSH server")
 	}
@@ -152,13 +154,13 @@ func TestSupervisorStopHonored(t *testing.T) {
 func TestNewServerWiring(t *testing.T) {
 	srv := newServer(":0",
 		onConnect(handleSession),
-		withAuth("key", "pw"),
+		withAuth("key"),
 		withSubsystem("sftp", handleSFTP),
 		withForwarding(),
 		withKeepAlive(time.Second),
 	)
 
-	if srv.Handler == nil || srv.PublicKeyHandler == nil || srv.PasswordHandler == nil ||
+	if srv.Handler == nil || srv.PublicKeyHandler == nil || srv.PasswordHandler != nil ||
 		srv.ConnCallback == nil || srv.LocalPortForwardingCallback == nil || srv.ReversePortForwardingCallback == nil {
 		t.Fatal("a server handler/callback was left unwired")
 	}
@@ -198,7 +200,8 @@ func TestDirectStreamLocalForwarding(t *testing.T) {
 		}
 	}()
 
-	srv := newServer("127.0.0.1:0", withAuth("dummy-key", "pw"), withForwarding())
+	signer, authorizedKey := testKeyPair(t)
+	srv := newServer("127.0.0.1:0", withAuth(authorizedKey), withForwarding())
 	tl, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -207,7 +210,7 @@ func TestDirectStreamLocalForwarding(t *testing.T) {
 	defer srv.Close()
 
 	client, err := gossh.Dial("tcp", tl.Addr().String(), &gossh.ClientConfig{
-		User: "t", Auth: []gossh.AuthMethod{gossh.Password("pw")}, HostKeyCallback: gossh.InsecureIgnoreHostKey(),
+		User: "t", Auth: []gossh.AuthMethod{gossh.PublicKeys(signer)}, HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -303,4 +306,18 @@ func waitFor(t *testing.T, cond func() bool) bool {
 		time.Sleep(10 * time.Millisecond)
 	}
 	return false
+}
+
+// testKeyPair returns a signer and its authorized_keys line.
+func testKeyPair(t *testing.T) (gossh.Signer, string) {
+	t.Helper()
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := gossh.NewSignerFromKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer, string(gossh.MarshalAuthorizedKey(signer.PublicKey()))
 }

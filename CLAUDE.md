@@ -22,7 +22,7 @@ goreleaser release --snapshot --clean  # Local snapshot build
 
 ```bash
 ./linkspan --port 8080                          # HTTP server only
-./linkspan --workflow examples/cs-bridge-workflow.yaml --tunnel-auth-token "$TOKEN"
+./linkspan --workflow examples/sample.yaml           # run a workflow
 ./linkspan --port 0                             # OS-assigned random port
 ./linkspan --socket /tmp/linkspan.sock          # also serve on a unix socket
 ```
@@ -63,7 +63,7 @@ YAML workflows execute sequentially. Steps reference actions from a registry wit
 
 Built-in actions: `tunnel.devtunnel_create`, `tunnel.frp_proxy_create`, `tunnel.create` (generic), `mount.setup_overlay`, `shell.exec`, and more.
 
-Initial variables injected from CLI: `ServerPort`, `SshPort`, `LogPort`, `TunnelAuthToken`, `SessionID`, etc.
+Initial variables injected from CLI: `ServerPort`, `ServerHost`, `Timestamp`.
 
 Step failure halts workflow but HTTP server keeps running. Status at `/api/v1/status`.
 
@@ -85,8 +85,7 @@ Step failure halts workflow but HTTP server keeps running. Status at `/api/v1/st
 | `--socket` | — | Also serve on this unix socket path (`srun --jobid` in-cluster access) |
 | `--workflow` | — | YAML workflow path (`-` for stdin) |
 | `--tunnel-api` | devtunnels | Tunnel provider name |
-| `--tunnel-auth-token` | — | Microsoft Entra ID bearer token |
-| `--tunnel-enable` | false | Auto-start tunnel on startup |
+| `--tunnel-enable` | false | Host `--tunnel-id` on startup (needs `--tunnel-cluster`, `--tunnel-host-token`) |
 | `--vfs-mode` | — | `sync` or `mount` (also `CS_VFS_MODE` env) |
 | `--vfs-session-id` | — | Session ID (also `CS_SESSION_ID` env) |
 

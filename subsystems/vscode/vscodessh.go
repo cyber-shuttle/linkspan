@@ -28,11 +28,11 @@ import (
 
 // StartSSHServerForVSCodeConnection starts a supervised, auto-restarting SSH
 // server for a session and registers it for later shutdown.
-func StartSSHServerForVSCodeConnection(sessionID, addr string, password string, publicKey string) *SSHServer {
+func StartSSHServerForVSCodeConnection(sessionID, addr string, publicKey string) *SSHServer {
 	return supervise(sessionID, addr, func() *ssh.Server {
 		return newServer(addr,
 			onConnect(handleSession),
-			withAuth(publicKey, password),
+			withAuth(publicKey),
 			withSubsystem("sftp", handleSFTP),
 			withForwarding(),
 			withKeepAlive(30*time.Second),
@@ -62,11 +62,9 @@ func onConnect(h func(ssh.Session)) serverOption {
 	return func(srv *ssh.Server) { srv.Handler = recoverSessionHandler("session", h) }
 }
 
-func withAuth(publicKey, password string) serverOption {
-	return func(srv *ssh.Server) {
-		srv.PublicKeyHandler = newPublicKeyHandler(publicKey)
-		srv.PasswordHandler = func(ctx ssh.Context, pass string) bool { return pass == password }
-	}
+// PasswordHandler stays nil, so the caller's public key is the only way in.
+func withAuth(publicKey string) serverOption {
+	return func(srv *ssh.Server) { srv.PublicKeyHandler = newPublicKeyHandler(publicKey) }
 }
 
 func withSubsystem(name string, h func(ssh.Session)) serverOption {

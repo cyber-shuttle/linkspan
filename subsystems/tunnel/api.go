@@ -127,7 +127,7 @@ func ForwardDevTunnelPort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Forwarding devtunnel port %v", req)
+	log.Printf("Forwarding devtunnel port tunnel=%q port=%d", req.TunnelName, req.Port)
 	if err := DevTunnelForward(req.TunnelName, req.Port, req.Token); err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

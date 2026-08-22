@@ -4,3 +4,4 @@ bin/
 dist/
 linkspan
 linkspan-linux-amd64
+.pi/

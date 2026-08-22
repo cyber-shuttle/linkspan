@@ -15,42 +15,6 @@ import (
 	// Use tunnels package for types and constants, but not the Manager which has a broken retry loop that causes hangs.
 )
 
-// debugTransport wraps http.RoundTripper to log request/response details for debugging.
-type debugTransport struct {
-	base http.RoundTripper
-}
-
-func (d *debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// Log request details
-	log.Printf("devtunnel sdk HTTP: %s %s", req.Method, req.URL)
-	log.Printf("devtunnel sdk HTTP: Authorization: %s...", truncate(req.Header.Get("Authorization"), 40))
-	if req.Body != nil {
-		bodyBytes, _ := io.ReadAll(req.Body)
-		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-		log.Printf("devtunnel sdk HTTP: request body: %s", truncate(string(bodyBytes), 500))
-	}
-
-	resp, err := d.base.RoundTrip(req)
-	if err != nil {
-		log.Printf("devtunnel sdk HTTP: transport error: %v", err)
-		return resp, err
-	}
-
-	// Log response, but also preserve the body for the caller
-	respBody, _ := io.ReadAll(resp.Body)
-	resp.Body = io.NopCloser(bytes.NewReader(respBody))
-	log.Printf("devtunnel sdk HTTP: response %d: %s", resp.StatusCode, truncate(string(respBody), 500))
-
-	return resp, nil
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
-}
-
 // generateID produces a tunnel-ID-safe string from a logical name.
 // The Dev Tunnels API requires IDs matching [a-z0-9][a-z0-9-]{1,58}[a-z0-9].
 func generateID(name string) string {
