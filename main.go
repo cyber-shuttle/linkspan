@@ -102,22 +102,25 @@ func main() {
 		log.Printf("also listening on unix socket %s", c.SocketPath)
 	}
 
-	if c.RestorePath != "" && c.ForkCommand != "" {
+	restoreRequested := c.RestoreWorkloadID != "" || c.RestoreCheckpointID != ""
+	if restoreRequested && c.ForkCommand != "" {
 		log.Fatalf("Can not perform restore and fork execution at same time")
 	}
+	if restoreRequested && (c.RestoreWorkloadID == "" || c.RestoreCheckpointID == "") {
+		log.Fatalf("Both --restore-workload-id and --restore-checkpoint-id must be provided together")
+	}
 
-	if c.RestorePath != "" {
-		log.Printf("Restoring from path %s", c.RestorePath)
-		cp := &checkpoint.CriuCheckpointer{
-			CriuPath:               c.CRIUPath,
-			SupportGpuCheckpoint:   c.SupportGpuCheckpoint,
-			AdditionalCriuOpts:     c.AdditionalCriuOpts,
-			DumpDirRoot:            c.DumpDirRoot,
-			AllowedCheckpointUsers: c.AllowedCheckpointUsers,
-		}
-		result, err := cp.Restore(ctx, c.RestorePath)
+	if c.WorkloadID == "" {
+		c.WorkloadID = checkpoint.NewWorkloadID()
+		log.Printf("No --workload-id provided; generated workload id %s (record this to restore this workload later)", c.WorkloadID)
+	}
+
+	if restoreRequested {
+		log.Printf("Restoring workload %s checkpoint %s", c.RestoreWorkloadID, c.RestoreCheckpointID)
+		cp := checkpoint.NewCriuCheckpointer(c)
+		result, err := cp.Restore(ctx, c.RestoreWorkloadID, c.RestoreCheckpointID)
 		if err != nil {
-			log.Fatalf("Failed to restore process from path %s: %v", c.RestorePath, err)
+			log.Fatalf("Failed to restore workload %s checkpoint %s: %v", c.RestoreWorkloadID, c.RestoreCheckpointID, err)
 		}
 		log.Printf("Restore completed successfully (pid=%d)", result.Pid)
 
@@ -142,15 +145,9 @@ func main() {
 
 		if c.CheckpointForkAfterDelay > 0 && c.CRIUPath != "" {
 			log.Printf("waiting %d seconds before checkpointing fork process %s", c.CheckpointForkAfterDelay, internalProcessId)
-			cp := &checkpoint.CriuCheckpointer{
-				CriuPath:               c.CRIUPath,
-				SupportGpuCheckpoint:   c.SupportGpuCheckpoint,
-				AdditionalCriuOpts:     c.AdditionalCriuOpts,
-				DumpDirRoot:            c.DumpDirRoot,
-				AllowedCheckpointUsers: c.AllowedCheckpointUsers,
-			}
+			cp := checkpoint.NewCriuCheckpointer(c)
 			delay := time.Duration(c.CheckpointForkAfterDelay) * time.Second
-			if err := cp.CheckpointProcessAfterDelay(ctx, internalProcessId, delay); err != nil {
+			if err := cp.CheckpointProcessAfterDelay(ctx, internalProcessId, delay, checkpoint.TriggerManual); err != nil {
 				log.Printf("failed to schedule checkpoint for process %s: %v", internalProcessId, err)
 			}
 		}
