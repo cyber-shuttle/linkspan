@@ -37,7 +37,6 @@ jobs:
           args: release --snapshot
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BUILT_BY: snapshot
 
   publish:
     name: GoReleaser publish (release)
@@ -58,5 +57,4 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BUILT_BY: github-release
           # GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
