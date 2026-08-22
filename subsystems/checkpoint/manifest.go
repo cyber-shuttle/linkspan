@@ -2,21 +2,21 @@ package checkpoint
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 )
 
+// ManifestSchema identifies the shape of Manifest for forward compatibility.
 const ManifestSchema = "linkspan.checkpoint/v1"
 
+// CheckpointState is one checkpoint's own on-disk lifecycle. Not to be
+// confused with WorkloadState (types.go), which tracks a workload's
+// in-memory position across possibly many checkpoints.
 type CheckpointState string
 
 const (
@@ -66,132 +66,66 @@ type Manifest struct {
 	State           CheckpointState   `json:"state"`
 }
 
-const manifestFileName = "manifest.json"
-const completeFileName = "COMPLETE"
-
-// Writes data to path via a temp file in the same directory followed by a rename, so readers never observe a partially-written file.
-func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := os.Chmod(tmpPath, perm); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	return nil
+// manifestParams carries what gatherManifest needs from the checkpointer
+// and the call site, without coupling manifest.go to criuCheckpointer.
+type manifestParams struct {
+	CriuPath        string
+	WorkloadID      string
+	LinkspanVersion string
+	LinkspanCommit  string
+	GPUMode         bool
+	ProcessID       string
+	PID             int
+	CheckpointID    string
+	Trigger         CheckpointTrigger
 }
 
-func writeManifest(checkpointDir string, m *Manifest) error {
-	data, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal manifest: %w", err)
-	}
-	return atomicWriteFile(filepath.Join(checkpointDir, manifestFileName), data, 0644)
-}
-
-// Loads and parses the manifest for a checkpoint directory, so a checkpoint can be inspected independently of the linkspan process that created it.
-func ReadManifest(checkpointDir string) (*Manifest, error) {
-	data, err := os.ReadFile(filepath.Join(checkpointDir, manifestFileName))
-	if err != nil {
-		return nil, err
-	}
-	var m Manifest
-	if err := json.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("corrupt manifest at %s: %w", checkpointDir, err)
-	}
-	return &m, nil
-}
-
-func isCheckpointComplete(checkpointDir string) bool {
-	if _, err := os.Stat(filepath.Join(checkpointDir, completeFileName)); err != nil {
-		return false
-	}
-	m, err := ReadManifest(checkpointDir)
-	if err != nil {
-		return false
-	}
-	return m.State == StateComplete
-}
-
-func randomHex(n int) string {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		// crypto/rand failing is effectively unheard of on any real system;
-		// fall back to something still unique rather than panicking.
-		return fmt.Sprintf("%x", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(b)
-}
-
-// Mints a durable, sortable-by-humans workload identifier.
-func NewWorkloadID() string {
-	return fmt.Sprintf("wl-%s-%s", time.Now().UTC().Format("20060102T150405Z"), randomHex(4))
-}
-
-// Mints a durable, sortable-by-humans checkpoint identifier.
-func NewCheckpointID() string {
-	return fmt.Sprintf("ckpt-%s-%s", time.Now().UTC().Format("20060102T150405Z"), randomHex(4))
-}
-
-// Builds the initial manifest for a checkpoint about to be taken.
-func (c *CriuCheckpointer) gatherManifest(ctx context.Context, internalProcessId string, cmd *exec.Cmd, pid int, checkpointID string, trigger CheckpointTrigger) *Manifest {
+// gatherManifest builds the initial manifest for a checkpoint about to be
+// taken. Every field here is best-effort provenance, not correctness-critical
+// — a failure to determine one just leaves it at its zero value. Process
+// info is read from /proc/<pid> rather than an *exec.Cmd, so this works
+// identically whether the target was spawned by linkspan or not.
+func gatherManifest(ctx context.Context, p manifestParams) *Manifest {
 	m := &Manifest{
 		Schema:          ManifestSchema,
-		CheckpointID:    checkpointID,
-		WorkloadID:      c.WorkloadID,
+		CheckpointID:    p.CheckpointID,
+		WorkloadID:      p.WorkloadID,
 		CreatedAt:       time.Now().UTC(),
-		Trigger:         trigger,
-		ProcessID:       internalProcessId,
-		OriginalPID:     pid,
-		WorkingDir:      cmd.Dir,
-		LinkspanVersion: c.LinkspanVersion,
-		LinkspanCommit:  c.LinkspanCommit,
+		Trigger:         p.Trigger,
+		ProcessID:       p.ProcessID,
+		OriginalPID:     p.PID,
+		LinkspanVersion: p.LinkspanVersion,
+		LinkspanCommit:  p.LinkspanCommit,
 		OS:              runtime.GOOS,
 		Arch:            runtime.GOARCH,
-		GPUMode:         c.SupportGpuCheckpoint,
+		GPUMode:         p.GPUMode,
 		State:           StateCreating,
 	}
 
-	if cmd.Path != "" {
-		m.Command = cmd.Path
-	}
-	if len(cmd.Args) > 0 {
-		m.Args = cmd.Args
+	if cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", p.PID)); err == nil {
+		parts := strings.Split(strings.TrimRight(string(cmdline), "\x00"), "\x00")
+		if len(parts) > 0 && parts[0] != "" {
+			m.Command = parts[0]
+			m.Args = parts
+		}
 	}
 
-	if link, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid)); err == nil {
+	if link, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", p.PID)); err == nil {
 		m.WorkingDir = link
 	}
 
-	if uid, err := processOwnerUID(pid); err == nil {
+	if uid, err := processOwnerUID(p.PID); err == nil {
 		m.UID = uid
 	} else {
-		log.Printf("[Checkpoint] warning: could not determine owning uid for pid %d: %v", pid, err)
+		log.Printf("[Checkpoint] warning: could not determine owning uid for pid %d: %v", p.PID, err)
 	}
-	if gid, err := processOwnerGID(pid); err == nil {
+	if gid, err := processOwnerGID(p.PID); err == nil {
 		m.GID = gid
 	} else {
-		log.Printf("[Checkpoint] warning: could not determine owning gid for pid %d: %v", pid, err)
+		log.Printf("[Checkpoint] warning: could not determine owning gid for pid %d: %v", p.PID, err)
 	}
 
-	if v, err := criuVersion(ctx, c.CriuPath); err == nil {
+	if v, err := criuVersion(ctx, p.CriuPath); err == nil {
 		m.CRIUVersion = v
 	} else {
 		log.Printf("[Checkpoint] warning: could not determine CRIU version: %v", err)
@@ -205,7 +139,7 @@ func (c *CriuCheckpointer) gatherManifest(ctx context.Context, internalProcessId
 		m.CPUInfo = cpu
 	}
 
-	if c.SupportGpuCheckpoint {
+	if p.GPUMode {
 		m.GPUInfo = gpuInfo(ctx)
 	}
 
@@ -245,22 +179,4 @@ func cpuInfo() (string, error) {
 		return "", fmt.Errorf("model name not found in /proc/cpuinfo")
 	}
 	return fmt.Sprintf("%s (%d logical cores)", model, runtime.NumCPU()), nil
-}
-
-func gpuInfo(ctx context.Context) []string {
-	path, err := exec.LookPath("nvidia-smi")
-	if err != nil {
-		return nil
-	}
-	out, err := exec.CommandContext(ctx, path, "-L").Output()
-	if err != nil {
-		return nil
-	}
-	var lines []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			lines = append(lines, line)
-		}
-	}
-	return lines
 }
