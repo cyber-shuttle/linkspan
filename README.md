@@ -27,26 +27,18 @@ go build -o linkspan .
 Linkspan is typically launched with a workflow YAML that sets up the development environment in sequence:
 
 ```bash
-linkspan --port 0 --tunnel-auth-token "$TOKEN" --workflow - <<'EOF'
+linkspan --port 0 --workflow - <<'EOF'
 name: "dev-setup"
 
 steps:
-  - action: "tunnel.devtunnel_create"
-    name: "Create devtunnel"
+  - action: "shell.exec"
+    name: "Build the environment"
     params:
-      tunnel_name: "my-tunnel"
-      expiration: "1d"
-      auth_token: "{{.TunnelAuthToken}}"
-      server_port: "{{.ServerPort}}"
-      ssh_port: "{{.SshPort}}"
-    outputs:
-      tunnel_id: "tunnel_id"
-      connection_url: "tunnel_url"
-      token: "tunnel_token"
+      command: "uv venv --python 3.12 /home/me/.venv"
 EOF
 ```
 
-Steps execute sequentially. Each step's outputs can be referenced in later steps via `{{.variable_name}}`. Initial variables (`TunnelAuthToken`, `ServerPort`, etc.) are injected from CLI flags.
+Steps execute sequentially. Each step's outputs can be referenced in later steps via `{{.variable_name}}`. Initial variables (`ServerPort`, `ServerHost`, `Timestamp`) are injected from CLI flags.
 
 ### Run as HTTP Server Only
 
@@ -64,8 +56,10 @@ This starts the REST API without running any workflow.
 | `--host` | `0.0.0.0` | HTTP server bind address |
 | `--socket` | | Also serve on this unix socket path (in-cluster access via `srun --jobid`) |
 | `--workflow` | | Workflow YAML file path (`-` for stdin) |
-| `--tunnel-auth-token` | | Microsoft Entra ID bearer token for Dev Tunnels |
-| `--tunnel-enable` | `false` | Enable standalone tunnel startup (outside workflow) |
+| `--tunnel-enable` | `false` | Host the tunnel named by `--tunnel-id` on startup |
+| `--tunnel-id` | | Id of the client-created dev tunnel to host |
+| `--tunnel-cluster` | | Cluster id of `--tunnel-id` |
+| `--tunnel-host-token` | | Host-scoped access token for `--tunnel-id` |
 | `--tunnel-retries` | `3` | Retry count for tunnel startup |
 | `--tunnel-retry-delay` | `2s` | Delay between tunnel retries |
 | `--tunnel-attempt-timeout` | `10s` | Timeout per tunnel attempt |

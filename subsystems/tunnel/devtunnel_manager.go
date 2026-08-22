@@ -115,20 +115,19 @@ func (tm *DevTunnelManager) GetAll() ([]*DevTunnelInfo, error) {
 	return out, nil
 }
 
-// CleanAll deletes every tracked tunnel via the SDK.  authToken must be the same
-// Microsoft Entra ID token that was used when the tunnels were created.
-func (tm *DevTunnelManager) CleanAll(authToken string) error {
+// CleanAll deletes every tunnel this process created, each with the token it was
+// created with. Client-owned tunnels are left alone; the client deletes those.
+func (tm *DevTunnelManager) CleanAll() error {
 	tm.mu.Lock()
-	names := make([]string, 0, len(tm.tunnels))
+	owned := make(map[string]string, len(tm.tunnels))
 	for name, t := range tm.tunnels {
-		if t.External {
-			continue // client-owned; the client deletes it
+		if !t.External {
+			owned[name] = t.AuthToken
 		}
-		names = append(names, name)
 	}
 	tm.mu.Unlock()
 
-	for _, name := range names {
+	for name, authToken := range owned {
 		log.Printf("devtunnel manager: cleaning up tunnel %s", name)
 		if err := DevTunnelDelete(name, authToken); err != nil {
 			log.Printf("devtunnel manager: failed to delete tunnel %s: %v", name, err)
