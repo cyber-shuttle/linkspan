@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -37,7 +38,7 @@ func startTestProcess(t *testing.T, args ...string) string {
 }
 
 func TestBuildDumpArgs(t *testing.T) {
-	args := buildDumpArgs(1234, "/dumps/p1", "dump.log", []string{"--ext-mount-map", "auto"})
+	args := buildDumpArgs(1234, "/ckpt/c1/images", "/ckpt/c1", "dump.log", []string{"--ext-mount-map", "auto"})
 
 	if args[0] != "dump" {
 		t.Fatalf("expected first arg to be \"dump\", got %q", args[0])
@@ -50,7 +51,7 @@ func TestBuildDumpArgs(t *testing.T) {
 		}
 	}
 	joined := strings.Join(args, " ")
-	for _, want := range []string{"-t 1234", "--images-dir /dumps/p1", "--log-file dump.log", "--ext-mount-map auto"} {
+	for _, want := range []string{"-t 1234", "--images-dir /ckpt/c1/images", "--work-dir /ckpt/c1", "--log-file dump.log", "--ext-mount-map auto"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("expected dump args to contain %q, got %v", want, args)
 		}
@@ -58,13 +59,13 @@ func TestBuildDumpArgs(t *testing.T) {
 }
 
 func TestBuildRestoreArgs(t *testing.T) {
-	args := buildRestoreArgs("/dumps/p1", "restore.log", "restore.pid", []string{"--ext-mount-map", "auto"})
+	args := buildRestoreArgs("/ckpt/c1/images", "/ckpt/c1", "restore.log", "restore.pid", []string{"--ext-mount-map", "auto"})
 
 	if args[0] != "restore" {
 		t.Fatalf("expected first arg to be \"restore\", got %q", args[0])
 	}
 	joined := strings.Join(args, " ")
-	for _, want := range []string{"--restore-detached", "--images-dir /dumps/p1", "--log-file restore.log", "--pidfile restore.pid", "--ext-mount-map auto"} {
+	for _, want := range []string{"--restore-detached", "--images-dir /ckpt/c1/images", "--work-dir /ckpt/c1", "--log-file restore.log", "--pidfile restore.pid", "--ext-mount-map auto"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("expected restore args to contain %q, got %v", want, args)
 		}
@@ -77,8 +78,8 @@ func TestCheckpointProcessAfterDelay_TimerFires(t *testing.T) {
 	id := startTestProcess(t, "sleep", "5")
 	defer pm.GlobalProcessManager.Kill(id)
 
-	cp := &CriuCheckpointer{CriuPath: "/nonexistent/criu", DumpDirRoot: t.TempDir()}
-	if err := cp.CheckpointProcessAfterDelay(context.Background(), id, 150*time.Millisecond); err != nil {
+	cp := &CriuCheckpointer{CriuPath: "/nonexistent/criu", CheckpointRoot: t.TempDir(), WorkloadID: "wl-test"}
+	if err := cp.CheckpointProcessAfterDelay(context.Background(), id, 150*time.Millisecond, TriggerManual); err != nil {
 		t.Fatalf("CheckpointProcessAfterDelay returned error: %v", err)
 	}
 
@@ -100,8 +101,8 @@ func TestCheckpointProcessAfterDelay_ProcessCompletesFirst(t *testing.T) {
 
 	id := startTestProcess(t, "sleep", "0.1")
 
-	cp := &CriuCheckpointer{CriuPath: "/nonexistent/criu", DumpDirRoot: t.TempDir()}
-	if err := cp.CheckpointProcessAfterDelay(context.Background(), id, 3*time.Second); err != nil {
+	cp := &CriuCheckpointer{CriuPath: "/nonexistent/criu", CheckpointRoot: t.TempDir(), WorkloadID: "wl-test"}
+	if err := cp.CheckpointProcessAfterDelay(context.Background(), id, 3*time.Second, TriggerManual); err != nil {
 		t.Fatalf("CheckpointProcessAfterDelay returned error: %v", err)
 	}
 
@@ -124,8 +125,8 @@ func TestCheckpointProcessAfterDelay_ContextCanceled(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	cp := &CriuCheckpointer{CriuPath: "/nonexistent/criu", DumpDirRoot: t.TempDir()}
-	if err := cp.CheckpointProcessAfterDelay(ctx, id, 3*time.Second); err != nil {
+	cp := &CriuCheckpointer{CriuPath: "/nonexistent/criu", CheckpointRoot: t.TempDir(), WorkloadID: "wl-test"}
+	if err := cp.CheckpointProcessAfterDelay(ctx, id, 3*time.Second, TriggerManual); err != nil {
 		t.Fatalf("CheckpointProcessAfterDelay returned error: %v", err)
 	}
 
@@ -143,15 +144,15 @@ func TestCheckpointProcessAfterDelay_ContextCanceled(t *testing.T) {
 }
 
 func TestCheckpointProcessAfterDelay_InvalidDelay(t *testing.T) {
-	cp := &CriuCheckpointer{CriuPath: "/nonexistent/criu", DumpDirRoot: t.TempDir()}
-	if err := cp.CheckpointProcessAfterDelay(context.Background(), "whatever", 0); err == nil {
+	cp := &CriuCheckpointer{CriuPath: "/nonexistent/criu", CheckpointRoot: t.TempDir()}
+	if err := cp.CheckpointProcessAfterDelay(context.Background(), "whatever", 0, TriggerManual); err == nil {
 		t.Fatalf("expected an error for a non-positive delay")
 	}
 }
 
 func TestCheckpointProcessAfterDelay_UnknownProcess(t *testing.T) {
-	cp := &CriuCheckpointer{CriuPath: "/nonexistent/criu", DumpDirRoot: t.TempDir()}
-	if err := cp.CheckpointProcessAfterDelay(context.Background(), "not-a-real-id", time.Second); err == nil {
+	cp := &CriuCheckpointer{CriuPath: "/nonexistent/criu", CheckpointRoot: t.TempDir()}
+	if err := cp.CheckpointProcessAfterDelay(context.Background(), "not-a-real-id", time.Second, TriggerManual); err == nil {
 		t.Fatalf("expected an error for an unknown process id")
 	}
 }
@@ -223,6 +224,12 @@ func TestCheckAllowedUser(t *testing.T) {
 	}
 }
 
+func TestProcessOwnerGID(t *testing.T) {
+	if _, err := processOwnerGID(os.Getpid()); err != nil {
+		t.Fatalf("expected to determine our own gid: %v", err)
+	}
+}
+
 func TestCheckBinary(t *testing.T) {
 	if err := (&CriuCheckpointer{}).checkBinary(); err == nil {
 		t.Fatalf("expected an empty CriuPath to fail")
@@ -252,13 +259,31 @@ func TestCheckBinary(t *testing.T) {
 	}
 }
 
+func writeStubCriu(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "criu")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatalf("failed to write stub criu binary: %v", err)
+	}
+	return stub
+}
+
+func TestCRIUCheckRequiresCheckpointRoot(t *testing.T) {
+	cp := &CriuCheckpointer{CriuPath: writeStubCriu(t)}
+	err := cp.CRIUCheck(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "CheckpointRoot is not configured") {
+		t.Fatalf("expected a CheckpointRoot-not-configured error, got %v", err)
+	}
+}
+
 func TestRealCriuAvailability(t *testing.T) {
 	criuPath, err := exec.LookPath("criu")
 	if err != nil {
 		t.Skip("criu is not installed on this host; skipping real CRIUCheck test")
 	}
 
-	cp := &CriuCheckpointer{CriuPath: criuPath, DumpDirRoot: t.TempDir()}
+	cp := &CriuCheckpointer{CriuPath: criuPath, CheckpointRoot: t.TempDir()}
 	if err := cp.CRIUCheck(context.Background()); err != nil {
 		t.Fatalf("CRIUCheck failed against a real criu binary: %v", err)
 	}
@@ -277,5 +302,109 @@ func TestReadPidFile(t *testing.T) {
 	}
 	if pid != 4242 {
 		t.Fatalf("expected pid 4242, got %d", pid)
+	}
+}
+
+func TestManifestRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	m := &Manifest{
+		Schema:       ManifestSchema,
+		CheckpointID: "ckpt-test",
+		WorkloadID:   "wl-test",
+		CreatedAt:    time.Now().UTC().Truncate(time.Second),
+		Trigger:      TriggerManual,
+		ProcessID:    "p-123",
+		OriginalPID:  4242,
+		Command:      "/bin/sleep",
+		Args:         []string{"sleep", "100"},
+		CRIUOptions:  []string{"dump", "-t", "4242"},
+		State:        StateCreating,
+	}
+
+	if err := writeManifest(dir, m); err != nil {
+		t.Fatalf("writeManifest failed: %v", err)
+	}
+
+	got, err := ReadManifest(dir)
+	if err != nil {
+		t.Fatalf("ReadManifest failed: %v", err)
+	}
+	if got.CheckpointID != m.CheckpointID || got.WorkloadID != m.WorkloadID || got.State != m.State {
+		t.Fatalf("round-tripped manifest mismatch: got %+v, want %+v", got, m)
+	}
+	if !got.CreatedAt.Equal(m.CreatedAt) {
+		t.Fatalf("CreatedAt mismatch: got %v, want %v", got.CreatedAt, m.CreatedAt)
+	}
+	if len(got.Args) != len(m.Args) || got.Args[0] != m.Args[0] {
+		t.Fatalf("Args mismatch: got %v, want %v", got.Args, m.Args)
+	}
+}
+
+func TestIsCheckpointComplete(t *testing.T) {
+	dir := t.TempDir()
+
+	if isCheckpointComplete(dir) {
+		t.Fatalf("expected incomplete: no manifest, no marker")
+	}
+
+	m := &Manifest{State: StateCreating}
+	if err := writeManifest(dir, m); err != nil {
+		t.Fatalf("writeManifest failed: %v", err)
+	}
+	if isCheckpointComplete(dir) {
+		t.Fatalf("expected incomplete: manifest present with state=creating, no COMPLETE marker")
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, completeFileName), []byte{}, 0644); err != nil {
+		t.Fatalf("failed to write COMPLETE marker: %v", err)
+	}
+	if isCheckpointComplete(dir) {
+		t.Fatalf("expected incomplete: COMPLETE marker present but manifest state is still creating")
+	}
+
+	m.State = StateComplete
+	if err := writeManifest(dir, m); err != nil {
+		t.Fatalf("writeManifest failed: %v", err)
+	}
+	if !isCheckpointComplete(dir) {
+		t.Fatalf("expected complete: COMPLETE marker present and manifest state is complete")
+	}
+}
+
+func TestRestoreRefusesIncompleteCheckpoint(t *testing.T) {
+	criuPath, err := exec.LookPath("criu")
+	if err != nil {
+		t.Skip("criu is not installed on this host; skipping end-to-end Restore() gating test")
+	}
+
+	root := t.TempDir()
+	workloadID, checkpointID := "wl-test", "ckpt-test"
+	checkpointDir := filepath.Join(root, workloadID, checkpointID)
+	if err := os.MkdirAll(filepath.Join(checkpointDir, "images"), 0755); err != nil {
+		t.Fatalf("failed to create checkpoint dir: %v", err)
+	}
+	// Deliberately no manifest.json / COMPLETE marker.
+
+	cp := &CriuCheckpointer{CriuPath: criuPath, CheckpointRoot: root}
+	if _, err := cp.Restore(context.Background(), workloadID, checkpointID); err == nil {
+		t.Fatalf("expected Restore to refuse a checkpoint directory without a completion marker")
+	}
+}
+
+func TestNewIDsAreUniqueAndPrefixed(t *testing.T) {
+	w1, w2 := NewWorkloadID(), NewWorkloadID()
+	if w1 == w2 {
+		t.Fatalf("expected distinct workload ids, got %q twice", w1)
+	}
+	if !strings.HasPrefix(w1, "wl-") || !strings.HasPrefix(w2, "wl-") {
+		t.Fatalf("expected workload ids to start with \"wl-\", got %q and %q", w1, w2)
+	}
+
+	c1, c2 := NewCheckpointID(), NewCheckpointID()
+	if c1 == c2 {
+		t.Fatalf("expected distinct checkpoint ids, got %q twice", c1)
+	}
+	if !strings.HasPrefix(c1, "ckpt-") || !strings.HasPrefix(c2, "ckpt-") {
+		t.Fatalf("expected checkpoint ids to start with \"ckpt-\", got %q and %q", c1, c2)
 	}
 }
