@@ -8,9 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -184,68 +182,18 @@ func CLIHostTunnel(tunnelID string, hostToken string) (commandID string, connect
 	)
 }
 
-// CLIConnectTunnel connects to an existing hosted tunnel, making its forwarded
-// ports available on localhost. It runs `devtunnel connect` as a background
-// process and waits until the connection is established.
-//
-// Returns the ProcessManager command ID so the caller can kill it later.
-func CLIConnectTunnel(tunnelID string, accessToken string) (commandID string, portMap map[int]int, err error) {
-	binPath, err := devtunnelBinPath()
+// DevTunnelHost runs the relay for a tunnel the client owns and registers ports
+// on; the host token authorizes hosting and nothing else. linkspan never creates
+// or deletes a tunnel — the client owns its lifecycle.
+func DevTunnelHost(tunnelID, clusterID, hostToken string) (cmdID, connectionURL string, err error) {
+	qualified := tunnelID
+	if clusterID != "" {
+		qualified = tunnelID + "." + clusterID
+	}
+	cmdID, connectionURL, err = CLIHostTunnel(qualified, hostToken)
 	if err != nil {
-		return "", nil, fmt.Errorf("devtunnel cli: get binary: %w", err)
+		return "", "", fmt.Errorf("devtunnel host %q: %w", qualified, err)
 	}
-
-	args := []string{"connect", tunnelID, "--access-token", accessToken}
-	log.Printf("devtunnel cli: running: %s connect %s --access-token [redacted]", binPath, tunnelID)
-
-	cmd := cliCommand(binPath, args...)
-	cmdID, err := pm.GlobalProcessManager.Start(cmd)
-	if err != nil {
-		return "", nil, fmt.Errorf("devtunnel cli: start connect command: %w", err)
-	}
-
-	// Wait for the connection to be established. The CLI prints a line
-	// containing "Connected" or "Forwarding port" when ready.
-	// Also parse port forwarding lines like:
-	//   SSH: Forwarding from 127.0.0.1:54321 to host port 8080.
-	const pollInterval = 500 * time.Millisecond
-	const maxWait = 60 * time.Second
-	deadline := time.Now().Add(maxWait)
-	forwardRe := regexp.MustCompile(`Forwarding from 127\.0\.0\.1:(\d+) to host port (\d+)`)
-
-	for time.Now().Before(deadline) {
-		time.Sleep(pollInterval)
-
-		stdout, stderr, _ := pm.GlobalProcessManager.GetOutput(cmdID)
-		combined := stdout + stderr
-		if strings.Contains(combined, "Connected") || strings.Contains(combined, "Forwarding port") || strings.Contains(combined, "Ready to accept connections") {
-			// Parse port map from output
-			portMap = make(map[int]int) // remotePort → localPort
-			for _, match := range forwardRe.FindAllStringSubmatch(combined, -1) {
-				localPort, err1 := strconv.Atoi(match[1])
-				remotePort, err2 := strconv.Atoi(match[2])
-				if err1 != nil || err2 != nil {
-					log.Printf("devtunnel cli: skipping malformed port mapping %q → %q", match[1], match[2])
-					continue
-				}
-				portMap[remotePort] = localPort
-			}
-			log.Printf("devtunnel cli: connect established for tunnel %s (ports=%v)", tunnelID, portMap)
-			return cmdID, portMap, nil
-		}
-
-		// Check if process already exited with an error
-		info, infoErr := pm.GlobalProcessManager.GetInfo(cmdID)
-		if infoErr == nil && info.Completed {
-			return "", nil, fmt.Errorf("devtunnel cli: connect exited prematurely (stdout=%q stderr=%q)", stdout, stderr)
-		}
-	}
-
-	// Timed out — kill the process and report
-	_ = pm.GlobalProcessManager.Kill(cmdID)
-	stdout, stderr, _ := pm.GlobalProcessManager.GetOutput(cmdID)
-	return "", nil, fmt.Errorf(
-		"devtunnel cli: timed out waiting for connect (stdout=%q stderr=%q)",
-		stdout, stderr,
-	)
+	log.Printf("devtunnel host: tunnel %q ready (url=%s)", qualified, connectionURL)
+	return cmdID, connectionURL, nil
 }

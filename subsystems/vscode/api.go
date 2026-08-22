@@ -6,12 +6,10 @@ import (
 	"net/http"
 
 	"github.com/cyber-shuttle/linkspan/utils"
-	"github.com/gorilla/mux"
 	gossh "golang.org/x/crypto/ssh"
 )
 
 type VSCodeSessionRequest struct {
-	MountUserHome bool   `json:"mount_user_home"`
 	AuthorizedKey string `json:"authorized_key"` // the private half never leaves the caller
 }
 
@@ -51,39 +49,4 @@ func CreateVSCodeSession(w http.ResponseWriter, r *http.Request) {
 	StartSSHServerForVSCodeConnection(sessionID, fmt.Sprintf("127.0.0.1:%d", availablePort), sessionReq.AuthorizedKey)
 
 	utils.RespondJSON(w, http.StatusCreated, VSCodeSessionResponse{ID: sessionID, BindPort: int32(availablePort)})
-}
-
-func DeleteVSCodeSession(w http.ResponseWriter, r *http.Request) {
-	// Get session ID from query parameter or path
-	vars := mux.Vars(r)
-	sessionID := vars["id"]
-	if sessionID == "" {
-		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "session id required"})
-		return
-	}
-
-	if err := stopSSHServerBySessionID(sessionID); err != nil {
-		utils.RespondJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-		return
-	}
-
-	utils.RespondJSON(w, http.StatusNoContent, nil)
-}
-
-func GetVSCodeSessionStatus(w http.ResponseWriter, r *http.Request) {
-	// Get session ID from query parameter or path
-	vars := mux.Vars(r)
-	sessionID := vars["id"]
-	if sessionID == "" {
-		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "session id required"})
-		return
-	}
-
-	status, err := getSessionStatus(sessionID)
-	if err != nil {
-		utils.RespondJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-		return
-	}
-
-	utils.RespondJSON(w, http.StatusOK, status)
 }

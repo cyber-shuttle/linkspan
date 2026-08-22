@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -25,15 +26,15 @@ func TestVSCodeSSHServerLifecycle(t *testing.T) {
 	if s == nil {
 		t.Fatal("failed to start SSH server")
 	}
-	t.Cleanup(func() { _ = stopSSHServerBySessionID("test-session") })
+	t.Cleanup(func() { _ = stopByID("test-session") })
 
-	if !waitFor(t, func() bool { st, e := getSessionStatus("test-session"); return e == nil && st.Active }) {
+	if !waitFor(t, func() bool { st, ok := statusOf("test-session"); return ok && st.State == stateRunning }) {
 		t.Fatal("expected session to become active")
 	}
-	if err := stopSSHServerBySessionID("test-session"); err != nil {
+	if err := stopByID("test-session"); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
-	if !waitFor(t, func() bool { _, e := getSessionStatus("test-session"); return e != nil }) {
+	if !waitFor(t, func() bool { _, ok := statusOf("test-session"); return !ok }) {
 		t.Fatal("expected session to be deregistered after stop")
 	}
 }
@@ -84,8 +85,8 @@ func TestSupervisorBoundedRetries(t *testing.T) {
 	if *builds != 5 || s.state != stateFailed || s.restarts != 5 || s.lastError == "" {
 		t.Fatalf("got builds=%d state=%q restarts=%d err=%q", *builds, s.state, s.restarts, s.lastError)
 	}
-	if st, err := getSessionStatus("bounded"); err != nil || st.State != stateFailed || st.Active {
-		t.Fatalf("failed session should stay registered & inactive: %+v err=%v", st, err)
+	if st, ok := statusOf("bounded"); !ok || st.State != stateFailed {
+		t.Fatalf("failed session should stay registered & inactive: %+v", st)
 	}
 }
 
@@ -144,7 +145,7 @@ func TestSupervisorStopHonored(t *testing.T) {
 	if s.state != stateStopped {
 		t.Fatalf("expected state %q, got %q", stateStopped, s.state)
 	}
-	if _, err := getSessionStatus("stoppable"); err == nil {
+	if _, ok := statusOf("stoppable"); ok {
 		t.Fatal("expected session to be deregistered after stop")
 	}
 }
@@ -320,4 +321,23 @@ func testKeyPair(t *testing.T) (gossh.Signer, string) {
 		t.Fatal(err)
 	}
 	return signer, string(gossh.MarshalAuthorizedKey(signer.PublicKey()))
+}
+
+// Test-only lookups over the live registry, so production keeps only what the
+// two surviving routes need.
+func statusOf(id string) (*SessionStatus, bool) {
+	for _, s := range listAllSessionStatuses() {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return nil, false
+}
+
+func stopByID(id string) error {
+	server, ok := deleteServer(id)
+	if !ok {
+		return fmt.Errorf("no ssh server found for session %s", id)
+	}
+	return server.Close()
 }

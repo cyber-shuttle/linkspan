@@ -16,7 +16,7 @@ func TestListenUnix(t *testing.T) {
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte("ok"))
 	})}
-	if _, err := listenUnix(srv, sock); err != nil {
+	if err := listenUnix(srv, sock); err != nil {
 		t.Fatal(err)
 	}
 	defer srv.Close()

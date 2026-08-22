@@ -1,11 +1,12 @@
 # Linkspan
 
-Go agent that orchestrates dev environment setup on compute nodes. Manages VS Code SSH sessions, Dev Tunnels/FRP connectivity, FUSE overlay mounts, and Jupyter kernels via a declarative YAML workflow engine and REST API.
+Go agent that runs inside a compute-node allocation: hosts the dev tunnel its client created, runs the
+client's YAML workflow, and serves an SSH server for VS Code Remote-SSH.
 
 ## Prerequisites
 
 - Go 1.24+ (toolchain go1.24.13)
-- Optional: FUSE (Linux) for overlay mounts, goreleaser for release builds
+- Optional: goreleaser for release builds
 
 ## Commands
 
@@ -22,77 +23,72 @@ goreleaser release --snapshot --clean  # Local snapshot build
 
 ```bash
 ./linkspan --port 8080                          # HTTP server only
-./linkspan --workflow examples/sample.yaml           # run a workflow
+./linkspan --workflow /path/to/workflow.yaml    # run a workflow
 ./linkspan --port 0                             # OS-assigned random port
 ./linkspan --socket /tmp/linkspan.sock          # also serve on a unix socket
 ```
 
-Reach `--socket` in-cluster (no tunnel/TCP port): `srun --jobid=<id> --overlap curl --unix-socket /tmp/linkspan.sock http://localhost/api/v1/health`
+Reach `--socket` in-cluster (no tunnel/TCP port): `srun --jobid=<id> --overlap curl --unix-socket /tmp/linkspan.sock http://localhost/api/v1/metrics`
 
 ## Architecture
 
 ```
-main.go                         # Entry point, HTTP router (gorilla/mux), server lifecycle
+main.go                         # CLI flags, HTTP router (net/http ServeMux), tunnel bring-up, job metrics
 internal/
-  workflow/                     # YAML workflow engine: parse, execute, action registry
+  workflow/                     # YAML workflow: load, then run shell.exec steps in order
   process/                      # ManagedProcess tracking, GlobalProcessManager singleton
-  logstream/                    # TCP-based real-time log broadcaster
 subsystems/
-  tunnel/                       # Dev Tunnels + FRP: TunnelProvider interface, managers
-  vscode/                       # SSH server (gliderlabs/ssh) with PTY support
-  jupyter/                      # Kernel provisioning lifecycle
-  mount/                        # FUSE overlay filesystem (go-fuse)
-  vfs/                          # VFS sync (mutagen) and mount (NFSv3 on macOS) modes
-  env/venv/                     # Python venv detection
+  tunnel/                       # devtunnel CLI download + relay hosting
+  vscode/                       # Supervised SSH server (gliderlabs/ssh) with PTY support
 utils/                          # JSON helpers, port finding
 ```
 
-Each subsystem has `api.go` (HTTP handlers) + domain logic files.
+## The consumer contract
+
+Linkspan has exactly two consumers, and its surface is exactly what they use. Anything not on this list has
+no caller — do not add to it speculatively, and treat a new entry as an API change that needs a consumer.
+
+- **cs-bridge** (VS Code) launches it with `--port --socket --tunnel-id --tunnel-cluster --tunnel-host-token
+  -tunnel-enable`, and calls `GET /health`, `GET /metrics`, `GET /vscode/sessions`, `POST /vscode/sessions`.
+- **cs-control** (Jupyter) launches it with `--port --tunnel-enable --tunnel-id --tunnel-cluster
+  --tunnel-host-token --workflow`, and makes no HTTP calls at all.
+
+Both also run `--version`, and cs-control greps `--help` for `-tunnel-host-token`.
 
 ## REST API (`/api/v1/`)
 
-- **Tunnels**: CRUD for devtunnels and FRP tunnels, generic provider-agnostic endpoints
-- **VS Code**: `/vscode/sessions` — create/list/delete SSH sessions
-- **Jupyter**: `/jupyter/kernels` — provision/status/shutdown kernels
-- **Metadata**: In-memory key-value store (`/metadata/{key}`)
-- **System**: `/health`, `/status` (workflow state + outputs)
+- `GET /health` — liveness, `{"status":"ok"}`
+- `GET /metrics` — cgroup-v2 memory/CPU + per-GPU `nvidia-smi`; each source omits its field when absent
+- `GET /vscode/sessions` — list SSH servers and supervisor state
+- `POST /vscode/sessions` — start an SSH server for one authorized key
 
 ## Workflow Engine
 
-YAML workflows execute sequentially. Steps reference actions from a registry with Go template variable interpolation (`{{.VarName}}`).
-
-Built-in actions: `tunnel.devtunnel_create`, `tunnel.frp_proxy_create`, `tunnel.create` (generic), `mount.setup_overlay`, `shell.exec`, and more.
-
-Initial variables injected from CLI: `ServerPort`, `ServerHost`, `Timestamp`.
-
-Step failure halts workflow but HTTP server keeps running. Status at `/api/v1/status`.
+A workflow is a `name` and a list of `steps`, run in order, stopping at the first failure. `shell.exec` is
+the only action: `params.command` is split on whitespace and run without a shell, so nothing is expanded.
+Cancellation is checked between steps; the current step is not preempted. A step failure stops the workflow
+but leaves the HTTP server running.
 
 ## Key Patterns
 
-- **GlobalProcessManager** singleton tracks long-running processes (tunnel CLI, etc.)
-- **TunnelProvider** interface enables pluggable backends (DevTunnel, FRP)
-- SSH server has no auth (assumes secure tunnel/firewall)
-- FUSE overlay: lower=SFTP (remote), upper=local cache. Stale mounts cleaned from `/proc/mounts` on startup
-- VFS on macOS uses NFSv3 proxy instead of kernel FUSE
-- Log broadcaster: TCP listener on random port, all connected clients get same stream
-
-## CLI Flags
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--port` | 8080 | HTTP server port (0=random) |
-| `--host` | 0.0.0.0 | HTTP bind address |
-| `--socket` | — | Also serve on this unix socket path (`srun --jobid` in-cluster access) |
-| `--workflow` | — | YAML workflow path (`-` for stdin) |
-| `--tunnel-api` | devtunnels | Tunnel provider name |
-| `--tunnel-enable` | false | Host `--tunnel-id` on startup (needs `--tunnel-cluster`, `--tunnel-host-token`) |
-| `--vfs-mode` | — | `sync` or `mount` (also `CS_VFS_MODE` env) |
-| `--vfs-session-id` | — | Session ID (also `CS_SESSION_ID` env) |
+- **GlobalProcessManager** singleton tracks long-running processes (the devtunnel host CLI)
+- The client owns the tunnel: it creates it, registers its ports, and mints a host-scoped token. Linkspan
+  hosts the relay and never creates, forwards, refreshes or deletes a tunnel.
+- The SSH server accepts exactly one public key, supplied at create time, and binds loopback only
+- The SSH server is supervised: it restarts on non-graceful exit, bounded by consecutive failures
+- Port 0 binding: the actual port is read back off the listener after bind
 
 ## Gotchas
 
-- Port 0 binding: actual port extracted after bind, passed as `ServerPort` to workflows
-- FUSE stale mount cleanup scans `/proc/mounts` — Linux-specific, no-op on macOS
-- Mutagen binary resolution: searches ~/.cybershuttle, homebrew, system paths; auto-downloads if missing
-- Workflow cancellation checks context between steps — current step is NOT preempted
-- SSH server spawns shell via PTY (creack/pty) — resize handled via SSH window-change channel
+- `--version` must print a bare `X.Y.Z[.commit]` as the **only** line on stdout. cs-control tolerates
+  trailing lines; cs-bridge does not, and a second line makes it reinstall linkspan on every launch.
+- `--help` must contain the literal `-tunnel-host-token`. cs-control greps for it and refuses to submit a
+  job without it, so that flag cannot be renamed or removed.
+- The goreleaser archive name (`linkspan_Linux_${arch}.tar.gz`) and the `linkspan` member inside it are a
+  contract — both consumers curl and untar them by those exact names.
+- The devtunnel CLI is downloaded at runtime to `~/.linkspan/bin/` on first host attempt
+- The SSH server keeps the `sftp` subsystem and the `direct-streamlocal@openssh.com` handler: VS Code
+  Remote-SSH's bootstrap fallback uses SFTP, and `remote.SSH.remoteServerListenOnSocket` uses streamlocal.
+  Neither shows up in a cs-bridge grep because the client is VS Code, not cs-bridge.
+- Workflow cancellation checks context between steps — the current step is NOT preempted
+- SSH server spawns a shell via PTY (creack/pty) — resize handled via the SSH window-change channel

@@ -423,13 +423,6 @@ var (
 	activeServersMu sync.Mutex
 )
 
-func lookupServer(sessionID string) (*SSHServer, bool) {
-	activeServersMu.Lock()
-	defer activeServersMu.Unlock()
-	server, exists := activeServers[sessionID]
-	return server, exists
-}
-
 // deleteServer atomically removes and returns the server for a session ID.
 func deleteServer(sessionID string) (*SSHServer, bool) {
 	activeServersMu.Lock()
@@ -452,14 +445,6 @@ func snapshotServers() []*SSHServer {
 	return servers
 }
 
-func stopSSHServerBySessionID(sessionID string) error {
-	server, exists := deleteServer(sessionID)
-	if !exists {
-		return fmt.Errorf("no ssh server found for session %s", sessionID)
-	}
-	return server.Close()
-}
-
 // StopAllSSHServers stops every registered SSH server.
 func StopAllSSHServers() {
 	for _, server := range snapshotServers() {
@@ -472,12 +457,9 @@ func StopAllSSHServers() {
 // ─────────────────────────── status ───────────────────────────
 
 type SessionStatus struct {
-	ID        string `json:"id"`
-	State     string `json:"state"`
-	Active    bool   `json:"active"`
-	Addr      string `json:"addr,omitempty"`
-	Restarts  int    `json:"restarts"`
-	LastError string `json:"last_error,omitempty"`
+	ID    string `json:"id"`
+	State string `json:"state"`
+	Addr  string `json:"addr,omitempty"`
 }
 
 // status snapshots supervisor state; Active is true only while the listener is up.
@@ -485,32 +467,10 @@ func (s *SSHServer) status() *SessionStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return &SessionStatus{
-		ID:        s.sessionID,
-		State:     s.state,
-		Active:    s.state == stateRunning,
-		Addr:      s.addr,
-		Restarts:  s.restarts,
-		LastError: s.lastError,
+		ID:    s.sessionID,
+		State: s.state,
+		Addr:  s.addr,
 	}
-}
-
-func getSessionStatus(sessionID string) (*SessionStatus, error) {
-	server, exists := lookupServer(sessionID)
-	if !exists {
-		return nil, fmt.Errorf("no ssh server found for session %s", sessionID)
-	}
-	return server.status(), nil
-}
-
-// IsSessionActive reports whether the session's listener is currently up.
-func IsSessionActive(sessionID string) bool {
-	server, exists := lookupServer(sessionID)
-	if !exists {
-		return false
-	}
-	server.mu.Lock()
-	defer server.mu.Unlock()
-	return server.state == stateRunning
 }
 
 func listAllSessionStatuses() []*SessionStatus {

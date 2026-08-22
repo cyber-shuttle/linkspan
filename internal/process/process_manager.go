@@ -5,21 +5,19 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"runtime"
 	"sync"
-	"syscall"
 	"time"
 )
 
 // ManagedProcess holds runtime information for a started process so it can
 // be inspected or controlled (kill/interrupt) later.
 type ManagedProcess struct {
-	ID     string
-	Cmd    *exec.Cmd
-	Stdout *bytes.Buffer
-	Stderr *bytes.Buffer
-	done   chan error
-	Completed bool
+	ID           string
+	Cmd          *exec.Cmd
+	Stdout       *bytes.Buffer
+	Stderr       *bytes.Buffer
+	done         chan error
+	Completed    bool
 	ProcessError error
 }
 
@@ -58,12 +56,12 @@ func (pm *ProcessManager) Start(cmd *exec.Cmd) (string, error) {
 	id := fmt.Sprintf("p-%d", time.Now().UnixNano())
 
 	mp := &ManagedProcess{
-		ID:     id,
-		Cmd:    cmd,
-		Stdout: &bytes.Buffer{},
-		Stderr: &bytes.Buffer{},
-		done:   make(chan error, 1),
-		Completed: false,
+		ID:           id,
+		Cmd:          cmd,
+		Stdout:       &bytes.Buffer{},
+		Stderr:       &bytes.Buffer{},
+		done:         make(chan error, 1),
+		Completed:    false,
 		ProcessError: nil,
 	}
 
@@ -123,24 +121,6 @@ func (pm *ProcessManager) Kill(id string) error {
 	return mp.Cmd.Process.Kill()
 }
 
-// Interrupt sends an interrupt (SIGINT) to the process. On Windows this falls back to Kill.
-func (pm *ProcessManager) Interrupt(id string) error {
-	pm.mu.Lock()
-	mp, ok := pm.procs[id]
-	pm.mu.Unlock()
-	if !ok {
-		return fmt.Errorf("process %s not found", id)
-	}
-	if mp.Cmd.Process == nil {
-		return fmt.Errorf("process %s has no underlying process", id)
-	}
-	if runtime.GOOS == "windows" {
-		// no SIGINT on Windows -> kill
-		return mp.Cmd.Process.Kill()
-	}
-	return mp.Cmd.Process.Signal(syscall.SIGINT)
-}
-
 // GetOutput returns captured stdout and stderr for the process id. If the
 // process is still running, output will be the data captured so far.
 func (pm *ProcessManager) GetOutput(id string) (stdout string, stderr string, err error) {
@@ -152,27 +132,6 @@ func (pm *ProcessManager) GetOutput(id string) (stdout string, stderr string, er
 	}
 	return mp.Stdout.String(), mp.Stderr.String(), nil
 }
-
-
-
-// Wait waits for the process to finish and returns its error (if any).
-func (pm *ProcessManager) Wait(id string) error {
-	pm.mu.Lock()
-	mp, ok := pm.procs[id]
-	pm.mu.Unlock()
-	if !ok {
-		return fmt.Errorf("process %s not found", id)
-	}
-	// if done channel already closed, receive will return zero value
-	err, ok := <-mp.done
-	if !ok {
-		// channel closed without a value; treat as nil
-		return nil
-	}
-	return err
-}
-
-
 
 // KillAll forcefully kills all managed processes, waiting up to 2 seconds for
 // each to exit so the OS can reap them (avoiding zombies).
