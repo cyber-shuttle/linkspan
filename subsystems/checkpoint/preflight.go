@@ -30,10 +30,16 @@ func (c *CriuCheckpointer) CRIUCheck(ctx context.Context) error {
 	if err := c.checkBinary(); err != nil {
 		return err
 	}
+	if c.CheckpointRoot == "" {
+		return fmt.Errorf("CheckpointRoot is not configured; set --checkpoint-root to a durable, shared storage path (e.g. Lustre, GPFS, NFS, or project scratch)")
+	}
+	if strings.HasPrefix(c.CheckpointRoot, "/tmp") {
+		log.Printf("[Checkpoint] warning: checkpoint root %s is under /tmp, which typically does not persist across compute-node allocations; use shared storage for production", c.CheckpointRoot)
+	}
 	if err := checkCapabilities(); err != nil {
 		return err
 	}
-	if err := checkDirWritable(c.DumpDirRoot); err != nil {
+	if err := checkDirWritable(c.CheckpointRoot); err != nil {
 		return err
 	}
 	if err := c.runCriuCheck(ctx); err != nil {
@@ -196,4 +202,22 @@ func processOwnerUID(pid int) (int, error) {
 		return strconv.Atoi(fields[1])
 	}
 	return -1, fmt.Errorf("Uid not found in /proc/%d/status", pid)
+}
+
+func processOwnerGID(pid int) (int, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return -1, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "Gid:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return -1, fmt.Errorf("unexpected Gid line format: %q", line)
+		}
+		return strconv.Atoi(fields[1])
+	}
+	return -1, fmt.Errorf("Gid not found in /proc/%d/status", pid)
 }
