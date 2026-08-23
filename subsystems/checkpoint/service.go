@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/cyber-shuttle/linkspan/internal/config"
@@ -149,8 +148,9 @@ func (s *CheckpointService) CreateCheckpoint(ctx context.Context, target Checkpo
 }
 
 // RestoreCheckpoint restores checkpointID, resolving its owning workload
-// internally (checkpoint ids are globally unique). Only one checkpoint or
-// restore may be in flight for that workload at a time.
+// internally, and registers the restored application so it has a durable
+// identity in this allocation. Only one operation may be in flight per
+// workload at a time.
 func (s *CheckpointService) RestoreCheckpoint(ctx context.Context, checkpointID string, opts RestoreOptions) (*RestoreResult, error) {
 	if checkpointID == "" {
 		return nil, fmt.Errorf("checkpointID is required")
@@ -159,14 +159,25 @@ func (s *CheckpointService) RestoreCheckpoint(ctx context.Context, checkpointID 
 	if err != nil {
 		return nil, fmt.Errorf("failed to locate checkpoint %s: %w", checkpointID, err)
 	}
+	checkpointDir := checkpointDirPath(s.criu.CheckpointRoot, workloadID, checkpointID)
 
-	// An unseen workload defaults to "checkpointed" here (not "running"):
-	// this may be the first time this service instance has heard of it,
-	// e.g. after a restart, and a durable checkpoint on disk implies
-	// exactly that state.
+	// A workload this instance has never seen defaults to "checkpointed":
+	// a durable checkpoint on disk implies exactly that.
 	w := s.getOrCreateWorkload(workloadID, WorkloadCheckpointed)
 	if err := w.transition([]WorkloadState{WorkloadCheckpointed, WorkloadRestoreFailed}, WorkloadRestoring); err != nil {
 		return nil, fmt.Errorf("cannot restore workload %s: %w", workloadID, err)
+	}
+
+	// validateCheckpoint reports a nil manifest as a fatal finding.
+	manifest, err := ReadManifest(checkpointDir)
+	if err != nil {
+		manifest = nil
+	}
+
+	warnings, err := s.runRestorePhases(ctx, checkpointDir, manifest, opts)
+	if err != nil {
+		w.setState(WorkloadRestoreFailed)
+		return nil, err
 	}
 
 	result, err := s.criu.restore(ctx, workloadID, checkpointID)
@@ -174,13 +185,83 @@ func (s *CheckpointService) RestoreCheckpoint(ctx context.Context, checkpointID 
 		w.setState(WorkloadRestoreFailed)
 		return nil, err
 	}
-	w.setState(WorkloadRunning)
+	result.Warnings = warnings
 
-	if opts.ShutdownOnCompletion && result.Pid > 0 {
-		go watchPidAndShutdown(result.Pid, fmt.Sprintf("restored process %d exited", result.Pid))
+	// Registered so callers hold the application itself, not the CRIU
+	// command that restored it and has already exited.
+	processID, err := pm.GlobalProcessManager.Adopt(result.Pid)
+	if err != nil {
+		w.setState(WorkloadRestoreFailed)
+		return nil, fmt.Errorf("restore of %s succeeded (pid %d) but the restored process could not be registered: %w", checkpointID, result.Pid, err)
+	}
+	result.ProcessID = processID
+
+	if err := writeRestoreRecord(checkpointDir, newRestoreRecord(result, s.criu.LinkspanVersion)); err != nil {
+		log.Printf("[Checkpoint] warning: failed to record restore of %s: %v", checkpointID, err)
+	}
+
+	w.setState(WorkloadRunning)
+	log.Printf("[Checkpoint] workload %s restored from %s as process %s (pid %d)", workloadID, checkpointID, processID, result.Pid)
+
+	if opts.ShutdownOnCompletion {
+		go shutdownWhenProcessExits(processID, fmt.Sprintf("restored process %d exited", result.Pid))
 	}
 
 	return result, nil
+}
+
+// runRestorePhases runs the pre-CRIU phases, returning the warnings they
+// gathered. Force downgrades a phase's errors rather than skipping the phase,
+// so a forced restore still logs what it overrode.
+func (s *CheckpointService) runRestorePhases(ctx context.Context, checkpointDir string, manifest *Manifest, opts RestoreOptions) ([]string, error) {
+	var warnings []string
+
+	// Ordered: a bad checkpoint stops everything before the host is touched,
+	// and the host checks must see what environment preparation rebuilt.
+	phases := []struct {
+		name string
+		run  func() *RestoreValidation
+	}{
+		{"checkpoint validation", func() *RestoreValidation { return validateCheckpoint(checkpointDir, manifest) }},
+		{"environment preparation", func() *RestoreValidation { return prepareRestoreEnvironment(ctx, manifest, opts) }},
+		{"host compatibility", func() *RestoreValidation { return s.criu.validateHostCompatibility(ctx, manifest) }},
+	}
+
+	for _, phase := range phases {
+		v := phase.run()
+		if opts.Force && !v.OK() {
+			log.Printf("[Checkpoint] --restore-force: overriding %d %s error(s)", len(v.Errors), phase.name)
+			v.downgrade()
+		}
+		v.log(phase.name)
+		warnings = append(warnings, v.Warnings...)
+		if err := v.Err(); err != nil {
+			return warnings, fmt.Errorf("%s: %w", phase.name, err)
+		}
+	}
+	return warnings, nil
+}
+
+// ValidateRestore reports whether checkpointID could be restored here,
+// without restoring it.
+func (s *CheckpointService) ValidateRestore(ctx context.Context, checkpointID string) (*RestoreValidation, error) {
+	if checkpointID == "" {
+		return nil, fmt.Errorf("checkpointID is required")
+	}
+	workloadID, err := findWorkloadForCheckpoint(s.criu.CheckpointRoot, checkpointID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to locate checkpoint %s: %w", checkpointID, err)
+	}
+	checkpointDir := checkpointDirPath(s.criu.CheckpointRoot, workloadID, checkpointID)
+
+	manifest, err := ReadManifest(checkpointDir)
+	if err != nil {
+		manifest = nil
+	}
+
+	v := validateCheckpoint(checkpointDir, manifest)
+	v.merge(s.criu.validateHostCompatibility(ctx, manifest))
+	return v, nil
 }
 
 // GetCheckpoint returns a checkpoint's manifest regardless of its state
@@ -246,16 +327,11 @@ func (s *CheckpointService) ScheduleCheckpoint(ctx context.Context, target Check
 	return nil
 }
 
-// watchPidAndShutdown polls pid until it exits, then triggers linkspan
-// shutdown. Used after a restore, where the restored process is detached
-// from CRIU and therefore not a child linkspan can Wait() on.
-func watchPidAndShutdown(pid int, reason string) {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-	for range ticker.C {
-		if err := syscall.Kill(pid, 0); err != nil && err != syscall.EPERM {
-			controller.TriggerShutdown(reason)
-			return
-		}
+// shutdownWhenProcessExits shuts linkspan down once the restored process
+// exits. Not our child, so the exit comes from the adopted-process poll.
+func shutdownWhenProcessExits(processID, reason string) {
+	if err := pm.GlobalProcessManager.Wait(processID); err != nil {
+		log.Printf("[Checkpoint] restored process %s ended with error: %v", processID, err)
 	}
+	controller.TriggerShutdown(reason)
 }
