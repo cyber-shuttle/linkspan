@@ -147,10 +147,19 @@ func checkAllowedUser(pid int, allowed []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to determine owner of process %d: %w", pid, err)
 	}
+	if err := checkAllowedUserID(ownerUID, allowed); err != nil {
+		return fmt.Errorf("process %d: %w", pid, err)
+	}
+	return nil
+}
 
+// checkAllowedUserID applies the AllowedCheckpointUsers policy to a uid.
+// Entries may be usernames or numeric uids; "*" allows any user. An empty
+// policy allows only linkspan's own uid.
+func checkAllowedUserID(ownerUID int, allowed []string) error {
 	if len(allowed) == 0 {
 		if ownerUID != os.Getuid() {
-			return fmt.Errorf("process %d is owned by uid %d, not linkspan's own uid %d; set AllowedCheckpointUsers to permit cross-user checkpointing", pid, ownerUID, os.Getuid())
+			return fmt.Errorf("owner uid %d is not linkspan's own uid %d; set AllowedCheckpointUsers to permit cross-user checkpointing", ownerUID, os.Getuid())
 		}
 		return nil
 	}
@@ -169,7 +178,7 @@ func checkAllowedUser(pid int, allowed []string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("process %d owner (uid %d) is not in AllowedCheckpointUsers", pid, ownerUID)
+	return fmt.Errorf("owner uid %d is not in AllowedCheckpointUsers", ownerUID)
 }
 
 func processOwnerUID(pid int) (int, error) {
