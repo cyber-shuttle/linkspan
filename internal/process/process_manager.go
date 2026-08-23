@@ -22,7 +22,10 @@ type ManagedProcess struct {
 	Done         chan error
 	Completed    bool
 	ProcessError error
-	printLive    bool
+	// Adopted marks a process linkspan did not start and cannot wait(2) on;
+	// its exit is detected by polling instead.
+	Adopted   bool
+	printLive bool
 }
 
 // ProcessManager stores running processes and provides control operations.
@@ -120,6 +123,64 @@ func (pm *ProcessManager) Start(cmd *exec.Cmd, printLive bool) (string, error) {
 	return id, nil
 }
 
+// adoptedPollInterval is how often an adopted process is probed for exit.
+const adoptedPollInterval = 500 * time.Millisecond
+
+// Adopt registers an already-running process linkspan did not start.
+func (pm *ProcessManager) Adopt(pid int) (string, error) {
+	if pid <= 0 {
+		return "", fmt.Errorf("invalid pid %d", pid)
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return "", fmt.Errorf("failed to attach to pid %d: %w", pid, err)
+	}
+	if err := ProcessAlive(pid); err != nil {
+		return "", fmt.Errorf("cannot adopt pid %d: %w", pid, err)
+	}
+
+	id := fmt.Sprintf("p-adopted-%d", time.Now().UnixNano())
+	mp := &ManagedProcess{
+		ID:      id,
+		Cmd:     &exec.Cmd{Process: proc},
+		Stdout:  &bytes.Buffer{},
+		Stderr:  &bytes.Buffer{},
+		Done:    make(chan error, 1),
+		Adopted: true,
+	}
+
+	pm.mu.Lock()
+	pm.procs[id] = mp
+	pm.mu.Unlock()
+
+	go func() {
+		ticker := time.NewTicker(adoptedPollInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			if ProcessAlive(pid) != nil {
+				mp.Completed = true
+				mp.Done <- nil
+				close(mp.Done)
+				return
+			}
+		}
+	}()
+
+	return id, nil
+}
+
+// ProcessAlive reports whether pid is still live. EPERM means it exists but
+// belongs to another user, which still counts as alive.
+func ProcessAlive(pid int) error {
+	if pid <= 0 {
+		return fmt.Errorf("invalid pid %d", pid)
+	}
+	if err := syscall.Kill(pid, 0); err != nil && err != syscall.EPERM {
+		return err
+	}
+	return nil
+}
+
 // Kill forcefully kills the process with the given id.
 func (pm *ProcessManager) Kill(id string) error {
 	pm.mu.Lock()
@@ -130,6 +191,11 @@ func (pm *ProcessManager) Kill(id string) error {
 	}
 	if mp.Cmd.Process == nil {
 		return fmt.Errorf("process %s has no underlying process", id)
+	}
+	// An exited adopted process was never reaped by us, so its pid may since
+	// have been reused; signalling it would hit an unrelated process.
+	if mp.Adopted && mp.Completed {
+		return nil
 	}
 	return mp.Cmd.Process.Kill()
 }
@@ -144,6 +210,9 @@ func (pm *ProcessManager) Interrupt(id string) error {
 	}
 	if mp.Cmd.Process == nil {
 		return fmt.Errorf("process %s has no underlying process", id)
+	}
+	if mp.Adopted && mp.Completed {
+		return nil
 	}
 	if runtime.GOOS == "windows" {
 		// no SIGINT on Windows -> kill
@@ -193,7 +262,7 @@ func (pm *ProcessManager) KillAll() {
 	pm.mu.Unlock()
 
 	for id, mp := range snapshot {
-		if mp.Cmd.Process != nil {
+		if mp.Cmd.Process != nil && !(mp.Adopted && mp.Completed) {
 			_ = mp.Cmd.Process.Kill()
 
 			// Wait for the process to be reaped via the done channel (which
