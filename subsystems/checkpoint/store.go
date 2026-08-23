@@ -13,6 +13,60 @@ import (
 
 const manifestFileName = "manifest.json"
 const completeFileName = "COMPLETE"
+const restoreRecordFileName = "last_restore.json"
+
+// RestoreRecord is written next to a checkpoint after it is restored, so
+// which allocation last brought a workload back is answerable from shared
+// storage alone.
+type RestoreRecord struct {
+	CheckpointID    string    `json:"checkpoint_id"`
+	WorkloadID      string    `json:"workload_id"`
+	ProcessID       string    `json:"process_id"`
+	Pid             int       `json:"pid"`
+	RestoredAt      time.Time `json:"restored_at"`
+	Hostname        string    `json:"hostname,omitempty"`
+	SlurmJobID      string    `json:"slurm_job_id,omitempty"`
+	SlurmNode       string    `json:"slurm_node,omitempty"`
+	LinkspanVersion string    `json:"linkspan_version,omitempty"`
+	Warnings        []string  `json:"warnings,omitempty"`
+}
+
+func newRestoreRecord(r *RestoreResult, linkspanVersion string) *RestoreRecord {
+	hostname, _ := os.Hostname()
+	return &RestoreRecord{
+		CheckpointID:    r.CheckpointID,
+		WorkloadID:      r.WorkloadID,
+		ProcessID:       r.ProcessID,
+		Pid:             r.Pid,
+		RestoredAt:      r.FinishedAt.UTC(),
+		Hostname:        hostname,
+		SlurmJobID:      os.Getenv("SLURM_JOB_ID"),
+		SlurmNode:       os.Getenv("SLURMD_NODENAME"),
+		LinkspanVersion: linkspanVersion,
+		Warnings:        r.Warnings,
+	}
+}
+
+func writeRestoreRecord(checkpointDir string, r *RestoreRecord) error {
+	data, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal restore record: %w", err)
+	}
+	return atomicWriteFile(filepath.Join(checkpointDir, restoreRecordFileName), data, 0644)
+}
+
+// ReadRestoreRecord loads a checkpoint's most recent restore.
+func ReadRestoreRecord(checkpointDir string) (*RestoreRecord, error) {
+	data, err := os.ReadFile(filepath.Join(checkpointDir, restoreRecordFileName))
+	if err != nil {
+		return nil, err
+	}
+	var r RestoreRecord
+	if err := json.Unmarshal(data, &r); err != nil {
+		return nil, fmt.Errorf("corrupt restore record at %s: %w", checkpointDir, err)
+	}
+	return &r, nil
+}
 
 func checkpointDirPath(root, workloadID, checkpointID string) string {
 	return filepath.Join(root, workloadID, checkpointID)

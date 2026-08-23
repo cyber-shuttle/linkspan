@@ -135,3 +135,36 @@ func TestNewIDsAreUniqueAndPrefixed(t *testing.T) {
 		t.Fatalf("expected checkpoint ids to start with \"ckpt-\", got %q and %q", c1, c2)
 	}
 }
+
+func TestRestoreRecordRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	record := newRestoreRecord(&RestoreResult{
+		CheckpointID: "ckpt-1",
+		WorkloadID:   "wl-1",
+		ProcessID:    "p-adopted-42",
+		Pid:          4242,
+		FinishedAt:   time.Now(),
+		Warnings:     []string{"kernel differs"},
+	}, "v1.2.3")
+
+	if err := writeRestoreRecord(dir, record); err != nil {
+		t.Fatalf("writeRestoreRecord failed: %v", err)
+	}
+
+	got, err := ReadRestoreRecord(dir)
+	if err != nil {
+		t.Fatalf("ReadRestoreRecord failed: %v", err)
+	}
+	if got.ProcessID != "p-adopted-42" || got.Pid != 4242 || got.CheckpointID != "ckpt-1" {
+		t.Fatalf("restore record did not round-trip: %+v", got)
+	}
+	if got.LinkspanVersion != "v1.2.3" || len(got.Warnings) != 1 {
+		t.Fatalf("restore record lost provenance: %+v", got)
+	}
+}
+
+func TestReadRestoreRecordMissingIsAnError(t *testing.T) {
+	if _, err := ReadRestoreRecord(t.TempDir()); err == nil {
+		t.Fatalf("expected reading a never-restored checkpoint to fail")
+	}
+}
