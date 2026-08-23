@@ -2,11 +2,12 @@ package checkpoint
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -90,18 +91,46 @@ func TestCheckBinary(t *testing.T) {
 	}
 }
 
-func writeStubCriu(t *testing.T) string {
+// requireCriu skips a test that needs a working CRIU on this host, the same
+// way the venv tests skip when python3 is unavailable. It returns the path to
+// the binary. Checkpoint/restore cannot be exercised meaningfully without it:
+// CRIU is the thing under test.
+func requireCriu(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	stub := filepath.Join(dir, "criu")
-	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
-		t.Fatalf("failed to write stub criu binary: %v", err)
+	criuPath, err := exec.LookPath("criu")
+	if err != nil {
+		t.Skip("criu is not installed on this host")
 	}
-	return stub
+	cp := &criuCheckpointer{CriuPath: criuPath, CheckpointRoot: t.TempDir()}
+	if err := cp.CRIUCheck(context.Background()); err != nil {
+		t.Skipf("criu is installed but not usable on this host: %v", err)
+	}
+	return criuPath
+}
+
+/*
+startDetachedProcess starts a process that is neither a child of the test
+binary nor connected to its stdio, and returns its pid. This is what CRIU can
+actually dump: a process still wired to the test's pipes would leave CRIU
+trying to dump file descriptors whose other end is not part of the dump.
+*/
+func startDetachedProcess(t *testing.T, seconds string) int {
+	t.Helper()
+	out, err := exec.Command("sh", "-c", "sleep "+seconds+" >/dev/null 2>&1 </dev/null & echo $!").Output()
+	if err != nil {
+		t.Fatalf("failed to start detached process: %v", err)
+	}
+
+	var pid int
+	if _, err := fmt.Sscan(strings.TrimSpace(string(out)), &pid); err != nil || pid <= 0 {
+		t.Fatalf("failed to parse detached pid from %q: %v", out, err)
+	}
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	return pid
 }
 
 func TestCRIUCheckRequiresCheckpointRoot(t *testing.T) {
-	cp := &criuCheckpointer{CriuPath: writeStubCriu(t)}
+	cp := &criuCheckpointer{CriuPath: requireCriu(t)}
 	err := cp.CRIUCheck(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "CheckpointRoot is not configured") {
 		t.Fatalf("expected a CheckpointRoot-not-configured error, got %v", err)
@@ -109,22 +138,14 @@ func TestCRIUCheckRequiresCheckpointRoot(t *testing.T) {
 }
 
 func TestRealCriuAvailability(t *testing.T) {
-	criuPath, err := exec.LookPath("criu")
-	if err != nil {
-		t.Skip("criu is not installed on this host; skipping real CRIUCheck test")
-	}
-
-	cp := &criuCheckpointer{CriuPath: criuPath, CheckpointRoot: t.TempDir()}
+	cp := &criuCheckpointer{CriuPath: requireCriu(t), CheckpointRoot: t.TempDir()}
 	if err := cp.CRIUCheck(context.Background()); err != nil {
 		t.Fatalf("CRIUCheck failed against a real criu binary: %v", err)
 	}
 }
 
 func TestRestoreRefusesIncompleteCheckpoint(t *testing.T) {
-	criuPath, err := exec.LookPath("criu")
-	if err != nil {
-		t.Skip("criu is not installed on this host; skipping end-to-end restore gating test")
-	}
+	criuPath := requireCriu(t)
 
 	root := t.TempDir()
 	workloadID, checkpointID := "wl-test", "ckpt-test"
@@ -136,5 +157,33 @@ func TestRestoreRefusesIncompleteCheckpoint(t *testing.T) {
 	cp := &criuCheckpointer{CriuPath: criuPath, CheckpointRoot: root}
 	if _, err := cp.restore(context.Background(), workloadID, checkpointID); err == nil {
 		t.Fatalf("expected restore to refuse a checkpoint directory without a completion marker")
+	}
+}
+
+// A real dump followed by a real restore, at the lowest level: the restored
+// root task's pid must come back from CRIU's --pidfile and be alive.
+func TestCheckpointAndRestoreCapturesRestoredPid(t *testing.T) {
+	cp := &criuCheckpointer{CriuPath: requireCriu(t), CheckpointRoot: t.TempDir()}
+	pid := startDetachedProcess(t, "600")
+
+	result, err := cp.checkpoint(context.Background(), "wl-criu", "", pid, TriggerManual)
+	if err != nil {
+		t.Fatalf("checkpoint failed: %v", err)
+	}
+	if err := checkPidExists(pid); err == nil {
+		t.Fatalf("expected CRIU to have stopped pid %d as part of the dump", pid)
+	}
+
+	restored, err := cp.restore(context.Background(), "wl-criu", result.CheckpointID)
+	if err != nil {
+		t.Fatalf("restore failed: %v", err)
+	}
+	defer syscall.Kill(restored.Pid, syscall.SIGKILL)
+
+	if restored.Pid <= 0 {
+		t.Fatalf("expected a restored pid from --pidfile, got %d", restored.Pid)
+	}
+	if err := checkPidExists(restored.Pid); err != nil {
+		t.Fatalf("restored pid %d is not running: %v", restored.Pid, err)
 	}
 }
