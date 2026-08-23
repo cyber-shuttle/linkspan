@@ -41,6 +41,12 @@ func newCriuCheckpointer(c *config.LinkspanConfig) *criuCheckpointer {
 	}
 }
 
+// Retry budget for reading CRIU's pidfile after a detached restore.
+const (
+	pidFileAttempts   = 10
+	pidFileRetryDelay = 100 * time.Millisecond
+)
+
 func buildDumpArgs(pid int, imagesDir, workDir, logFile string, extra []string) []string {
 	args := []string{
 		"dump",
@@ -85,7 +91,28 @@ func readPidFile(path string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return strconv.Atoi(strings.TrimSpace(string(data)))
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, fmt.Errorf("pidfile %s does not contain a pid: %w", path, err)
+	}
+	if pid <= 0 {
+		return 0, fmt.Errorf("pidfile %s contains invalid pid %d", path, pid)
+	}
+	return pid, nil
+}
+
+// awaitPidFile reads CRIU's pidfile, retrying briefly: on shared storage the
+// file can lag the CRIU exit.
+func awaitPidFile(path string) (int, error) {
+	var err error
+	for i := 0; i < pidFileAttempts; i++ {
+		var pid int
+		if pid, err = readPidFile(path); err == nil {
+			return pid, nil
+		}
+		time.Sleep(pidFileRetryDelay)
+	}
+	return 0, err
 }
 
 /*
@@ -194,18 +221,18 @@ func (c *criuCheckpointer) checkpoint(ctx context.Context, workloadID, processID
 }
 
 /*
-restore restores a process from the checkpoint images stored under
-CheckpointRoot/workloadID/checkpointID. CRIU is run directly (no shell) in
-detached mode (--restore-detached), so restore returns as soon as CRIU
-confirms the restore succeeded or failed, rather than blocking for the
-restored process's entire remaining lifetime. restore refuses to run against
-a checkpoint directory that is missing its completion marker or whose
-manifest doesn't record a "complete" state — see isCheckpointComplete.
+restore restores a process from the images under
+CheckpointRoot/workloadID/checkpointID and returns the restored root task's
+PID, read from CRIU's --pidfile. CRIU runs directly (no shell) and detached
+(--restore-detached), so this returns once the restore is confirmed rather
+than blocking for the process's remaining lifetime.
+
+Host and compatibility checks belong to the caller: CheckpointService runs
+them as validation phases, which is what makes them overridable with
+--restore-force. The completion-marker gate stays here regardless, since
+restoring a partial checkpoint is never correct.
 */
 func (c *criuCheckpointer) restore(ctx context.Context, workloadID, checkpointID string) (*RestoreResult, error) {
-	if err := c.CRIUCheck(ctx); err != nil {
-		return nil, fmt.Errorf("CRIU preflight check failed: %w", err)
-	}
 	if workloadID == "" || checkpointID == "" {
 		return nil, fmt.Errorf("both workloadID and checkpointID are required to restore")
 	}
@@ -239,10 +266,9 @@ func (c *criuCheckpointer) restore(ctx context.Context, workloadID, checkpointID
 		return nil, fmt.Errorf("criu restore failed for %s/%s (exit code %d): %w: %s", workloadID, checkpointID, exitCode, runErr, strings.TrimSpace(stderr.String()))
 	}
 
-	pidFilePath := filepath.Join(checkpointDir, "restore.pid")
-	restoredPid, err := readPidFile(pidFilePath)
+	restoredPid, err := awaitPidFile(filepath.Join(checkpointDir, "restore.pid"))
 	if err != nil {
-		log.Printf("[Checkpoint] warning: restore of %s/%s succeeded but pidfile could not be read: %v", workloadID, checkpointID, err)
+		return nil, fmt.Errorf("criu restore of %s/%s reported success but its pidfile could not be read (%w); the restored process may be running unsupervised and must be found and cleaned up manually", workloadID, checkpointID, err)
 	}
 
 	log.Printf("[Checkpoint] restore of %s/%s completed successfully (pid=%d)", workloadID, checkpointID, restoredPid)
