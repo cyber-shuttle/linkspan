@@ -107,7 +107,9 @@ func main() {
 		log.Fatalf("Can not perform restore and fork execution at same time")
 	}
 
-	if c.WorkloadID == "" {
+	// A restore inherits its workload id from the checkpoint, so only a
+	// fresh workload needs one minted here.
+	if c.WorkloadID == "" && !restoreRequested {
 		c.WorkloadID = checkpoint.NewWorkloadID()
 		log.Printf("No --workload-id provided; generated workload id %s (record this to restore this workload later)", c.WorkloadID)
 	}
@@ -120,17 +122,29 @@ func main() {
 		log.Printf("Restoring checkpoint %s", c.RestoreCheckpointID)
 		result, err := svc.RestoreCheckpoint(ctx, c.RestoreCheckpointID, checkpoint.RestoreOptions{
 			ShutdownOnCompletion: c.ShutdownOnForkCompletion,
+			PreRestoreCommands:   c.RestorePreCommands,
+			EnsureDirs:           c.RestoreEnsureDirs,
+			RequireFiles:         c.RestoreRequireFiles,
+			Force:                c.RestoreForce,
 		})
 		if err != nil {
 			log.Fatalf("Failed to restore checkpoint %s: %v", c.RestoreCheckpointID, err)
 		}
-		log.Printf("Restore completed successfully (workload=%s pid=%d)", result.WorkloadID, result.Pid)
+
+		// The restored workload keeps the identity recorded in the
+		// checkpoint, so this allocation reports the same workload id as
+		// the allocation that checkpointed it.
+		c.WorkloadID = result.WorkloadID
+		log.Printf("Restore completed successfully (workload=%s process_id=%s pid=%d)", result.WorkloadID, result.ProcessID, result.Pid)
 
 		if c.CheckpointForkAfterDelay > 0 {
-			// The restored process is detached from CRIU and is not tracked
-			// by linkspan's ProcessManager, so ScheduleCheckpoint (which
-			// currently only supports process_id targets) cannot target it.
-			log.Printf("warning: --checkpoint-fork-after-delay is not supported for a restored process; ignoring")
+			log.Printf("waiting %d seconds before re-checkpointing restored process %s", c.CheckpointForkAfterDelay, result.ProcessID)
+			target := checkpoint.TargetFromProcessID(result.ProcessID)
+			opts := checkpoint.CreateOptions{WorkloadID: result.WorkloadID, Trigger: checkpoint.TriggerManual}
+			delay := time.Duration(c.CheckpointForkAfterDelay) * time.Second
+			if err := svc.ScheduleCheckpoint(ctx, target, opts, delay); err != nil {
+				log.Printf("failed to schedule checkpoint for restored process %s: %v", result.ProcessID, err)
+			}
 		}
 	}
 

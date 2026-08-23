@@ -34,6 +34,12 @@ type LinkspanConfig struct {
 	ShutdownOnForkCompletion bool   `yaml:"shutdown_on_fork_completion"`
 	CheckpointForkAfterDelay int64  `yaml:"checkpoint_fork_after_delay"`
 	RestoreCheckpointID      string `yaml:"restore_checkpoint_id"`
+
+	// Prerequisites the new allocation must satisfy before a CRIU restore.
+	RestorePreCommands  []string `yaml:"restore_pre_commands"`
+	RestoreEnsureDirs   []string `yaml:"restore_ensure_dirs"`
+	RestoreRequireFiles []string `yaml:"restore_require_files"`
+	RestoreForce        bool     `yaml:"restore_force"`
 }
 
 func NewDefaultLinkspanConfig() *LinkspanConfig {
@@ -59,5 +65,9 @@ func NewDefaultLinkspanConfig() *LinkspanConfig {
 		ShutdownOnForkCompletion: false,
 		CheckpointForkAfterDelay: 0,
 		RestoreCheckpointID:      "",
+		RestorePreCommands:       []string{},
+		RestoreEnsureDirs:        []string{},
+		RestoreRequireFiles:      []string{},
+		RestoreForce:             false,
 	}
 }

@@ -91,6 +91,17 @@ func StartAPIDevTunnel(tunnelToken string, tunnelID string,
 	return nil
 }
 
+// repeatableFlag collects a flag given more than once, for values that
+// cannot be comma-separated because they are shell commands or paths.
+type repeatableFlag []string
+
+func (r *repeatableFlag) String() string { return strings.Join(*r, ", ") }
+
+func (r *repeatableFlag) Set(value string) error {
+	*r = append(*r, value)
+	return nil
+}
+
 func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	versionFlag := flag.Bool("version", false, "print version information and exit")
 	verboseVersionFlag := flag.Bool("verbose-version", false, "print verbose version information and exit")
@@ -115,6 +126,13 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	workloadID := flag.String("workload-id", "", "logical workload identity checkpoints are grouped under; auto-generated and logged if not provided")
 	checkpointForkAfterDelay := flag.Int64("checkpoint-fork-after-delay", 0, "delay in seconds after fork process start before triggering checkpoint")
 	restoreCheckpointID := flag.String("restore-checkpoint-id", "", "checkpoint id to restore (its workload is resolved automatically)")
+	restoreForceFlag := flag.String("restore-force", "false", "restore even when compatibility checks fail, downgrading their errors to warnings (true/false)")
+
+	var restorePreCommands, restoreEnsureDirs, restoreRequireFiles repeatableFlag
+	flag.Var(&restorePreCommands, "restore-pre-command", "shell command to run before a CRIU restore to reconstruct the environment (mount storage, load modules, stage credentials); repeatable, runs in order")
+	flag.Var(&restoreEnsureDirs, "restore-ensure-dir", "directory that must exist before a CRIU restore; created if missing (repeatable)")
+	flag.Var(&restoreRequireFiles, "restore-require-file", "file that must exist before a CRIU restore, e.g. a credential (repeatable)")
+
 	allowedCheckpointUsersFlag := flag.String("allowed-checkpoint-users", "", "comma-separated list of usernames/uids allowed to be checkpointed (default: linkspan's own user only); use \"*\" to allow any user")
 	flag.Parse()
 
@@ -127,6 +145,11 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	supportGpuCheckpoint, err := strconv.ParseBool(*supportGpuCheckpointFlag)
 	if err != nil {
 		log.Fatalf("invalid value for --support-gpu-checkpoint: %s (expected true or false)", *supportGpuCheckpointFlag)
+	}
+
+	restoreForce, err := strconv.ParseBool(*restoreForceFlag)
+	if err != nil {
+		log.Fatalf("invalid value for --restore-force: %s (expected true or false)", *restoreForceFlag)
 	}
 
 	// Parse additional CRIU options (comma-separated)
@@ -168,6 +191,10 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	c.WorkloadID = *workloadID
 	c.AllowedCheckpointUsers = allowedCheckpointUsers
 	c.CheckpointForkAfterDelay = *checkpointForkAfterDelay
+	c.RestorePreCommands = restorePreCommands
+	c.RestoreEnsureDirs = restoreEnsureDirs
+	c.RestoreRequireFiles = restoreRequireFiles
+	c.RestoreForce = restoreForce
 	if *versionFlag {
 		fmt.Printf("%s\n", c.Version)
 		os.Exit(0)
