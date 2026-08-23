@@ -21,7 +21,9 @@ type CheckpointResult struct {
 	FinishedAt   time.Time
 }
 
-// RestoreResult describes the outcome of a successful CRIU restore.
+// RestoreResult describes the outcome of a successful CRIU restore. Pid and
+// ProcessID identify the restored application, not the CRIU command that
+// restored it.
 type RestoreResult struct {
 	WorkloadID   string
 	CheckpointID string
@@ -33,26 +35,24 @@ type RestoreResult struct {
 	Stderr       string
 	StartedAt    time.Time
 	FinishedAt   time.Time
-	Pid          int // restored root task PID, captured via --pidfile
+	Pid          int      // restored root task, from CRIU's --pidfile
+	ProcessID    string   // process id it is registered under
+	Warnings     []string // non-fatal findings from the restore checks
 }
 
 // TargetKind identifies how a CheckpointTarget names the process to act on.
 type TargetKind string
 
 const (
-	// TargetKindProcessID targets a process started through linkspan's
-	// ProcessManager, identified by its internal id.
-	TargetKindProcessID TargetKind = "process_id"
-	// TargetKindPID targets an already-running process by raw OS PID,
-	// regardless of whether linkspan started it.
-	TargetKindPID TargetKind = "pid"
+	TargetKindProcessID TargetKind = "process_id" // a process linkspan tracks
+	TargetKindPID       TargetKind = "pid"        // any running process, by OS pid
 )
 
 // CheckpointTarget identifies the process a checkpoint operation acts on.
 type CheckpointTarget struct {
 	Kind      TargetKind
-	ProcessID string // set when Kind == TargetKindProcessID
-	PID       int    // set when Kind == TargetKindPID
+	ProcessID string
+	PID       int
 }
 
 func TargetFromProcessID(id string) CheckpointTarget {
@@ -66,21 +66,21 @@ func TargetFromPID(pid int) CheckpointTarget {
 // CreateOptions configures a CreateCheckpoint call.
 type CreateOptions struct {
 	WorkloadID string
-	// Trigger defaults to TriggerManual if left empty.
-	Trigger CheckpointTrigger
+	Trigger    CheckpointTrigger // defaults to TriggerManual
 }
 
 // RestoreOptions configures a RestoreCheckpoint call.
 type RestoreOptions struct {
-	// ShutdownOnCompletion triggers linkspan shutdown once the restored
-	// process exits.
-	ShutdownOnCompletion bool
+	ShutdownOnCompletion bool     // shut linkspan down once the restored process exits
+	PreRestoreCommands   []string // rebuild the environment; run in order, a failure aborts
+	EnsureDirs           []string // created if missing, alongside the recorded working dir
+	RequireFiles         []string // must exist before the restore proceeds
+	Force                bool     // downgrade compatibility errors to warnings
 }
 
-// WorkloadState is a workload's position in the in-memory state machine
-// CheckpointService uses to serialize checkpoint/restore operations. This
-// is distinct from CheckpointState (manifest.go), which records one
-// checkpoint's own on-disk lifecycle.
+// WorkloadState is a workload's position in the state machine
+// CheckpointService uses to serialize operations. Distinct from
+// CheckpointState, which is one checkpoint's own on-disk lifecycle.
 type WorkloadState string
 
 const (
@@ -92,7 +92,6 @@ const (
 	WorkloadRestoreFailed    WorkloadState = "restore_failed"
 )
 
-// ErrWorkloadBusy is returned (wrapped) when an operation is requested on a
-// workload that is not in a state that allows it — e.g. a second checkpoint
-// or restore while one is already in flight.
+// ErrWorkloadBusy is returned (wrapped) when a workload is not in a state
+// that allows the requested operation.
 var ErrWorkloadBusy = errors.New("workload is not in a state that allows this operation")
