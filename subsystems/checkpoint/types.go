@@ -2,6 +2,7 @@ package checkpoint
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -63,10 +64,54 @@ func TargetFromPID(pid int) CheckpointTarget {
 	return CheckpointTarget{Kind: TargetKindPID, PID: pid}
 }
 
+// CheckpointMode selects whether a checkpoint engages CRIU's GPU support.
+type CheckpointMode string
+
+const (
+	ModeCPU  CheckpointMode = "cpu"
+	ModeGPU  CheckpointMode = "gpu"
+	ModeAuto CheckpointMode = "auto" // engage GPU support only if the host has the tooling
+)
+
 // CreateOptions configures a CreateCheckpoint call.
 type CreateOptions struct {
-	WorkloadID string
-	Trigger    CheckpointTrigger // defaults to TriggerManual
+	WorkloadID   string
+	Trigger      CheckpointTrigger // defaults to TriggerManual
+	Mode         CheckpointMode    // defaults to ModeAuto
+	LeaveRunning *bool             // nil defers to the trigger's default
+	Reason       string            // free-text provenance, recorded in the manifest
+}
+
+/*
+applyDefaults fills in what a caller left unset and rejects what it got wrong.
+
+The leave-running default is the important part: a manual checkpoint is a
+snapshot of a job that should carry on afterwards, while a walltime or signal
+checkpoint is the last thing to happen before the allocation dies, so keeping
+the process alive buys nothing.
+*/
+func (o *CreateOptions) applyDefaults() error {
+	if o.WorkloadID == "" {
+		return fmt.Errorf("WorkloadID is required")
+	}
+	if o.Trigger == "" {
+		o.Trigger = TriggerManual
+	}
+	if o.Mode == "" {
+		o.Mode = ModeAuto
+	}
+	if o.Mode != ModeCPU && o.Mode != ModeGPU && o.Mode != ModeAuto {
+		return fmt.Errorf("unknown checkpoint mode %q, expected one of %q, %q, %q", o.Mode, ModeCPU, ModeGPU, ModeAuto)
+	}
+	if o.LeaveRunning == nil {
+		leave := o.Trigger != TriggerWalltime && o.Trigger != TriggerSignal
+		o.LeaveRunning = &leave
+	}
+	return nil
+}
+
+func (o *CreateOptions) leaveRunning() bool {
+	return o.LeaveRunning != nil && *o.LeaveRunning
 }
 
 // RestoreOptions configures a RestoreCheckpoint call.

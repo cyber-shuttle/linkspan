@@ -43,6 +43,9 @@ type Manifest struct {
 	CreatedAt       time.Time         `json:"created_at"`
 	CompletedAt     time.Time         `json:"completed_at,omitempty"`
 	Trigger         CheckpointTrigger `json:"trigger"`
+	Mode            CheckpointMode    `json:"mode"`
+	Reason          string            `json:"reason,omitempty"`
+	LeaveRunning    bool              `json:"leave_running"`
 	ProcessID       string            `json:"process_id"`
 	OriginalPID     int               `json:"original_pid"`
 	Command         string            `json:"command"`
@@ -91,6 +94,9 @@ type manifestParams struct {
 	PID             int
 	CheckpointID    string
 	Trigger         CheckpointTrigger
+	Mode            CheckpointMode
+	Reason          string
+	LeaveRunning    bool
 }
 
 // gatherManifest builds the initial manifest for a checkpoint about to be
@@ -104,6 +110,9 @@ func gatherManifest(ctx context.Context, p manifestParams) *Manifest {
 		WorkloadID:      p.WorkloadID,
 		CreatedAt:       time.Now().UTC(),
 		Trigger:         p.Trigger,
+		Mode:            p.Mode,
+		Reason:          p.Reason,
+		LeaveRunning:    p.LeaveRunning,
 		ProcessID:       p.ProcessID,
 		OriginalPID:     p.PID,
 		LinkspanVersion: p.LinkspanVersion,
