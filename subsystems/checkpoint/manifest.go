@@ -47,7 +47,12 @@ type Manifest struct {
 	OriginalPID     int               `json:"original_pid"`
 	Command         string            `json:"command"`
 	Args            []string          `json:"args"`
+	Executable      string            `json:"executable,omitempty"`
 	WorkingDir      string            `json:"working_dir"`
+	OpenFiles       []string          `json:"open_files,omitempty"`
+	Mounts          []MountPoint      `json:"mounts,omitempty"`
+	Environment     map[string]string `json:"environment,omitempty"`
+	Modules         []string          `json:"modules,omitempty"`
 	UID             int               `json:"uid"`
 	GID             int               `json:"gid"`
 	LinkspanVersion string            `json:"linkspan_version"`
@@ -66,6 +71,14 @@ type Manifest struct {
 	State           CheckpointState   `json:"state"`
 }
 
+// MountPoint is a filesystem the process depended on, recorded so a
+// restoring allocation can verify it was reconstructed first.
+type MountPoint struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+	FSType string `json:"fstype"`
+}
+
 // manifestParams carries what gatherManifest needs from the checkpointer
 // and the call site, without coupling manifest.go to criuCheckpointer.
 type manifestParams struct {
@@ -82,8 +95,7 @@ type manifestParams struct {
 
 // gatherManifest builds the initial manifest for a checkpoint about to be
 // taken. Every field here is best-effort provenance, not correctness-critical
-// — a failure to determine one just leaves it at its zero value. Process
-// info is read from /proc/<pid> rather than an *exec.Cmd, so this works
+// Process info is read from /proc/<pid> rather than an *exec.Cmd, so this works
 // identically whether the target was spawned by linkspan or not.
 func gatherManifest(ctx context.Context, p manifestParams) *Manifest {
 	m := &Manifest{
@@ -113,6 +125,15 @@ func gatherManifest(ctx context.Context, p manifestParams) *Manifest {
 	if link, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", p.PID)); err == nil {
 		m.WorkingDir = link
 	}
+
+	if link, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", p.PID)); err == nil {
+		m.Executable = link
+	}
+
+	m.OpenFiles = openFiles(p.PID)
+	m.Environment = capturedEnvironment(p.PID)
+	m.Modules = loadedModules(m.Environment)
+	m.Mounts = dependencyMounts(p.PID, append([]string{m.Executable, m.WorkingDir}, m.OpenFiles...))
 
 	if uid, err := processOwnerUID(p.PID); err == nil {
 		m.UID = uid
