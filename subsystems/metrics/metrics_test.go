@@ -1,6 +1,12 @@
 package metrics
 
-import "testing"
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
 
 func TestJobCgroupSuffix(t *testing.T) {
 	cases := map[string]string{
@@ -44,5 +50,30 @@ func TestParseGPUMetrics(t *testing.T) {
 	}
 	if parseGPUMetrics("") != nil {
 		t.Error("empty nvidia-smi output should yield nil GPUs")
+	}
+}
+
+// A wedged nvidia-smi must not hold the read open; the driver hanging is the
+// state the metrics are wanted for.
+func TestReadOutlastsAHungNvidiaSmi(t *testing.T) {
+	dir := t.TempDir()
+	// /bin/sleep by absolute path: PATH is about to become the fake's dir alone,
+	// so a bare `sleep` would exit 127 and the probe would never hang.
+	fake := []byte("#!/bin/sh\nexec /bin/sleep 60\n")
+	if err := os.WriteFile(filepath.Join(dir, "nvidia-smi"), fake, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+
+	done := make(chan struct{})
+	start := time.Now()
+	go func() { defer close(done); Read(context.Background()) }()
+	select {
+	case <-done:
+		if elapsed := time.Since(start); elapsed > gpuProbeTimeout+2*time.Second {
+			t.Fatalf("Read took %s, want it bounded near %s", elapsed, gpuProbeTimeout)
+		}
+	case <-time.After(gpuProbeTimeout + 5*time.Second):
+		t.Fatal("Read never returned with nvidia-smi hung")
 	}
 }

@@ -5,12 +5,19 @@
 package metrics
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// nvidia-smi blocks indefinitely on an unhealthy GPU -- which is exactly the
+// state the metrics are wanted for -- so the probe is bounded. cs-bridge polls
+// every 5s, so a stuck probe must not outlive its own poll.
+const gpuProbeTimeout = 3 * time.Second
 
 type GPU struct {
 	Index       int `json:"index"`
@@ -28,8 +35,8 @@ type Snapshot struct {
 	GPUs         []GPU  `json:"gpus,omitempty"`
 }
 
-func Read() Snapshot {
-	m := Snapshot{GPUs: readGPUMetrics()}
+func Read(ctx context.Context) Snapshot {
+	m := Snapshot{GPUs: readGPUMetrics(ctx)}
 	if cg, err := jobCgroupDir(); err == nil {
 		m.MemBytes = readCgroup(cg+"/memory.current", parseInt64)
 		m.CPUUsageUsec = readCgroup(cg+"/cpu.stat", parseCPUUsageUsec)
@@ -79,9 +86,12 @@ func parseCPUUsageUsec(cpuStat string) (int64, error) {
 	return 0, fmt.Errorf("usage_usec not found in cpu.stat")
 }
 
-// nil when nvidia-smi is absent or errors: a CPU node has no driver.
-func readGPUMetrics() []GPU {
-	out, err := exec.Command("nvidia-smi",
+// nil when nvidia-smi is absent, errors, or outruns gpuProbeTimeout: a CPU node
+// has no driver, and a wedged one must not hold the handler open.
+func readGPUMetrics(ctx context.Context) []GPU {
+	ctx, cancel := context.WithTimeout(ctx, gpuProbeTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "nvidia-smi",
 		"--query-gpu=index,utilization.gpu,memory.used,memory.total",
 		"--format=csv,noheader,nounits").Output()
 	if err != nil {

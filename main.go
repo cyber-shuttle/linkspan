@@ -52,7 +52,12 @@ func run() int {
 	ctx, abort := context.WithCancelCause(ctx)
 	defer abort(nil)
 
-	addr := fmt.Sprintf("0.0.0.0:%d", *serverPort)
+	// Loopback only. Every route is unauthenticated and POST /vscode/sessions
+	// starts an sshd for a caller-supplied key, so binding the wildcard offered
+	// a shell as the job owner to anything that could route to the node. Both
+	// consumers reach linkspan through the devtunnel relay (a child process
+	// here, which dials localhost) or through --socket.
+	addr := fmt.Sprintf("127.0.0.1:%d", *serverPort)
 	// Addr is unused: we hand Serve our own listener. ReadHeaderTimeout bounds a
 	// client that opens a connection and never finishes its headers.
 	srv := &http.Server{Handler: httpapi.Mux(), ReadHeaderTimeout: 10 * time.Second}

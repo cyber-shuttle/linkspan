@@ -136,6 +136,16 @@ func runHostCommand(s ssh.Session, cmd *exec.Cmd) {
 	safeGo("session stdin copy", func() { defer stdin.Close(); _, _ = io.Copy(stdin, s) })
 
 	err = cmd.Run()
+	if err != nil && !errors.As(err, new(*exec.ExitError)) {
+		fmt.Fprintf(stderr, "command error: %v\n", err) // it never ran
+	}
+	reportExit(s, err)
+}
+
+// reportExit gives the client the command's own status. gliderlabs sends 0 for
+// any session whose handler simply returns, so every failure -- including a
+// shell that never started -- would otherwise look like success.
+func reportExit(s ssh.Session, err error) {
 	var exit *exec.ExitError
 	switch {
 	case err == nil:
@@ -146,9 +156,8 @@ func runHostCommand(s ssh.Session, cmd *exec.Cmd) {
 			code = 255
 		}
 		_ = s.Exit(code)
-	default: // it never ran
-		fmt.Fprintf(stderr, "command error: %v\n", err)
-		_ = s.Exit(127)
+	default:
+		_ = s.Exit(127) // it never ran
 	}
 }
 
@@ -157,7 +166,10 @@ func runPTYShell(s ssh.Session) {
 	cmd := exec.CommandContext(s.Context(), shellPath())
 	f, err := pty.Start(cmd)
 	if err != nil {
+		// A PTY session carries a single stream, so this goes to s rather than
+		// s.Stderr() -- which is also what sshd does when a pty is allocated.
 		fmt.Fprintf(s, "failed to start pty shell: %v\n", err)
+		reportExit(s, err)
 		return
 	}
 	defer f.Close()
@@ -177,7 +189,7 @@ func runPTYShell(s ssh.Session) {
 		}
 	})
 
-	_ = cmd.Wait()
+	reportExit(s, cmd.Wait())
 }
 
 func handleSFTP(s ssh.Session) {

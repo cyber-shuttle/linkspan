@@ -33,8 +33,8 @@ func health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func jobMetrics(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, metrics.Read())
+func jobMetrics(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, metrics.Read(r.Context()))
 }
 
 func listSessions(w http.ResponseWriter, _ *http.Request) {

@@ -45,7 +45,7 @@ steps:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port` | `8080` | HTTP server port (`0` = random) |
+| `--port` | `8080` | HTTP server port, bound on loopback (`0` = random) |
 | `--socket` | | Also serve on this unix socket path (in-cluster access via `srun --jobid`) |
 | `--workflow` | | Workflow YAML file path |
 | `--tunnel-enable` | `false` | Host the tunnel named by `--tunnel-id` on startup |
@@ -61,7 +61,9 @@ cs-bridge is broken by a second line, cs-control tolerates one — and cs-contro
 
 ## REST API
 
-Four endpoints, all under `/api/v1/`.
+Four endpoints, all under `/api/v1/`. They are served on loopback and on `--socket`, and none of them
+authenticates: `POST /vscode/sessions` starts an SSH server for whatever key it is given, so reaching the
+API is equivalent to a shell as the job's user. Consumers arrive through the dev tunnel or the unix socket.
 
 | Method | Path | Description |
 |--------|------|-------------|

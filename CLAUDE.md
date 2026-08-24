@@ -59,7 +59,8 @@ Both also run `--version`, and cs-control greps `--help` for `-tunnel-host-token
 ## REST API (`/api/v1/`)
 
 - `GET /health` — liveness, `{"status":"ok"}`
-- `GET /metrics` — cgroup-v2 memory/CPU + per-GPU `nvidia-smi`; each source omits its field when absent
+- `GET /metrics` — cgroup-v2 memory/CPU + per-GPU `nvidia-smi`; each source omits its field when absent,
+  and the nvidia-smi probe is bounded so a wedged driver cannot hold the handler open
 - `GET /vscode/sessions` — list SSH servers and supervisor state
 - `POST /vscode/sessions` — start an SSH server for one authorized key
 
@@ -79,8 +80,12 @@ but it means a workflow is not a background nicety: any step that can fail is a 
   buffers are mutex-guarded because callers read them while the process is still writing
 - The client owns the tunnel: it creates it, registers its ports, and mints a host-scoped token. Linkspan
   hosts the relay and never creates, forwards, refreshes or deletes a tunnel.
-- **internal/httpapi is the only package that serves HTTP.** Subsystems report data — `metrics.Read()`
+- **internal/httpapi is the only package that serves HTTP.** Subsystems report data — `metrics.Read(ctx)`
   returns a Snapshot, `sshd.Start` returns an id and port — and know nothing about requests or JSON
+- **The HTTP API binds loopback only, and has no authentication.** `POST /vscode/sessions` starts an sshd
+  for a caller-supplied key, so reaching it is equivalent to a shell as the job owner. Both consumers get
+  there through the devtunnel relay (a child process on this node, which dials localhost) or `--socket`;
+  binding the wildcard would offer that endpoint to anything that can route to the compute node
 - The SSH server accepts exactly one public key, supplied at create time, and binds loopback itself.
   `sshd.Start` binds before it returns, so the port it reports is already accepting and a bind failure
   is a 500 rather than a session that never works. The session id embeds that port (`s-<port>`)
@@ -101,4 +106,6 @@ but it means a workflow is not a background nicety: any step that can fail is a 
   Remote-SSH's bootstrap fallback uses SFTP, and `remote.SSH.remoteServerListenOnSocket` uses streamlocal.
   Neither shows up in a cs-bridge grep because the client is VS Code, not cs-bridge.
 - SSH server spawns a shell via PTY (creack/pty) — resize handled via the SSH window-change channel
+- gliderlabs sends exit-status 0 for any session whose handler just returns, so both the exec and PTY
+  paths call `s.Exit` with the command's real status; without it every failure looks like success
 - `make` refuses to build unless HEAD is tagged `X.Y.Z` or `X.Y.Z.<commit>`; use `go build` for a dev binary
