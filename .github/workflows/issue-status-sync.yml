@@ -33,28 +33,25 @@ jobs:
               targetStatus = "Backlog";
             }
 
-            const query = `query($id: ID!) {
-              node(id: $id) {
-                ... on ProjectV2 {
-                  items(first: 100) {
-                    nodes {
-                      id
-                      content {
-                        ... on Issue { number repository { name owner { login } } }
-                      }
-                    }
-                  }
+            // Ask the issue for its own project items. Scanning the project
+            // needs paging: it holds more items than one page returns, so
+            // items(first: 100) silently skipped everything past the first page.
+            const query = `query($owner: String!, $repo: String!, $number: Int!) {
+              repository(owner: $owner, name: $repo) {
+                issue(number: $number) {
+                  projectItems(first: 20) { nodes { id project { id } } }
                 }
               }
             }`;
-            const result = await github.graphql(query, { id: projectId });
-            const item = result.node.items.nodes.find(n =>
-              n.content?.number === issue.number &&
-              n.content?.repository?.name === context.repo.repo &&
-              n.content?.repository?.owner?.login === context.repo.owner
-            );
+            const result = await github.graphql(query, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              number: issue.number,
+            });
+            const items = result.repository.issue.projectItems.nodes;
+            const item = items.find(n => n.project.id === projectId);
             if (!item) {
-              console.log("Issue not found in project, skipping");
+              console.log(`Issue #${issue.number} is on ${items.length} project(s), none of them ${projectId}; skipping`);
               return;
             }
 

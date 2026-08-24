@@ -36,28 +36,25 @@ jobs:
               targetStatus = "In Review";
             }
 
-            const query = `query($id: ID!) {
-              node(id: $id) {
-                ... on ProjectV2 {
-                  items(first: 100) {
-                    nodes {
-                      id
-                      content {
-                        ... on PullRequest { number repository { name owner { login } } }
-                      }
-                    }
-                  }
+            // Ask the pullrequest for its own project items. Scanning the project
+            // needs paging: it holds more items than one page returns, so
+            // items(first: 100) silently skipped everything past the first page.
+            const query = `query($owner: String!, $repo: String!, $number: Int!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $number) {
+                  projectItems(first: 20) { nodes { id project { id } } }
                 }
               }
             }`;
-            const result = await github.graphql(query, { id: projectId });
-            const item = result.node.items.nodes.find(n =>
-              n.content?.number === pr.number &&
-              n.content?.repository?.name === context.repo.repo &&
-              n.content?.repository?.owner?.login === context.repo.owner
-            );
+            const result = await github.graphql(query, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              number: pr.number,
+            });
+            const items = result.repository.pullRequest.projectItems.nodes;
+            const item = items.find(n => n.project.id === projectId);
             if (!item) {
-              console.log("PR not found in project, skipping");
+              console.log(`PR #${pr.number} is on ${items.length} project(s), none of them ${projectId}; skipping`);
               return;
             }
 
