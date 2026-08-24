@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/cyber-shuttle/linkspan/internal/utils"
+	"github.com/cyber-shuttle/linkspan/subsystems/checkpoint"
 	"github.com/cyber-shuttle/linkspan/subsystems/fork"
 	"github.com/cyber-shuttle/linkspan/subsystems/jupyter"
 	"github.com/cyber-shuttle/linkspan/subsystems/tunnel"
@@ -62,6 +63,14 @@ func RegisterRoutes(api *mux.Router) {
 	api.HandleFunc("/tunnels", tunnel.CreateTunnel).Methods("POST")
 	api.HandleFunc("/tunnels/{id}/ports", tunnel.AddTunnelPort).Methods("POST")
 	api.HandleFunc("/tunnels/{id}", tunnel.DeleteTunnel).Methods("DELETE")
+
+	// Checkpoint / restore
+	// NOTE: {id}/restore is registered before {id} for the same reason as
+	// /tunnels/connect above.
+	api.HandleFunc("/checkpoints", checkpoint.CreateCheckpointHandler).Methods("POST")
+	api.HandleFunc("/checkpoints", checkpoint.ListCheckpointsHandler).Methods("GET")
+	api.HandleFunc("/checkpoints/{id}/restore", checkpoint.RestoreCheckpointHandler).Methods("POST")
+	api.HandleFunc("/checkpoints/{id}", checkpoint.GetCheckpointHandler).Methods("GET")
 
 	// Fork process management
 	api.HandleFunc("/fork/run", fork.RunForkProcessHandler).Methods("POST")

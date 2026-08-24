@@ -58,6 +58,24 @@ func main() {
 	)
 	defer stop()
 
+	restoreRequested := c.RestoreCheckpointID != ""
+	if restoreRequested && c.ForkCommand != "" {
+		log.Fatalf("Can not perform restore and fork execution at same time")
+	}
+
+	// A restore inherits its workload id from the checkpoint, so only a
+	// fresh workload needs one minted here.
+	if c.WorkloadID == "" && !restoreRequested {
+		c.WorkloadID = checkpoint.NewWorkloadID()
+		log.Printf("No --workload-id provided; generated workload id %s (record this to restore this workload later)", c.WorkloadID)
+	}
+
+	// svc is the only thing main.go talks to for checkpoint/restore — all
+	// CRIU mechanics live behind it in the checkpoint package. Installed
+	// before the routes are served so /checkpoints has something to act on.
+	svc := checkpoint.NewCheckpointService(c)
+	checkpoint.GlobalCheckpointService = svc
+
 	r := mux.NewRouter()
 	api := r.PathPrefix("/api/v1").Subrouter()
 	RegisterRoutes(api)
@@ -102,22 +120,6 @@ func main() {
 		log.Printf("also listening on unix socket %s", c.SocketPath)
 	}
 
-	restoreRequested := c.RestoreCheckpointID != ""
-	if restoreRequested && c.ForkCommand != "" {
-		log.Fatalf("Can not perform restore and fork execution at same time")
-	}
-
-	// A restore inherits its workload id from the checkpoint, so only a
-	// fresh workload needs one minted here.
-	if c.WorkloadID == "" && !restoreRequested {
-		c.WorkloadID = checkpoint.NewWorkloadID()
-		log.Printf("No --workload-id provided; generated workload id %s (record this to restore this workload later)", c.WorkloadID)
-	}
-
-	// svc is the only thing main.go talks to for checkpoint/restore — all
-	// CRIU mechanics live behind it in the checkpoint package.
-	svc := checkpoint.NewCheckpointService(c)
-
 	if restoreRequested {
 		log.Printf("Restoring checkpoint %s", c.RestoreCheckpointID)
 		result, err := svc.RestoreCheckpoint(ctx, c.RestoreCheckpointID, checkpoint.RestoreOptions{
@@ -135,6 +137,7 @@ func main() {
 		// checkpoint, so this allocation reports the same workload id as
 		// the allocation that checkpointed it.
 		c.WorkloadID = result.WorkloadID
+		svc.SetDefaultWorkloadID(result.WorkloadID)
 		log.Printf("Restore completed successfully (workload=%s process_id=%s pid=%d)", result.WorkloadID, result.ProcessID, result.Pid)
 
 		if c.CheckpointForkAfterDelay > 0 {
