@@ -8,6 +8,9 @@ import (
 	"strconv"
 	"strings"
 
+	pm "github.com/cyber-shuttle/linkspan/internal/process"
+	"github.com/cyber-shuttle/linkspan/subsystems/checkpoint"
+	"github.com/cyber-shuttle/linkspan/subsystems/fork"
 	"github.com/cyber-shuttle/linkspan/subsystems/mount"
 	"github.com/cyber-shuttle/linkspan/subsystems/tunnel"
 )
@@ -21,6 +24,12 @@ func registerBuiltinActions(r *Registry) {
 	r.Register("tunnel.frp_proxy_create", actionFrpProxyCreate)
 	r.Register("shell.exec", actionShellExec)
 	r.Register("mount.setup_overlay", actionSetupOverlay)
+
+	// Application lifecycle: start a long-running process, checkpoint it, and
+	// restore it in a later allocation.
+	r.Register("process.start", actionProcessStart)
+	r.Register("checkpoint.create", actionCheckpointCreate)
+	r.Register("checkpoint.restore", actionCheckpointRestore)
 
 	// Provider-agnostic tunnel actions
 	r.Register("tunnel.create", actionTunnelCreate)
@@ -392,12 +401,200 @@ func actionTunnelDelete(params map[string]any) (*ActionResult, error) {
 	return &ActionResult{}, nil
 }
 
+// --- process.start ---
+// Launches a long-running application and returns immediately with its id, so
+// a later step can checkpoint it. shell.exec cannot serve this: it blocks
+// until the command exits, which for a training job is the whole allocation.
+
+func actionProcessStart(params map[string]any) (*ActionResult, error) {
+	command := stringParam(params, "command")
+	if command == "" {
+		return nil, fmt.Errorf("process.start: command is required")
+	}
+
+	fp, err := fork.GlobalForkProcessManager.RunForkProcess(command, boolParam(params, "shutdown_on_completion"))
+	if err != nil {
+		return nil, fmt.Errorf("process.start: %w", err)
+	}
+
+	// The pid is what a human reads in the logs; checkpoint.create should be
+	// given the process id, which survives linkspan restarting underneath it.
+	info, err := pm.GlobalProcessManager.GetInfo(fp.InternalProcessId)
+	if err != nil {
+		return nil, fmt.Errorf("process.start: started %s but could not read it back: %w", fp.InternalProcessId, err)
+	}
+
+	log.Printf("[process.start] %s -> process_id=%s pid=%d", command, fp.InternalProcessId, info.Cmd.Process.Pid)
+	return &ActionResult{
+		"process_id": fp.InternalProcessId,
+		"pid":        info.Cmd.Process.Pid,
+		"command":    command,
+	}, nil
+}
+
+// --- checkpoint.create ---
+
+func actionCheckpointCreate(params map[string]any) (*ActionResult, error) {
+	svc, err := checkpoint.ActiveService()
+	if err != nil {
+		return nil, fmt.Errorf("checkpoint.create: %w", err)
+	}
+
+	processID := stringParam(params, "process_id")
+	pid := toInt(params["pid"])
+	if (processID == "") == (pid == 0) {
+		return nil, fmt.Errorf("checkpoint.create: exactly one of process_id and pid is required")
+	}
+	target := checkpoint.TargetFromProcessID(processID)
+	if processID == "" {
+		target = checkpoint.TargetFromPID(pid)
+	}
+
+	workloadID := stringParam(params, "workload_id")
+	if workloadID == "" {
+		workloadID = svc.DefaultWorkloadID()
+	}
+
+	opts := checkpoint.CreateOptions{
+		WorkloadID: workloadID,
+		Trigger:    checkpoint.TriggerWorkflow,
+		Mode:       checkpoint.CheckpointMode(stringParam(params, "mode")),
+		Reason:     stringParam(params, "reason"),
+	}
+	// Absent from the YAML means "use the trigger's default", which is not the
+	// same as false, so the key has to be looked up rather than read.
+	if v, ok := params["leave_running"]; ok {
+		leave := toBool(v)
+		opts.LeaveRunning = &leave
+	}
+
+	result, err := svc.CreateCheckpoint(context.Background(), target, opts)
+	if err != nil {
+		return nil, fmt.Errorf("checkpoint.create: %w", err)
+	}
+
+	// Read the state back from the manifest so a workflow and a REST caller
+	// report the same status for the same checkpoint.
+	status := string(checkpoint.StateComplete)
+	if m, err := svc.GetCheckpoint(result.CheckpointID); err == nil {
+		status = string(m.State)
+	}
+
+	log.Printf("[checkpoint.create] workload=%s checkpoint=%s status=%s", result.WorkloadID, result.CheckpointID, status)
+	return &ActionResult{
+		"checkpoint_id":   result.CheckpointID,
+		"checkpoint_path": result.CheckpointDir,
+		"status":          status,
+		"workload_id":     result.WorkloadID,
+	}, nil
+}
+
+// --- checkpoint.restore ---
+
+func actionCheckpointRestore(params map[string]any) (*ActionResult, error) {
+	svc, err := checkpoint.ActiveService()
+	if err != nil {
+		return nil, fmt.Errorf("checkpoint.restore: %w", err)
+	}
+
+	checkpointID := stringParam(params, "checkpoint_id")
+	if checkpointID == "" {
+		return nil, fmt.Errorf("checkpoint.restore: checkpoint_id is required")
+	}
+
+	// Start from the flags this allocation was started with, so a workflow
+	// only has to name the prerequisites it wants to add or override.
+	opts := svc.RestoreDefaults()
+	if v, ok := params["force"]; ok {
+		opts.Force = toBool(v)
+	}
+	if v, ok := params["shutdown_on_completion"]; ok {
+		opts.ShutdownOnCompletion = toBool(v)
+	}
+	if cmds := stringSliceParam(params, "pre_restore_commands"); cmds != nil {
+		opts.PreRestoreCommands = cmds
+	}
+	if dirs := stringSliceParam(params, "ensure_dirs"); dirs != nil {
+		opts.EnsureDirs = dirs
+	}
+	if files := stringSliceParam(params, "require_files"); files != nil {
+		opts.RequireFiles = files
+	}
+
+	result, err := svc.RestoreCheckpoint(context.Background(), checkpointID, opts)
+	if err != nil {
+		return nil, fmt.Errorf("checkpoint.restore: %w", err)
+	}
+
+	// Later steps in this allocation checkpoint the restored workload, not the
+	// allocation's own, so its identity becomes the default.
+	svc.SetDefaultWorkloadID(result.WorkloadID)
+
+	for _, w := range result.Warnings {
+		log.Printf("[checkpoint.restore] warning: %s", w)
+	}
+	log.Printf("[checkpoint.restore] checkpoint=%s -> process_id=%s pid=%d", checkpointID, result.ProcessID, result.Pid)
+
+	return &ActionResult{
+		"process_id":    result.ProcessID,
+		"pid":           result.Pid,
+		"checkpoint_id": result.CheckpointID,
+		"workload_id":   result.WorkloadID,
+	}, nil
+}
+
 func stringParam(params map[string]any, key string) string {
 	v, _ := params[key].(string)
 	return v
 }
 
 // --- helpers ---
+
+// toBool converts a param value to bool, accepting the strings YAML users
+// reach for as readily as a real boolean.
+func toBool(v any) bool {
+	switch val := v.(type) {
+	case bool:
+		return val
+	case string:
+		b, err := strconv.ParseBool(strings.TrimSpace(val))
+		if err != nil {
+			return false
+		}
+		return b
+	default:
+		return false
+	}
+}
+
+// stringSliceParam reads a YAML list of strings, returning nil when the key is
+// absent so a caller can tell "not specified" from "specified as empty".
+func stringSliceParam(params map[string]any, key string) []string {
+	raw, ok := params[key]
+	if !ok {
+		return nil
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// boolParam reads an optional boolean param, defaulting to false.
+func boolParam(params map[string]any, key string) bool {
+	v, ok := params[key]
+	if !ok {
+		return false
+	}
+	return toBool(v)
+}
 
 // toInt converts a param value to int, handling YAML's default float64/int types.
 func toInt(v any) int {
