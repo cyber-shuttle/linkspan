@@ -12,7 +12,7 @@ It has two consumers, and its surface is exactly what they use:
 
 ```bash
 go build -o linkspan .
-linkspan --port 8080
+./linkspan --port 8080
 ```
 
 ## Running in an allocation

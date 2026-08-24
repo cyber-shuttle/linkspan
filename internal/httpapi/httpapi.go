@@ -13,7 +13,7 @@ import (
 	"github.com/cyber-shuttle/linkspan/utils"
 )
 
-// Both consumers call these exact paths; renaming one is an API break.
+// cs-bridge calls these exact paths; renaming one is an API break.
 func Mux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", health)

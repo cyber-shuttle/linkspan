@@ -35,8 +35,8 @@ func run() int {
 	tunnelID := flag.String("tunnel-id", "", "id of the client-created dev tunnel to host; the client owns its lifecycle")
 	tunnelCluster := flag.String("tunnel-cluster", "", "cluster id of --tunnel-id, needed to resolve it")
 	tunnelHostToken := flag.String("tunnel-host-token", "", "host-scoped access token for --tunnel-id; the client owns the tunnel and its ports, so no Entra bearer is needed")
-	serverPortFlag := flag.Int("port", 8080, "port for the HTTP server to listen on")
-	socketPath := flag.String("socket", "", "also listen on this unix socket path (in-cluster access via `srun --jobid`)")
+	serverPort := flag.Int("port", 8080, "port for the HTTP server to listen on")
+	socketPath := flag.String("socket", "", "also listen on this unix socket path, for in-cluster access via srun --jobid")
 	workflowFile := flag.String("workflow", "", "path to workflow YAML file")
 	flag.Parse()
 
@@ -52,12 +52,7 @@ func run() int {
 	ctx, abort := context.WithCancelCause(ctx)
 	defer abort(nil)
 
-	serverPort := *serverPortFlag
-	if serverPort < 0 || serverPort > 65535 {
-		log.Printf("--port must be between 0 and 65535, got %d", serverPort)
-		return 1
-	}
-	addr := fmt.Sprintf("0.0.0.0:%d", serverPort)
+	addr := fmt.Sprintf("0.0.0.0:%d", *serverPort)
 	// Addr is unused: we hand Serve our own listener. ReadHeaderTimeout bounds a
 	// client that opens a connection and never finishes its headers.
 	srv := &http.Server{Handler: httpapi.Mux(), ReadHeaderTimeout: 10 * time.Second}

@@ -37,7 +37,7 @@ func TestListenUnix(t *testing.T) {
 	}
 }
 
-// The four paths both consumers call. Renaming one is an API break.
+// The four paths cs-bridge calls. Renaming one is an API break.
 func TestMuxRoutesTheConsumerContract(t *testing.T) {
 	mux := Mux()
 	for _, r := range [][2]string{

@@ -36,7 +36,8 @@ func CreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, _, _, _, err := gossh.ParseAuthorizedKey([]byte(req.AuthorizedKey)); err != nil {
+	authorized, _, _, _, err := gossh.ParseAuthorizedKey([]byte(req.AuthorizedKey))
+	if err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "authorized_key is missing or invalid")
 		return
 	}
@@ -50,7 +51,7 @@ func CreateSession(w http.ResponseWriter, r *http.Request) {
 	// The port is the identity: the client reads it back out of the id. Loopback
 	// only -- it reaches clients through the tunnel, never the node's network.
 	id := fmt.Sprintf("s-%d", port)
-	sshd.Start(id, fmt.Sprintf("127.0.0.1:%d", port), req.AuthorizedKey)
+	sshd.Start(id, fmt.Sprintf("127.0.0.1:%d", port), authorized)
 
 	utils.RespondJSON(w, http.StatusCreated, SessionResponse{ID: id, BindPort: int32(port)})
 }

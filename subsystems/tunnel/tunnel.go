@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
@@ -34,8 +33,6 @@ const (
 	hostReadyPoll    = 500 * time.Millisecond
 )
 
-var downloadMu sync.Mutex
-
 func devtunnelBin(ctx context.Context) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -43,8 +40,6 @@ func devtunnelBin(ctx context.Context) (string, error) {
 	}
 	path := filepath.Join(home, ".linkspan", "bin", "devtunnel")
 
-	downloadMu.Lock()
-	defer downloadMu.Unlock()
 	if _, err := os.Stat(path); err == nil {
 		return path, nil
 	}
