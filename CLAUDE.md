@@ -73,9 +73,15 @@ A workflow is a `name` and a list of `steps`, run in order, stopping at the firs
 the only action: `params.command` is split on whitespace and run without a shell, so nothing is expanded.
 Cancellation is checked between steps; the current step is not preempted.
 
+A step's output goes straight to linkspan's stdout as it happens, not captured and logged afterwards: a
+step that daemonises (cs-control ends with `setsid --fork python -m jupyter_server`) keeps the descriptors
+it inherited, and waiting on a pipe would block until that server exited.
+
 **A failing step exits the whole process with status 1**, after shutting the HTTP server, the SSH sessions
 and the tunnel relay down. That is deliberate — an allocation whose setup failed has nothing left to serve —
-but it means a workflow is not a background nicety: any step that can fail is a startup dependency.
+but it means a workflow is not a background nicety: any step that can fail is a startup dependency. An
+exhausted tunnel bring-up (`--tunnel-enable`, three failed attempts) exits the same way, through the same
+path; those are the only two background failures that are fatal.
 
 ## Key Patterns
 
