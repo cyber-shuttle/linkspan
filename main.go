@@ -8,32 +8,20 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
-	"path/filepath"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
+	"github.com/cyber-shuttle/linkspan/internal/httpapi"
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
 	"github.com/cyber-shuttle/linkspan/internal/workflow"
 	"github.com/cyber-shuttle/linkspan/subsystems/sshd"
 	"github.com/cyber-shuttle/linkspan/subsystems/tunnel"
-	"github.com/cyber-shuttle/linkspan/subsystems/vscode"
-	"github.com/cyber-shuttle/linkspan/utils"
 )
 
 // Set via ldflags. Both consumers parse `--version` as a bare X.Y.Z[.commit],
 // so it must stay the only line on stdout.
 var version = "dev"
-
-// The client owns the tunnel's lifetime; linkspan only hosts it.
-const (
-	tunnelRetries        = 3
-	tunnelRetryDelay     = 2 * time.Second
-	tunnelAttemptTimeout = 10 * time.Second
-)
 
 func main() {
 	versionFlag := flag.Bool("version", false, "print version information and exit")
@@ -54,20 +42,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/health", func(w http.ResponseWriter, r *http.Request) {
-		utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	})
-	mux.HandleFunc("GET /api/v1/metrics", metricsHandler)
-	mux.HandleFunc("GET /api/v1/vscode/sessions", vscode.ListSessions)
-	mux.HandleFunc("POST /api/v1/vscode/sessions", vscode.CreateSession)
-
 	serverPort := *serverPortFlag
 	if serverPort < 0 || serverPort > 65535 {
 		log.Fatalf("--port must be between 0 and 65535, got %d", serverPort)
 	}
 	addr := fmt.Sprintf("0.0.0.0:%d", serverPort)
-	srv := &http.Server{Handler: mux} // Addr is unused: we hand Serve our own listener
+	srv := &http.Server{Handler: httpapi.Mux()} // Addr is unused: we hand Serve our own listener
 
 	// Bind before the tunnel starts, so the port is open when the relay connects.
 	listener, err := net.Listen("tcp", addr)
@@ -77,7 +57,7 @@ func main() {
 	log.Printf("listening on %s", listener.Addr())
 
 	if *socketPath != "" {
-		if err := listenUnix(srv, *socketPath); err != nil {
+		if err := httpapi.ListenUnix(srv, *socketPath); err != nil {
 			log.Fatalf("failed to listen on unix socket %s: %v", *socketPath, err)
 		}
 		log.Printf("also listening on unix socket %s", *socketPath)
@@ -99,7 +79,11 @@ func main() {
 		if *tunnelID == "" || *tunnelCluster == "" || *tunnelHostToken == "" {
 			log.Fatalf("devtunnel: --tunnel-enable needs --tunnel-id, --tunnel-cluster and --tunnel-host-token")
 		}
-		go hostTunnel(ctx, *tunnelID, *tunnelCluster, *tunnelHostToken)
+		go func() {
+			if err := tunnel.Host(ctx, *tunnelID, *tunnelCluster, *tunnelHostToken); err != nil {
+				log.Fatalf("devtunnel: %v", err)
+			}
+		}()
 	}
 
 	serverErr := make(chan error, 1)
@@ -126,145 +110,4 @@ func main() {
 	pm.Global.KillAll()
 	sshd.StopAll()
 	log.Println("Server gracefully stopped.")
-}
-
-type hostResult struct {
-	cmdID string
-	err   error
-}
-
-func hostTunnel(ctx context.Context, tunnelID, clusterID, hostToken string) {
-	for attempt := 1; attempt <= tunnelRetries; attempt++ {
-		log.Printf("devtunnel: attempt %d/%d to host tunnel %s", attempt, tunnelRetries, tunnelID)
-
-		ch := make(chan hostResult, 1)
-		go func() {
-			cmdID, err := tunnel.DevTunnelHost(tunnelID, clusterID, hostToken)
-			ch <- hostResult{cmdID, err}
-		}()
-
-		select {
-		case h := <-ch:
-			if h.err == nil {
-				log.Printf("devtunnel: successfully hosting %s", tunnelID)
-				return
-			}
-			log.Printf("devtunnel: attempt %d failed: %v", attempt, h.err)
-			if h.cmdID != "" {
-				_ = pm.Global.Kill(h.cmdID)
-			}
-		case <-time.After(tunnelAttemptTimeout):
-			log.Printf("devtunnel: attempt %d timed out after %s", attempt, tunnelAttemptTimeout)
-		case <-ctx.Done():
-			return // shutting down: the retry loop must not outlive the server
-		}
-
-		if attempt < tunnelRetries {
-			time.Sleep(tunnelRetryDelay)
-		}
-	}
-	log.Fatalf("devtunnel: failed to host tunnel %s after %d attempts", tunnelID, tunnelRetries)
-}
-
-func listenUnix(srv *http.Server, path string) error {
-	os.Remove(path) // clear a stale socket; bind fails if the path exists
-	ln, err := net.Listen("unix", path)
-	if err != nil {
-		return err
-	}
-	go func() {
-		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-			log.Printf("unix socket server error: %v", err)
-		}
-	}()
-	return nil
-}
-
-type gpuMetric struct {
-	Index       int `json:"index"`
-	UtilPct     int `json:"utilPct"`
-	MemUsedMiB  int `json:"memUsedMiB"`
-	MemTotalMiB int `json:"memTotalMiB"`
-}
-
-// Mirrors the csbridge MetricSample live fields. Every source is read
-// independently and omitted when unavailable, so the client sees undefined
-// rather than a misleading zero.
-type liveMetrics struct {
-	MemBytes     *int64      `json:"memBytes,omitempty"`
-	CPUUsageUsec *int64      `json:"cpuUsageUsec,omitempty"`
-	GPUs         []gpuMetric `json:"gpus,omitempty"`
-}
-
-func metricsHandler(w http.ResponseWriter, r *http.Request) {
-	m := liveMetrics{GPUs: readGPUMetrics()}
-	if cg, err := jobCgroupDir(); err == nil {
-		m.MemBytes = readCgroup(filepath.Join(cg, "memory.current"), parseInt64)
-		m.CPUUsageUsec = readCgroup(filepath.Join(cg, "cpu.stat"), parseCPUUsageUsec)
-	}
-	utils.RespondJSON(w, http.StatusOK, m)
-}
-
-func readCgroup[T any](path string, parse func(string) (T, error)) *T {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	v, err := parse(string(b))
-	if err != nil {
-		return nil
-	}
-	return &v
-}
-
-// Strips the /step_* leaf so metrics cover the whole allocation, not one step:
-// `sed 's|^0::||; s|/step_.*||' /proc/self/cgroup`.
-func jobCgroupDir() (string, error) {
-	b, err := os.ReadFile("/proc/self/cgroup")
-	if err != nil {
-		return "", err
-	}
-	return "/sys/fs/cgroup" + jobCgroupSuffix(string(b)), nil
-}
-
-func jobCgroupSuffix(procCgroup string) string {
-	lines := strings.Split(strings.TrimSpace(procCgroup), "\n")
-	p := strings.TrimPrefix(strings.TrimSpace(lines[len(lines)-1]), "0::")
-	if i := strings.Index(p, "/step_"); i >= 0 {
-		p = p[:i]
-	}
-	return p
-}
-
-func parseInt64(s string) (int64, error) { return strconv.ParseInt(strings.TrimSpace(s), 10, 64) }
-
-func parseCPUUsageUsec(cpuStat string) (int64, error) {
-	for ln := range strings.SplitSeq(cpuStat, "\n") {
-		if v, ok := strings.CutPrefix(ln, "usage_usec "); ok {
-			return parseInt64(v)
-		}
-	}
-	return 0, fmt.Errorf("usage_usec not found in cpu.stat")
-}
-
-// nil when nvidia-smi is absent or errors: a CPU node has no driver.
-func readGPUMetrics() []gpuMetric {
-	out, err := exec.Command("nvidia-smi",
-		"--query-gpu=index,utilization.gpu,memory.used,memory.total",
-		"--format=csv,noheader,nounits").Output()
-	if err != nil {
-		return nil
-	}
-	return parseGPUMetrics(string(out))
-}
-
-func parseGPUMetrics(out string) []gpuMetric {
-	var gpus []gpuMetric
-	for ln := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
-		var g gpuMetric
-		if _, err := fmt.Sscanf(ln, "%d, %d, %d, %d", &g.Index, &g.UtilPct, &g.MemUsedMiB, &g.MemTotalMiB); err == nil {
-			gpus = append(gpus, g)
-		}
-	}
-	return gpus
 }

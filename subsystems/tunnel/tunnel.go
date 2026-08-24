@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -25,6 +26,9 @@ var devtunnelAsset = map[string]string{
 
 const (
 	devtunnelURL     = "https://tunnelsassetsprod.blob.core.windows.net/cli/%s-devtunnel"
+	retries          = 3
+	retryDelay       = 2 * time.Second
+	attemptTimeout   = 10 * time.Second
 	hostReadyMarker  = "Ready to accept connections"
 	hostReadyTimeout = 30 * time.Second
 	hostReadyPoll    = 500 * time.Millisecond
@@ -94,10 +98,49 @@ func download(dst, src string) error {
 	return os.Rename(f.Name(), dst)
 }
 
+// Host retries the relay bring-up, killing the host process a failed or
+// timed-out attempt leaves behind. Returns nil once hosting, or on shutdown.
+func Host(ctx context.Context, tunnelID, clusterID, hostToken string) error {
+	type result struct {
+		cmdID string
+		err   error
+	}
+	for attempt := 1; attempt <= retries; attempt++ {
+		log.Printf("devtunnel: attempt %d/%d to host tunnel %s", attempt, retries, tunnelID)
+
+		ch := make(chan result, 1)
+		go func() {
+			cmdID, err := hostOnce(tunnelID, clusterID, hostToken)
+			ch <- result{cmdID, err}
+		}()
+
+		select {
+		case r := <-ch:
+			if r.err == nil {
+				log.Printf("devtunnel: successfully hosting %s", tunnelID)
+				return nil
+			}
+			log.Printf("devtunnel: attempt %d failed: %v", attempt, r.err)
+			if r.cmdID != "" {
+				_ = pm.Global.Kill(r.cmdID)
+			}
+		case <-time.After(attemptTimeout):
+			log.Printf("devtunnel: attempt %d timed out after %s", attempt, attemptTimeout)
+		case <-ctx.Done():
+			return nil
+		}
+
+		if attempt < retries {
+			time.Sleep(retryDelay)
+		}
+	}
+	return fmt.Errorf("failed to host tunnel %s after %d attempts", tunnelID, retries)
+}
+
 // The host token authorizes hosting and nothing else: linkspan never creates,
 // forwards or deletes a tunnel, so no ports are passed -- the relay forwards
 // whatever the client already registered.
-func DevTunnelHost(tunnelID, clusterID, hostToken string) (string, error) {
+func hostOnce(tunnelID, clusterID, hostToken string) (string, error) {
 	qualified := tunnelID
 	if clusterID != "" {
 		qualified = tunnelID + "." + clusterID
