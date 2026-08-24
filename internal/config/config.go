@@ -48,6 +48,7 @@ type LinkspanConfig struct {
 	// Automatic checkpointing before a Slurm allocation expires.
 	CheckpointBeforeWalltime time.Duration `yaml:"checkpoint_before_walltime"`
 	CheckpointSignal         string        `yaml:"checkpoint_signal"`
+	CheckpointOnSigterm      bool          `yaml:"checkpoint_on_sigterm"`
 }
 
 func NewDefaultLinkspanConfig() *LinkspanConfig {
@@ -83,5 +84,6 @@ func NewDefaultLinkspanConfig() *LinkspanConfig {
 		RestoreForce:             false,
 		CheckpointBeforeWalltime: 0,
 		CheckpointSignal:         "SIGUSR1",
+		CheckpointOnSigterm:      true,
 	}
 }

@@ -189,6 +189,16 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	if err := checkpoint.ValidateMode(*checkpointMode); err != nil {
 		log.Fatalf("invalid value for --checkpoint-mode: %v", err)
 	}
+	if err := checkpoint.ValidateNetworkPolicy(*checkpointNetwork); err != nil {
+		log.Fatalf("invalid value for --checkpoint-network: %v", err)
+	}
+	checkpointOnSigterm, err := strconv.ParseBool(*checkpointOnSigtermFlag)
+	if err != nil {
+		log.Fatalf("invalid value for --checkpoint-on-sigterm: %s (expected true or false)", *checkpointOnSigtermFlag)
+	}
+	if *checkpointForkAfterDelay > 0 {
+		log.Printf("warning: --checkpoint-fork-after-delay is an experimental test path and will be removed; use --checkpoint-before-walltime")
+	}
 	if _, err := checkpoint.ParseSignal(*checkpointSignal); err != nil {
 		log.Fatalf("invalid value for --checkpoint-signal: %v", err)
 	}

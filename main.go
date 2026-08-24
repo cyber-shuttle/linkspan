@@ -58,7 +58,7 @@ func main() {
 	// Ctrl+C still shuts down immediately either way.
 	walltimeArmed := c.CheckpointBeforeWalltime > 0 && c.CRIUPath != "" && c.CheckpointRoot != ""
 	shutdownSignals := []os.Signal{os.Interrupt, syscall.SIGTERM}
-	if walltimeArmed {
+	if walltimeArmed && c.CheckpointOnSigterm {
 		shutdownSignals = []os.Signal{os.Interrupt}
 	}
 
@@ -265,8 +265,9 @@ func armWalltimeGuard(ctx context.Context, c *config.LinkspanConfig, svc *checkp
 		checkpoint.CreateOptions{WorkloadID: workloadID},
 		checkpoint.NewSlurmDeadlineProvider(),
 		checkpoint.WalltimeOptions{
-			Margin:             c.CheckpointBeforeWalltime,
-			PreWalltimeSignals: []os.Signal{sig},
+			Margin:              c.CheckpointBeforeWalltime,
+			PreWalltimeSignals:  []os.Signal{sig},
+			CheckpointOnSigterm: c.CheckpointOnSigterm,
 			// The allocation is ending anyway, so release it as soon as the
 			// checkpoint is durable rather than idling until walltime.
 			ShutdownAfterCheckpoint: true,

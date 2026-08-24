@@ -196,7 +196,7 @@ func TestLastChanceSignalShutsDownEvenWhenCheckpointFails(t *testing.T) {
 	t.Cleanup(func() { _ = pm.GlobalProcessManager.Kill(processID) })
 
 	g := NewWalltimeGuard(svc, TargetFromProcessID(processID), CreateOptions{WorkloadID: "wl-sigterm"},
-		failingDeadline("no scheduler here"), WalltimeOptions{Margin: time.Minute})
+		failingDeadline("no scheduler here"), WalltimeOptions{Margin: time.Minute, CheckpointOnSigterm: true})
 	if err := g.Start(ctx); err != nil {
 		t.Fatalf("failed to start the guard: %v", err)
 	}
@@ -349,5 +349,36 @@ func TestRepeatedTriggersProduceOneCheckpoint(t *testing.T) {
 	}
 	if len(manifests) != 1 {
 		t.Fatalf("expected exactly one checkpoint from repeated triggers, got %d", len(manifests))
+	}
+}
+
+/*
+--checkpoint-on-sigterm off means the guard never claims SIGTERM, leaving it to
+main.go's ordinary shutdown path.
+
+This is asserted structurally rather than by sending the signal: with no
+handler installed, SIGTERM would kill the test binary via its default
+disposition, which is exactly the behaviour under test.
+*/
+func TestSigtermIsNotClaimedWhenTheFlagIsOff(t *testing.T) {
+	svc := newTestService(t, "/nonexistent/criu", "")
+	off := NewWalltimeGuard(svc, TargetFromProcessID("p-1"), CreateOptions{WorkloadID: "wl"},
+		failingDeadline("none"), WalltimeOptions{Margin: time.Minute, CheckpointOnSigterm: false})
+
+	if len(off.cfg.LastChanceSignals) != 0 {
+		t.Fatalf("expected no last-chance signals to be watched, got %v", off.cfg.LastChanceSignals)
+	}
+	if off.isLastChance(syscall.SIGTERM) {
+		t.Fatalf("SIGTERM must not be a last-chance trigger when the flag is off")
+	}
+
+	on := NewWalltimeGuard(svc, TargetFromProcessID("p-1"), CreateOptions{WorkloadID: "wl"},
+		failingDeadline("none"), WalltimeOptions{Margin: time.Minute, CheckpointOnSigterm: true})
+	if !on.isLastChance(syscall.SIGTERM) {
+		t.Fatalf("SIGTERM must be a last-chance trigger when the flag is on")
+	}
+	// The scheduler's early warning is independent of the SIGTERM policy.
+	if !on.isPreWalltime(syscall.SIGUSR1) || !off.isPreWalltime(syscall.SIGUSR1) {
+		t.Fatalf("the pre-walltime signal must be watched regardless of --checkpoint-on-sigterm")
 	}
 }

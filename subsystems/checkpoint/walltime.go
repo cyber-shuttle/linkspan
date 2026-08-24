@@ -24,7 +24,8 @@ var DefaultPreWalltimeSignal = syscall.SIGUSR1
 type WalltimeOptions struct {
 	Margin                  time.Duration // checkpoint this long before the allocation ends
 	PreWalltimeSignals      []os.Signal   // scheduler's early warning; defaults to SIGUSR1
-	LastChanceSignals       []os.Signal   // final warning; defaults to SIGTERM
+	LastChanceSignals       []os.Signal   // final warning; defaults to SIGTERM when CheckpointOnSigterm
+	CheckpointOnSigterm     bool          // treat SIGTERM as a last-chance trigger rather than a plain stop
 	ShutdownAfterCheckpoint bool          // release the allocation once the checkpoint is durable
 }
 
@@ -57,7 +58,9 @@ func NewWalltimeGuard(svc *CheckpointService, target CheckpointTarget, opts Crea
 	if len(cfg.PreWalltimeSignals) == 0 {
 		cfg.PreWalltimeSignals = []os.Signal{DefaultPreWalltimeSignal}
 	}
-	if len(cfg.LastChanceSignals) == 0 {
+	// With CheckpointOnSigterm off the guard never watches SIGTERM, which
+	// leaves it to main.go's ordinary shutdown path.
+	if cfg.CheckpointOnSigterm && len(cfg.LastChanceSignals) == 0 {
 		cfg.LastChanceSignals = []os.Signal{syscall.SIGTERM}
 	}
 	return &WalltimeGuard{svc: svc, target: target, opts: opts, deadline: deadline, cfg: cfg, ready: make(chan struct{})}
@@ -197,6 +200,15 @@ func (g *WalltimeGuard) checkpointAt(ctx context.Context) (time.Time, error) {
 		return time.Time{}, err
 	}
 	return end.Add(-g.cfg.Margin), nil
+}
+
+func (g *WalltimeGuard) isPreWalltime(s os.Signal) bool {
+	for _, pre := range g.cfg.PreWalltimeSignals {
+		if s == pre {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *WalltimeGuard) isLastChance(s os.Signal) bool {
