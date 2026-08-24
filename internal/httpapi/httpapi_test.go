@@ -12,7 +12,7 @@ import (
 
 func TestListenUnix(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "linkspan.sock")
-	os.WriteFile(sock, []byte("stale"), 0o600) // prior-run leftover listenUnix must clear
+	os.WriteFile(sock, []byte("stale"), 0o600) // a prior run's leftover, which ListenUnix must clear
 
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte("ok"))
