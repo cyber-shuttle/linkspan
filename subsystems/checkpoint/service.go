@@ -54,13 +54,64 @@ type CheckpointService struct {
 
 	mu        sync.Mutex
 	workloads map[string]*workloadEntry
+
+	// Fallbacks for REST callers that omit them, taken from the flags this
+	// allocation was started with. The workload id changes after a restore,
+	// so it needs its own lock.
+	defaultsMu        sync.RWMutex
+	defaultWorkloadID string
+	restoreDefaults   RestoreOptions
 }
 
 func NewCheckpointService(c *config.LinkspanConfig) *CheckpointService {
 	return &CheckpointService{
-		criu:      newCriuCheckpointer(c),
-		workloads: make(map[string]*workloadEntry),
+		criu:              newCriuCheckpointer(c),
+		workloads:         make(map[string]*workloadEntry),
+		defaultWorkloadID: c.WorkloadID,
+		restoreDefaults: RestoreOptions{
+			ShutdownOnCompletion: c.ShutdownOnForkCompletion,
+			PreRestoreCommands:   c.RestorePreCommands,
+			EnsureDirs:           c.RestoreEnsureDirs,
+			RequireFiles:         c.RestoreRequireFiles,
+			Force:                c.RestoreForce,
+		},
 	}
+}
+
+// Configured reports whether checkpointing can work here at all, so the REST
+// layer can refuse at the edge instead of failing deep inside preflight.
+func (s *CheckpointService) Configured() error {
+	if s.criu.CriuPath == "" {
+		return fmt.Errorf("checkpointing is not configured on this allocation: --criu-path is not set")
+	}
+	if s.criu.CheckpointRoot == "" {
+		return fmt.Errorf("checkpointing is not configured on this allocation: --checkpoint-root is not set")
+	}
+	return nil
+}
+
+// DefaultWorkloadID is the workload a create request falls back to when it
+// names none — this allocation's own.
+func (s *CheckpointService) DefaultWorkloadID() string {
+	s.defaultsMu.RLock()
+	defer s.defaultsMu.RUnlock()
+	return s.defaultWorkloadID
+}
+
+// SetDefaultWorkloadID is called after a restore, which adopts the workload
+// identity recorded in the checkpoint rather than this allocation's.
+func (s *CheckpointService) SetDefaultWorkloadID(id string) {
+	s.defaultsMu.Lock()
+	s.defaultWorkloadID = id
+	s.defaultsMu.Unlock()
+}
+
+// RestoreDefaults returns the restore prerequisites supplied on the command
+// line, for a REST caller to override field by field.
+func (s *CheckpointService) RestoreDefaults() RestoreOptions {
+	s.defaultsMu.RLock()
+	defer s.defaultsMu.RUnlock()
+	return s.restoreDefaults
 }
 
 func (s *CheckpointService) getOrCreateWorkload(workloadID string, defaultState WorkloadState) *workloadEntry {
@@ -120,12 +171,8 @@ func (s *CheckpointService) resolveTarget(target CheckpointTarget) (pid int, pro
 // checkpoint or restore may be in flight for a given workload at a time —
 // a concurrent call on the same workload fails fast with ErrWorkloadBusy.
 func (s *CheckpointService) CreateCheckpoint(ctx context.Context, target CheckpointTarget, opts CreateOptions) (*CheckpointResult, error) {
-	if opts.WorkloadID == "" {
-		return nil, fmt.Errorf("WorkloadID is required")
-	}
-	trigger := opts.Trigger
-	if trigger == "" {
-		trigger = TriggerManual
+	if err := opts.applyDefaults(); err != nil {
+		return nil, err
 	}
 
 	pid, processID, err := s.resolveTarget(target)
