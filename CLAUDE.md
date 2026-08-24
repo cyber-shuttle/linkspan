@@ -35,15 +35,13 @@ Reach `--socket` in-cluster (no tunnel/TCP port): `srun --jobid=<id> --overlap c
 ```
 main.go                         # CLI flags, startup, shutdown -- no request handling
 internal/
-  httpapi/                      # the /api/v1 route table and the listeners it is served on
+  httpapi/                      # every route, handler and listener
   workflow/                     # YAML workflow: load, then run shell.exec steps in order
   process/                      # background process tracking, process.Global singleton
 subsystems/
-  metrics/                      # cgroup-v2 memory/cpu + per-GPU nvidia-smi
+  metrics/                      # cgroup-v2 memory/cpu + per-GPU nvidia-smi, as a Snapshot
   sshd/                         # Supervised SSH server (gliderlabs/ssh) with PTY support
   tunnel/                       # devtunnel CLI download + relay hosting, retried
-  vscode/                       # REST surface for /vscode/sessions; drives sshd, holds no SSH logic
-utils/                          # JSON helpers, port finding
 ```
 
 ## The consumer contract
@@ -81,8 +79,13 @@ but it means a workflow is not a background nicety: any step that can fail is a 
   buffers are mutex-guarded because callers read them while the process is still writing
 - The client owns the tunnel: it creates it, registers its ports, and mints a host-scoped token. Linkspan
   hosts the relay and never creates, forwards, refreshes or deletes a tunnel.
-- The SSH server accepts exactly one public key, supplied at create time, and binds loopback only
-- The SSH server is supervised: it restarts on non-graceful exit, bounded by consecutive failures
+- **internal/httpapi is the only package that serves HTTP.** Subsystems report data — `metrics.Read()`
+  returns a Snapshot, `sshd.Start` returns an id and port — and know nothing about requests or JSON
+- The SSH server accepts exactly one public key, supplied at create time, and binds loopback itself.
+  `sshd.Start` binds before it returns, so the port it reports is already accepting and a bind failure
+  is a 500 rather than a session that never works. The session id embeds that port (`s-<port>`)
+- The SSH server is supervised: it restarts on non-graceful exit, bounded by consecutive failures; each
+  restart rebinds the same address
 - With `--port 0` the OS assigns the port; it is read back off the listener and appears only in the startup log line
 
 ## Gotchas

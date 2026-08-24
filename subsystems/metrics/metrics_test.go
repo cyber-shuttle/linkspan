@@ -30,7 +30,7 @@ func TestParseCPUUsageUsec(t *testing.T) {
 
 func TestParseGPUMetrics(t *testing.T) {
 	got := parseGPUMetrics("0, 15, 1024, 40960\n1, 0, 0, 40960\n")
-	want := []gpuMetric{
+	want := []GPU{
 		{Index: 0, UtilPct: 15, MemUsedMiB: 1024, MemTotalMiB: 40960},
 		{Index: 1, UtilPct: 0, MemUsedMiB: 0, MemTotalMiB: 40960},
 	}

@@ -21,19 +21,30 @@ import (
 
 func TestSSHServerLifecycle(t *testing.T) {
 	_, key := testKeyPair(t)
-	s := Start("test-session", "127.0.0.1:0", key)
-	if s == nil {
-		t.Fatal("failed to start SSH server")
+	id, port, err := Start(key)
+	if err != nil {
+		t.Fatalf("start: %v", err)
 	}
-	t.Cleanup(func() { _ = stopByID("test-session") })
+	t.Cleanup(func() { _ = stopByID(id) })
 
-	if !waitFor(t, func() bool { st, ok := statusOf("test-session"); return ok && st.State == stateRunning }) {
+	// Start binds before returning, so the port is already accepting and the id
+	// names it -- the caller is never handed a port that nothing listens on.
+	if id != fmt.Sprintf("s-%d", port) {
+		t.Fatalf("id %q does not name port %d", id, port)
+	}
+	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatalf("nothing accepting on the port Start returned: %v", err)
+	}
+	_ = conn.Close()
+
+	if !waitFor(t, func() bool { st, ok := statusOf(id); return ok && st.State == stateRunning }) {
 		t.Fatal("expected session to become active")
 	}
-	if err := stopByID("test-session"); err != nil {
+	if err := stopByID(id); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
-	if !waitFor(t, func() bool { _, ok := statusOf("test-session"); return !ok }) {
+	if !waitFor(t, func() bool { _, ok := statusOf(id); return !ok }) {
 		t.Fatal("expected session to be deregistered after stop")
 	}
 }
@@ -72,7 +83,7 @@ func TestSupervisorBoundedRetries(t *testing.T) {
 	tuning(t, 5, time.Millisecond, time.Hour)
 	s, build, builds := failingServer(t, "bounded")
 
-	s.run(build)
+	s.run(build, nil)
 
 	if *builds != 5 || s.state != stateFailed {
 		t.Fatalf("got builds=%d state=%q", *builds, s.state)
@@ -108,7 +119,7 @@ func TestSupervisorHealthyRunResetsCounter(t *testing.T) {
 	t.Cleanup(func() { nowFunc = old })
 
 	s, build, builds := failingServer(t, "reset")
-	s.run(build)
+	s.run(build, nil)
 
 	if *builds != 9 || s.state != stateFailed {
 		t.Fatalf("expected 9 builds → failed, got builds=%d state=%q", *builds, s.state)
@@ -120,7 +131,7 @@ func TestSupervisorStopHonored(t *testing.T) {
 	s, build, _ := failingServer(t, "stoppable")
 
 	done := make(chan struct{})
-	go func() { s.run(build); close(done) }()
+	go func() { s.run(build, nil); close(done) }()
 
 	time.Sleep(20 * time.Millisecond)
 	_ = s.Close()
