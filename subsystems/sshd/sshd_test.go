@@ -374,7 +374,10 @@ func statusOf(id string) (*SessionStatus, bool) {
 }
 
 func stopByID(id string) error {
-	server, ok := deleteServer(id)
+	activeServersMu.Lock()
+	server, ok := activeServers[id]
+	delete(activeServers, id)
+	activeServersMu.Unlock()
 	if !ok {
 		return fmt.Errorf("no ssh server found for session %s", id)
 	}
@@ -403,5 +406,40 @@ func TestStopRightAfterStartLeavesNothingAccepting(t *testing.T) {
 		}) {
 			t.Fatalf("still accepting on port %d after stop", port)
 		}
+	}
+}
+
+// The sshd's one security property: it accepts the key the session was created
+// with, and no other. Replacing authorizer's body with `return true` must fail.
+func TestServerRejectsAKeyItWasNotCreatedWith(t *testing.T) {
+	authorizedSigner, authorized := testKeyPair(t)
+	strangerSigner, _ := testKeyPair(t)
+
+	srv := newServer(authorized)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Serve(ln) }()
+	defer srv.Close()
+
+	dial := func(signer gossh.Signer) error {
+		c, err := gossh.Dial("tcp", ln.Addr().String(), &gossh.ClientConfig{
+			User:            "t",
+			Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
+			HostKeyCallback: gossh.InsecureIgnoreHostKey(),
+			Timeout:         5 * time.Second,
+		})
+		if err == nil {
+			_ = c.Close()
+		}
+		return err
+	}
+
+	if err := dial(strangerSigner); err == nil {
+		t.Fatal("a key the server was never given was accepted")
+	}
+	if err := dial(authorizedSigner); err != nil {
+		t.Fatalf("the authorized key was rejected: %v", err)
 	}
 }

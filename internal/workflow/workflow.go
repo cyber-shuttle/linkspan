@@ -38,7 +38,8 @@ func LoadFile(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// ctx is checked between steps; the running step is not preempted.
+// Cancelling ctx kills the running step -- exec.CommandContext sends SIGKILL --
+// and stops the workflow.
 func Run(ctx context.Context, wf *Config) error {
 	// Reject the whole document first: a typo in the last step should not be
 	// found only after the earlier ones have already changed the node.

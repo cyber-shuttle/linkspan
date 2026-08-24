@@ -1,6 +1,6 @@
 // Package sshd is linkspan's embedded SSH server. Every handler boundary is
 // panic-isolated and the supervisor restarts the listener, so one bad
-// connection cannot take linkspan down. internal/httpapi is its only caller.
+// connection cannot take linkspan down.
 package sshd
 
 import (
@@ -91,7 +91,7 @@ func keepAlive(period time.Duration) func(ssh.Context, net.Conn) net.Conn {
 }
 
 func handleSession(s ssh.Session) {
-	user, remote := peer(s)
+	user, remote := s.User(), s.RemoteAddr()
 	log.Printf("client connected: user=%s remote=%s", user, remote)
 	defer log.Printf("client disconnected: user=%s remote=%s", user, remote)
 
@@ -118,15 +118,6 @@ func handleSession(s ssh.Session) {
 	}
 }
 
-func peer(s ssh.Session) (user, remote string) {
-	if r := s.RemoteAddr(); r != nil {
-		remote = r.String()
-	}
-	return s.User(), remote
-}
-
-// The client is told the command's own exit status. Without the Exit call
-// gliderlabs sends 0 for every session, so a failed command looks successful.
 func runHostCommand(s ssh.Session, cmd *exec.Cmd) {
 	stderr := s.Stderr()
 	cmd.Env, cmd.Stdout, cmd.Stderr = os.Environ(), s, stderr
@@ -458,14 +449,6 @@ func (s *supervisor) deregister() {
 	if activeServers[s.sessionID] == s {
 		delete(activeServers, s.sessionID)
 	}
-}
-
-func deleteServer(sessionID string) (*supervisor, bool) {
-	activeServersMu.Lock()
-	defer activeServersMu.Unlock()
-	server, exists := activeServers[sessionID]
-	delete(activeServers, sessionID)
-	return server, exists
 }
 
 // Nothing may take a server's own lock while activeServersMu is held.
