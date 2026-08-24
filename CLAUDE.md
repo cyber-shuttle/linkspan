@@ -122,4 +122,6 @@ path; those are the only two background failures that are fatal.
   session going away. Stdin reaching EOF is not that signal: a client may send no more input and stay
 - gliderlabs sends exit-status 0 for any session whose handler just returns, so both the exec and PTY
   paths call `s.Exit` with the command's real status; without it every failure looks like success
-- `make` refuses to build unless HEAD is tagged `X.Y.Z` or `X.Y.Z.<commit>`; use `go build` for a dev binary
+- `make` refuses to build unless HEAD is tagged `X.Y.Z` or `X.Y.Z.<commit>`; use `go build` for a dev binary.
+  The targets have a FORCE prerequisite so the recipe runs every time — without it an existing `bin/` made
+  make skip both the rebuild and that gate
