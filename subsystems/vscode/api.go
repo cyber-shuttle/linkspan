@@ -1,6 +1,5 @@
-// Package vscode is the REST surface cs-bridge drives for VS Code Remote-SSH:
-// it validates a caller's public key, picks a loopback port, and hands both to
-// subsystems/sshd. The SSH server itself lives there.
+// Package vscode is the REST surface cs-bridge drives for VS Code Remote-SSH.
+// The SSH server it starts lives in subsystems/sshd.
 package vscode
 
 import (
