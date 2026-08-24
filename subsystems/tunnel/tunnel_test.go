@@ -26,6 +26,15 @@ func TestDownloadWritesTheWholeBody(t *testing.T) {
 	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
 		t.Fatalf("expected only the binary, got %d entries", len(entries))
 	}
+	// Executable the moment it appears: the rename publishes it, so anything
+	// that happens after the rename may never happen at all.
+	info, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("published binary is not executable: mode %v", info.Mode().Perm())
+	}
 }
 
 // A failed transfer must leave nothing where the next run would execute it.

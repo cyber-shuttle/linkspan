@@ -58,9 +58,6 @@ func devtunnelBin(ctx context.Context) (string, error) {
 	if err := download(ctx, path, url); err != nil {
 		return "", fmt.Errorf("devtunnel cli: %w", err)
 	}
-	if err := os.Chmod(path, 0o755); err != nil {
-		return "", fmt.Errorf("devtunnel cli: chmod: %w", err)
-	}
 	return path, nil
 }
 
@@ -92,6 +89,12 @@ func download(ctx context.Context, dst, src string) error {
 	if _, err := io.Copy(f, resp.Body); err != nil {
 		f.Close()
 		return fmt.Errorf("write download: %w", err)
+	}
+	// Executable before it is published, not after: a crash in between would
+	// leave a devtunnel that every later run finds and cannot run.
+	if err := f.Chmod(0o755); err != nil {
+		f.Close()
+		return err
 	}
 	if err := f.Close(); err != nil {
 		return err
@@ -158,14 +161,17 @@ func hostOnce(ctx context.Context, tunnelID, clusterID, hostToken string) (strin
 			return id, ctx.Err()
 		}
 		stdout, stderr, _ := pm.Global.Output(id)
-		switch {
-		case strings.Contains(stdout, hostReadyMarker):
+		if strings.Contains(stdout, hostReadyMarker) {
 			log.Printf("devtunnel host: tunnel %q ready at https://%s.devtunnels.ms", qualified, qualified)
 			return id, nil
-		// The CLI warns about things that do not stop it hosting; anything else
-		// means it gave up, and waiting out the deadline adds nothing.
-		case stderr != "" && !strings.Contains(stderr, "Warning"):
-			return id, fmt.Errorf("devtunnel host %q: %s", qualified, stderr)
+		}
+		// The CLI exiting without the marker is the failure signal. Reading it
+		// off stderr instead was wrong twice over: the CLI writes lines there
+		// that do not stop it hosting, and a single one containing "Warning"
+		// made every later line -- including a real error -- look benign.
+		if pm.Global.Exited(id) {
+			return id, fmt.Errorf("devtunnel host %q: exited before signalling ready (stdout=%q stderr=%q)",
+				qualified, stdout, stderr)
 		}
 	}
 	stdout, stderr, _ := pm.Global.Output(id)
