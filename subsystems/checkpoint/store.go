@@ -4,10 +4,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 )
 
@@ -143,6 +146,29 @@ func isCheckpointComplete(checkpointDir string) bool {
 	return m.State == StateComplete
 }
 
+// ErrCheckpointNotFound separates an unknown checkpoint id from a failure to
+// search for one, so the REST layer can answer 404 rather than 500.
+var ErrCheckpointNotFound = errors.New("checkpoint not found")
+
+// checkpointIDPattern is deliberately strict: an id becomes both a path
+// element and a glob pattern below, and ids now arrive from HTTP clients.
+var checkpointIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// ValidateCheckpointID rejects ids that would escape the checkpoint root or
+// widen the glob that resolves them.
+func ValidateCheckpointID(id string) error {
+	if id == "" {
+		return fmt.Errorf("checkpoint id is required")
+	}
+	if id == "." || id == ".." || strings.Contains(id, "..") {
+		return fmt.Errorf("invalid checkpoint id %q", id)
+	}
+	if !checkpointIDPattern.MatchString(id) {
+		return fmt.Errorf("invalid checkpoint id %q: only letters, digits, '.', '_' and '-' are allowed", id)
+	}
+	return nil
+}
+
 // findWorkloadForCheckpoint resolves which workload a globally-unique
 // checkpoint id belongs to by searching root/*/<checkpointID>, so
 // RestoreCheckpoint/GetCheckpoint can take a bare checkpoint id.
@@ -150,8 +176,8 @@ func findWorkloadForCheckpoint(root, checkpointID string) (string, error) {
 	if root == "" {
 		return "", fmt.Errorf("checkpoint root is not configured")
 	}
-	if checkpointID == "" {
-		return "", fmt.Errorf("checkpoint id is required")
+	if err := ValidateCheckpointID(checkpointID); err != nil {
+		return "", err
 	}
 
 	matches, err := filepath.Glob(filepath.Join(root, "*", checkpointID))
@@ -168,7 +194,7 @@ func findWorkloadForCheckpoint(root, checkpointID string) (string, error) {
 
 	switch len(found) {
 	case 0:
-		return "", fmt.Errorf("checkpoint %s not found under %s", checkpointID, root)
+		return "", fmt.Errorf("%w: %s under %s", ErrCheckpointNotFound, checkpointID, root)
 	case 1:
 		return filepath.Base(filepath.Dir(found[0])), nil
 	default:
