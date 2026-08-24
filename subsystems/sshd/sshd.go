@@ -37,16 +37,15 @@ func Start(authorized ssh.PublicKey) (id string, port int, err error) {
 	port = ln.Addr().(*net.TCPAddr).Port
 	// The id embeds the port because the client reads it back out of the id.
 	id = fmt.Sprintf("s-%d", port)
-	supervise(id, addr, ln, func() *ssh.Server { return newServer(addr, authorized) })
+	supervise(id, addr, ln, func() *ssh.Server { return newServer(authorized) })
 	return id, port, nil
 }
 
 // Built per (re)start: ForwardedTCPHandler holds per-server state. sftp and
 // streamlocal look unused because the client is VS Code, not cs-bridge.
-func newServer(addr string, authorized ssh.PublicKey) *ssh.Server {
+func newServer(authorized ssh.PublicKey) *ssh.Server {
 	fwd := &ssh.ForwardedTCPHandler{}
 	return &ssh.Server{
-		Addr:                          addr,
 		Handler:                       guardSession("session", handleSession),
 		PublicKeyHandler:              authorizer(authorized), // PasswordHandler stays nil: keys only
 		ConnCallback:                  keepAlive(30 * time.Second),
@@ -117,10 +116,7 @@ func peer(s ssh.Session) (user, remote string) {
 // The client is told the command's own exit status. Without the Exit call
 // gliderlabs sends 0 for every session, so a failed command looks successful.
 func runHostCommand(s ssh.Session, cmd *exec.Cmd) {
-	var stderr io.Writer = s
-	if w := s.Stderr(); w != nil { // a separate stderr stream is used when present
-		stderr = w
-	}
+	stderr := s.Stderr()
 	cmd.Env, cmd.Stdout, cmd.Stderr = os.Environ(), s, stderr
 
 	// Not cmd.Stdin = s. Wait would then block on an stdin copy that only ends
@@ -164,6 +160,11 @@ func reportExit(s ssh.Session, err error) {
 func runPTYShell(s ssh.Session) {
 	ptyReq, winCh, _ := s.Pty()
 	cmd := exec.CommandContext(s.Context(), shellPath())
+	if ptyReq.Term != "" {
+		// The client's terminal type. Without it the shell inherits the batch
+		// job's environment, which has no TERM, and curses programs misbehave.
+		cmd.Env = append(os.Environ(), "TERM="+ptyReq.Term)
+	}
 	f, err := pty.Start(cmd)
 	if err != nil {
 		// A PTY session carries a single stream, so this goes to s rather than
@@ -181,7 +182,14 @@ func runPTYShell(s ssh.Session) {
 	}
 	resize(ptyReq.Window.Width, ptyReq.Window.Height)
 
-	safeGo("pty->client copy", func() { _, _ = io.Copy(s, f) })
+	drained := make(chan struct{})
+	// The reader stops when the shell exits (the master reports EOF) or when the
+	// session goes away (the write to the client fails). Either way the pty is
+	// done with, and closing it is what stops a shell whose session ended --
+	// s.Context() belongs to the connection, so it would keep one alive until
+	// the whole connection dropped. Not the writer: stdin reaching EOF only
+	// means the client sent no more input, which is not the session closing.
+	safeGo("pty->client copy", func() { defer close(drained); _, _ = io.Copy(s, f); _ = f.Close() })
 	safeGo("client->pty copy", func() { _, _ = io.Copy(f, s) })
 	safeGo("pty window-change", func() {
 		for win := range winCh {
@@ -189,7 +197,15 @@ func runPTYShell(s ssh.Session) {
 		}
 	})
 
-	reportExit(s, cmd.Wait())
+	err = cmd.Wait()
+	// Let the reader finish before the deferred Close pulls the master out from
+	// under it, or the shell's last output is dropped. Bounded, because a
+	// wedged read must not hold the handler.
+	select {
+	case <-drained:
+	case <-time.After(2 * time.Second):
+	}
+	reportExit(s, err)
 }
 
 func handleSFTP(s ssh.Session) {
@@ -295,7 +311,7 @@ type SSHServer struct {
 	stopped   bool
 }
 
-func supervise(sessionID, addr string, first net.Listener, build func() *ssh.Server) *SSHServer {
+func supervise(sessionID, addr string, first net.Listener, build func() *ssh.Server) {
 	s := &SSHServer{state: stateRunning, addr: addr, sessionID: sessionID, stopCh: make(chan struct{})}
 
 	activeServersMu.Lock()
@@ -304,7 +320,6 @@ func supervise(sessionID, addr string, first net.Listener, build func() *ssh.Ser
 
 	log.Printf("[ssh] starting supervised ssh server on %s (session=%s)", addr, sessionID)
 	safeGo("ssh supervisor "+sessionID, func() { s.run(build, first) })
-	return s
 }
 
 func (s *SSHServer) run(build func() *ssh.Server, first net.Listener) {

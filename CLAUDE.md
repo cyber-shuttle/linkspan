@@ -115,7 +115,11 @@ path; those are the only two background failures that are fatal.
 - The SSH server keeps the `sftp` subsystem and the `direct-streamlocal@openssh.com` handler: VS Code
   Remote-SSH's bootstrap fallback uses SFTP, and `remote.SSH.remoteServerListenOnSocket` uses streamlocal.
   Neither shows up in a cs-bridge grep because the client is VS Code, not cs-bridge.
-- SSH server spawns a shell via PTY (creack/pty) — resize handled via the SSH window-change channel
+- SSH server spawns a shell via PTY (creack/pty) — resize handled via the SSH window-change channel, and
+  the pty request's terminal type is passed through as TERM, which a batch job's environment does not have
+- `s.Context()` is gliderlabs' **connection** context, not the session's, so it cannot end one session's
+  shell. What does is closing the pty master when the copy to the client stops — the shell exiting or the
+  session going away. Stdin reaching EOF is not that signal: a client may send no more input and stay
 - gliderlabs sends exit-status 0 for any session whose handler just returns, so both the exec and PTY
   paths call `s.Exit` with the command's real status; without it every failure looks like success
 - `make` refuses to build unless HEAD is tagged `X.Y.Z` or `X.Y.Z.<commit>`; use `go build` for a dev binary
