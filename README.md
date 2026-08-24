@@ -54,10 +54,11 @@ steps:
 | `--tunnel-host-token` | | Host-scoped access token for `--tunnel-id` |
 | `--version` | | Print the version and exit |
 
-`--version` prints a bare `X.Y.Z[.commit]` as its only line of stdout, and `--help` names
-`-tunnel-host-token`. Both consumers run `--version` to decide whether to install or replace the binary —
-cs-bridge is broken by a second line, cs-control tolerates one — and cs-control greps `--help` for
-`-tunnel-host-token` and refuses to submit a job without it. Neither output may change shape.
+`--version` prints a bare `X.Y.Z[.commit]` as its only line of stdout, and `--help` lists the flag as
+`-tunnel-host-token` — one dash, which is how Go's flag package prints them. Both consumers run `--version`
+to decide whether to install or replace the binary — cs-bridge is broken by a second line, cs-control
+tolerates one — and cs-control greps `--help` for that exact literal and refuses to submit a job without it.
+Neither output may change shape. Flags are passed as `--name`, as in the examples above.
 
 ## REST API
 

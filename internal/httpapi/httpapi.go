@@ -1,6 +1,7 @@
-// Package httpapi is linkspan's HTTP surface: the route table, the handlers
-// behind it, and the listeners they are served on. It is the only package that
-// serves HTTP -- the subsystems report data and know nothing about requests.
+// Package httpapi is linkspan's HTTP surface: the route table and the handlers
+// behind it. It is the only package that serves HTTP -- the subsystems report
+// data and know nothing about requests. main owns the http.Server and the TCP
+// listener; ListenUnix here adds the optional unix socket.
 package httpapi
 
 import (

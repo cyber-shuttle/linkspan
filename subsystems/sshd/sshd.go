@@ -1,6 +1,6 @@
 // Package sshd is linkspan's embedded SSH server. Every handler boundary is
 // panic-isolated and the supervisor restarts the listener, so one bad
-// connection cannot take linkspan down. subsystems/vscode is its only caller.
+// connection cannot take linkspan down. internal/httpapi is its only caller.
 package sshd
 
 import (

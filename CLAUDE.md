@@ -50,11 +50,14 @@ Linkspan has exactly two consumers, and its surface is exactly what they use. An
 no caller — do not add to it speculatively, and treat a new entry as an API change that needs a consumer.
 
 - **cs-bridge** (VS Code) launches it with `--port --socket --tunnel-id --tunnel-cluster --tunnel-host-token
-  -tunnel-enable`, and calls `GET /health`, `GET /metrics`, `GET /vscode/sessions`, `POST /vscode/sessions`.
+  --tunnel-enable`, and calls `GET /health`, `GET /metrics`, `GET /vscode/sessions`, `POST /vscode/sessions`.
 - **cs-control** (Jupyter) launches it with `--port --tunnel-enable --tunnel-id --tunnel-cluster
   --tunnel-host-token --workflow`, and makes no HTTP calls at all.
 
-Both also run `--version`, and cs-control greps `--help` for `-tunnel-host-token`.
+Both also run `--version`, and cs-control greps `--help` for `-tunnel-host-token`. That single dash is not
+a typo: Go's flag package prints flags as `-name`, and cs-control matches that literal
+(`--help 2>&1 | grep -q -- '-tunnel-host-token'`). Flags are written `--name` everywhere else here, which is
+how they are passed.
 
 ## REST API (`/api/v1/`)
 
@@ -97,8 +100,9 @@ but it means a workflow is not a background nicety: any step that can fail is a 
 
 - `--version` must print a bare `X.Y.Z[.commit]` as the **only** line on stdout. cs-control tolerates
   trailing lines; cs-bridge does not, and a second line makes it reinstall linkspan on every launch.
-- `--help` must contain the literal `-tunnel-host-token`. cs-control greps for it and refuses to submit a
-  job without it, so that flag cannot be renamed or removed.
+- `--help` must contain the literal `-tunnel-host-token` — one dash, as Go's flag package prints it.
+  cs-control greps for exactly that and refuses to submit a job without it, so the flag cannot be renamed
+  or removed. It is passed as `--tunnel-host-token`; both spellings work, only the printed one is matched.
 - The goreleaser archive name (`linkspan_Linux_${arch}.tar.gz`) and the `linkspan` member inside it are a
   contract — both consumers curl and untar them by those exact names.
 - The devtunnel CLI is downloaded at runtime to `~/.linkspan/bin/` on first host attempt
