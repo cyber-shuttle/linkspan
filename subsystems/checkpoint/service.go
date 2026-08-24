@@ -138,12 +138,19 @@ func (s *CheckpointService) CreateCheckpoint(ctx context.Context, target Checkpo
 		return nil, fmt.Errorf("cannot checkpoint workload %s: %w", opts.WorkloadID, err)
 	}
 
-	result, err := s.criu.checkpoint(ctx, opts.WorkloadID, processID, pid, trigger)
+	result, err := s.criu.checkpoint(ctx, processID, pid, opts)
 	if err != nil {
 		w.setState(WorkloadCheckpointFailed)
 		return nil, err
 	}
-	w.setState(WorkloadCheckpointed)
+
+	// A left-running workload is still running, so it must stay checkpointable
+	// — otherwise a second manual checkpoint would be rejected as busy.
+	if opts.leaveRunning() {
+		w.setState(WorkloadRunning)
+	} else {
+		w.setState(WorkloadCheckpointed)
+	}
 	return result, nil
 }
 

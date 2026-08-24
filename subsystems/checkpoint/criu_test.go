@@ -12,10 +12,13 @@ import (
 )
 
 func TestBuildDumpArgs(t *testing.T) {
-	args := buildDumpArgs(1234, "/ckpt/c1/images", "/ckpt/c1", "dump.log", []string{"--ext-mount-map", "auto"})
+	args := buildDumpArgs(1234, "/ckpt/c1/images", "/ckpt/c1", "dump.log", false, []string{"--ext-mount-map", "auto"})
 
 	if args[0] != "dump" {
 		t.Fatalf("expected first arg to be \"dump\", got %q", args[0])
+	}
+	if strings.Contains(strings.Join(args, " "), "--leave-running") {
+		t.Fatalf("a stopping checkpoint must not pass --leave-running, got %v", args)
 	}
 	for _, forbidden := range []string{"sh", "-c"} {
 		for _, a := range args {
@@ -29,6 +32,13 @@ func TestBuildDumpArgs(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("expected dump args to contain %q, got %v", want, args)
 		}
+	}
+}
+
+func TestBuildDumpArgsLeaveRunning(t *testing.T) {
+	args := buildDumpArgs(1234, "/ckpt/c1/images", "/ckpt/c1", "dump.log", true, nil)
+	if !strings.Contains(strings.Join(args, " "), "--leave-running") {
+		t.Fatalf("expected --leave-running in dump args, got %v", args)
 	}
 }
 
@@ -166,7 +176,11 @@ func TestCheckpointAndRestoreCapturesRestoredPid(t *testing.T) {
 	cp := &criuCheckpointer{CriuPath: requireCriu(t), CheckpointRoot: t.TempDir()}
 	pid := startDetachedProcess(t, "600")
 
-	result, err := cp.checkpoint(context.Background(), "wl-criu", "", pid, TriggerManual)
+	opts := CreateOptions{WorkloadID: "wl-criu", Trigger: TriggerWalltime}
+	if err := opts.applyDefaults(); err != nil {
+		t.Fatalf("applyDefaults failed: %v", err)
+	}
+	result, err := cp.checkpoint(context.Background(), "", pid, opts)
 	if err != nil {
 		t.Fatalf("checkpoint failed: %v", err)
 	}

@@ -348,15 +348,20 @@ func TestRestoreCheckpoint_FreshServiceDefaultsToCheckpointed(t *testing.T) {
 
 /*
 checkpointRealProcess starts a real process and checkpoints it through svc,
-returning the new checkpoint id. CRIU stops the process as part of the dump,
-so the checkpoint is all that is left of it afterwards — which is exactly the
-state a restore has to start from.
+returning the new checkpoint id. The dump stops the process, so the checkpoint
+is all that is left of it afterwards — which is exactly the state a restore
+has to start from, and the only one it can start from: CRIU restores a process
+under its original pid, so a still-running original would hold that pid.
 */
 func checkpointRealProcess(t *testing.T, svc *CheckpointService, workloadID string) string {
 	t.Helper()
 	pid := startDetachedProcess(t, "600")
 
-	result, err := svc.CreateCheckpoint(context.Background(), TargetFromPID(pid), CreateOptions{WorkloadID: workloadID})
+	stop := false
+	result, err := svc.CreateCheckpoint(context.Background(), TargetFromPID(pid), CreateOptions{
+		WorkloadID:   workloadID,
+		LeaveRunning: &stop,
+	})
 	if err != nil {
 		t.Fatalf("failed to checkpoint test process %d: %v", pid, err)
 	}

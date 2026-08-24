@@ -47,7 +47,7 @@ const (
 	pidFileRetryDelay = 100 * time.Millisecond
 )
 
-func buildDumpArgs(pid int, imagesDir, workDir, logFile string, extra []string) []string {
+func buildDumpArgs(pid int, imagesDir, workDir, logFile string, leaveRunning bool, extra []string) []string {
 	args := []string{
 		"dump",
 		"-t", strconv.Itoa(pid),
@@ -57,6 +57,11 @@ func buildDumpArgs(pid int, imagesDir, workDir, logFile string, extra []string) 
 		"--images-dir", imagesDir,
 		"--work-dir", workDir,
 		"--log-file", logFile,
+	}
+	// Without this CRIU kills the tree it just dumped, which is right at
+	// walltime and wrong for a snapshot of a job that should carry on.
+	if leaveRunning {
+		args = append(args, "--leave-running")
 	}
 	return append(args, extra...)
 }
@@ -115,17 +120,40 @@ func awaitPidFile(path string) (int, error) {
 	return 0, err
 }
 
+// resolveGPUMode turns a requested mode into a decision for this host. An
+// explicit "gpu" fails loudly when the tooling is absent; "auto" only engages
+// GPU support when it is actually there.
+func (c *criuCheckpointer) resolveGPUMode(ctx context.Context, mode CheckpointMode) (bool, error) {
+	switch mode {
+	case ModeCPU:
+		return false, nil
+	case ModeGPU:
+		if err := checkGpuPrerequisites(ctx); err != nil {
+			return false, fmt.Errorf("checkpoint mode %q requested but this host fails GPU prerequisites: %w", ModeGPU, err)
+		}
+		return true, nil
+	default:
+		return c.SupportGpuCheckpoint || checkGpuPrerequisites(ctx) == nil, nil
+	}
+}
+
 /*
 checkpoint checkpoints the process at pid, identified for provenance by
-workloadID and (optionally, when the target came from linkspan's
+opts.WorkloadID and (optionally, when the target came from linkspan's
 ProcessManager) processID. It runs CRIU directly (no shell), waits for the
 dump to finish, and only returns success once CRIU has actually completed
 the checkpoint and a manifest + completion marker have been durably written
 under CheckpointRoot/workloadID/<new checkpoint id>/.
+
+opts is expected to have been through applyDefaults already.
 */
-func (c *criuCheckpointer) checkpoint(ctx context.Context, workloadID, processID string, pid int, trigger CheckpointTrigger) (*CheckpointResult, error) {
+func (c *criuCheckpointer) checkpoint(ctx context.Context, processID string, pid int, opts CreateOptions) (*CheckpointResult, error) {
 	if pid <= 0 {
 		return nil, fmt.Errorf("invalid PID %d", pid)
+	}
+	workloadID := opts.WorkloadID
+	if workloadID == "" {
+		return nil, fmt.Errorf("workloadID is required")
 	}
 	if err := c.CRIUCheck(ctx); err != nil {
 		return nil, fmt.Errorf("CRIU preflight check failed: %w", err)
@@ -136,8 +164,9 @@ func (c *criuCheckpointer) checkpoint(ctx context.Context, workloadID, processID
 	if err := checkAllowedUser(pid, c.AllowedCheckpointUsers); err != nil {
 		return nil, fmt.Errorf("CRIU preflight check failed: %w", err)
 	}
-	if workloadID == "" {
-		return nil, fmt.Errorf("workloadID is required")
+	gpuMode, err := c.resolveGPUMode(ctx, opts.Mode)
+	if err != nil {
+		return nil, fmt.Errorf("CRIU preflight check failed: %w", err)
 	}
 
 	checkpointID := NewCheckpointID()
@@ -152,17 +181,20 @@ func (c *criuCheckpointer) checkpoint(ctx context.Context, workloadID, processID
 		WorkloadID:      workloadID,
 		LinkspanVersion: c.LinkspanVersion,
 		LinkspanCommit:  c.LinkspanCommit,
-		GPUMode:         c.SupportGpuCheckpoint,
+		GPUMode:         gpuMode,
 		ProcessID:       processID,
 		PID:             pid,
 		CheckpointID:    checkpointID,
-		Trigger:         trigger,
+		Trigger:         opts.Trigger,
+		Mode:            opts.Mode,
+		Reason:          opts.Reason,
+		LeaveRunning:    opts.leaveRunning(),
 	})
 	if err := writeManifest(checkpointDir, manifest); err != nil {
 		return nil, fmt.Errorf("failed to write manifest for checkpoint %s: %w", checkpointID, err)
 	}
 
-	args := buildDumpArgs(pid, imagesDir, checkpointDir, "dump.log", c.AdditionalCriuOpts)
+	args := buildDumpArgs(pid, imagesDir, checkpointDir, "dump.log", opts.leaveRunning(), c.AdditionalCriuOpts)
 	log.Printf("[Checkpoint] executing: %s %s", c.CriuPath, strings.Join(args, " "))
 
 	var stdout, stderr bytes.Buffer
