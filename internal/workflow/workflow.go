@@ -11,9 +11,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config is the workflow document linkspan is handed with --workflow. The only
-// action is shell.exec, whose command is split on whitespace and run without a
-// shell, so nothing is expanded.
+// shell.exec is the only action. Its command is split on whitespace and run
+// without a shell, so nothing is expanded.
 type Config struct {
 	Name  string `yaml:"name"`
 	Steps []struct {
@@ -37,8 +36,7 @@ func LoadFile(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// Run executes every step in order, stopping at the first failure. ctx is
-// checked between steps so a shutdown signal interrupts promptly.
+// ctx is checked between steps; the running step is not preempted.
 func Run(ctx context.Context, wf *Config) error {
 	log.Printf("workflow: starting %q (%d steps)", wf.Name, len(wf.Steps))
 	for i, step := range wf.Steps {

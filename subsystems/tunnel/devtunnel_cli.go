@@ -32,7 +32,6 @@ const (
 
 var downloadMu sync.Mutex
 
-// devtunnelBin returns ~/.linkspan/bin/devtunnel, downloading it on first use.
 func devtunnelBin() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -66,8 +65,8 @@ func devtunnelBin() (string, error) {
 	return path, nil
 }
 
-// download writes src to dst through a temp file, so an interrupted transfer
-// never leaves a partial binary where the next run would execute it.
+// Via a temp file, so an interrupted transfer never leaves a partial binary
+// where the next run would execute it.
 func download(dst, src string) error {
 	//nolint:noctx // one-shot download, nothing to cancel it from
 	resp, err := http.Get(src) //nolint:gosec // src is built from a static map
@@ -95,10 +94,9 @@ func download(dst, src string) error {
 	return os.Rename(f.Name(), dst)
 }
 
-// DevTunnelHost runs the relay for a tunnel the client owns and registers ports
-// on. The host token authorizes hosting and nothing else: linkspan never
-// creates, forwards or deletes a tunnel, so no ports are passed here -- the
-// relay forwards whatever the client already registered on the service.
+// The host token authorizes hosting and nothing else: linkspan never creates,
+// forwards or deletes a tunnel, so no ports are passed -- the relay forwards
+// whatever the client already registered.
 func DevTunnelHost(tunnelID, clusterID, hostToken string) (string, error) {
 	qualified := tunnelID
 	if clusterID != "" {
@@ -124,7 +122,7 @@ func DevTunnelHost(tunnelID, clusterID, hostToken string) (string, error) {
 			log.Printf("devtunnel host: tunnel %q ready at https://%s.devtunnels.ms", qualified, qualified)
 			return id, nil
 		// The CLI warns about things that do not stop it hosting; anything else
-		// on stderr means it gave up, and waiting out the deadline adds nothing.
+		// means it gave up, and waiting out the deadline adds nothing.
 		case stderr != "" && !strings.Contains(stderr, "Warning"):
 			return "", fmt.Errorf("devtunnel host %q: %s", qualified, stderr)
 		}

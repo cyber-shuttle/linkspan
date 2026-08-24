@@ -24,11 +24,11 @@ import (
 	"github.com/cyber-shuttle/linkspan/utils"
 )
 
-// version is set via ldflags at build time. Both consumers parse `--version`
-// output as a bare X.Y.Z[.commit] on stdout, so it must stay the only line.
+// Set via ldflags. Both consumers parse `--version` as a bare X.Y.Z[.commit],
+// so it must stay the only line on stdout.
 var version = "dev"
 
-// The client creates the tunnel and owns its lifetime; linkspan only hosts it.
+// The client owns the tunnel's lifetime; linkspan only hosts it.
 const (
 	tunnelRetries        = 3
 	tunnelRetryDelay     = 2 * time.Second
@@ -69,7 +69,7 @@ func main() {
 	addr := fmt.Sprintf("0.0.0.0:%d", serverPort)
 	srv := &http.Server{Handler: mux} // Addr is unused: we hand Serve our own listener
 
-	// Bind before starting the tunnel so the port is open when the relay connects.
+	// Bind before the tunnel starts, so the port is open when the relay connects.
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("failed to listen on %s: %v", addr, err)
@@ -133,8 +133,6 @@ type hostResult struct {
 	err   error
 }
 
-// hostTunnel retries the relay bring-up, killing the host process a failed or
-// timed-out attempt leaves behind so it cannot leak.
 func hostTunnel(ctx context.Context, tunnelID, clusterID, hostToken string) {
 	for attempt := 1; attempt <= tunnelRetries; attempt++ {
 		log.Printf("devtunnel: attempt %d/%d to host tunnel %s", attempt, tunnelRetries, tunnelID)
@@ -168,7 +166,6 @@ func hostTunnel(ctx context.Context, tunnelID, clusterID, hostToken string) {
 	log.Fatalf("devtunnel: failed to host tunnel %s after %d attempts", tunnelID, tunnelRetries)
 }
 
-// listenUnix serves srv on a unix socket in a background goroutine.
 func listenUnix(srv *http.Server, path string) error {
 	os.Remove(path) // clear a stale socket; bind fails if the path exists
 	ln, err := net.Listen("unix", path)
@@ -183,8 +180,6 @@ func listenUnix(srv *http.Server, path string) error {
 	return nil
 }
 
-// --- Live job metrics (GET /api/v1/metrics) -------------------------------------------------------------------------
-
 type gpuMetric struct {
 	Index       int `json:"index"`
 	UtilPct     int `json:"utilPct"`
@@ -192,17 +187,15 @@ type gpuMetric struct {
 	MemTotalMiB int `json:"memTotalMiB"`
 }
 
-// liveMetrics mirrors the csbridge MetricSample live fields. Each source is read independently and omitted (omitempty)
-// when unavailable, so the client sees an absent field (undefined) rather than a misleading zero.
+// Mirrors the csbridge MetricSample live fields. Every source is read
+// independently and omitted when unavailable, so the client sees undefined
+// rather than a misleading zero.
 type liveMetrics struct {
 	MemBytes     *int64      `json:"memBytes,omitempty"`
 	CPUUsageUsec *int64      `json:"cpuUsageUsec,omitempty"`
 	GPUs         []gpuMetric `json:"gpus,omitempty"`
 }
 
-// metricsHandler reports the running job's live resource use: cgroup-v2 memory + cpu and per-GPU nvidia-smi. Every
-// source degrades independently — a missing cgroup file or absent nvidia-smi (CPU node) just omits that field; it
-// never fails the request. Replaces the srun-driven bash probe csbridge used to run over SSH.
 func metricsHandler(w http.ResponseWriter, r *http.Request) {
 	m := liveMetrics{GPUs: readGPUMetrics()}
 	if cg, err := jobCgroupDir(); err == nil {
@@ -212,8 +205,6 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusOK, m)
 }
 
-// readCgroup applies parse to a cgroup file, reporting nil if either step fails —
-// which is what omits the field rather than reporting a zero.
 func readCgroup[T any](path string, parse func(string) (T, error)) *T {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -226,8 +217,8 @@ func readCgroup[T any](path string, parse func(string) (T, error)) *T {
 	return &v
 }
 
-// jobCgroupDir resolves this process's cgroup-v2 directory stripped to the job level (dropping any /step_* leaf), so
-// memory/cpu reflect the whole allocation rather than one step. Mirrors `sed 's|^0::||; s|/step_.*||' /proc/self/cgroup`.
+// Strips the /step_* leaf so metrics cover the whole allocation, not one step:
+// `sed 's|^0::||; s|/step_.*||' /proc/self/cgroup`.
 func jobCgroupDir() (string, error) {
 	b, err := os.ReadFile("/proc/self/cgroup")
 	if err != nil {
@@ -236,7 +227,6 @@ func jobCgroupDir() (string, error) {
 	return "/sys/fs/cgroup" + jobCgroupSuffix(string(b)), nil
 }
 
-// jobCgroupSuffix is the pure path-munging half of jobCgroupDir (unit-tested).
 func jobCgroupSuffix(procCgroup string) string {
 	lines := strings.Split(strings.TrimSpace(procCgroup), "\n")
 	p := strings.TrimPrefix(strings.TrimSpace(lines[len(lines)-1]), "0::")
@@ -248,7 +238,6 @@ func jobCgroupSuffix(procCgroup string) string {
 
 func parseInt64(s string) (int64, error) { return strconv.ParseInt(strings.TrimSpace(s), 10, 64) }
 
-// parseCPUUsageUsec pulls the cumulative `usage_usec` line out of a cgroup cpu.stat body.
 func parseCPUUsageUsec(cpuStat string) (int64, error) {
 	for ln := range strings.SplitSeq(cpuStat, "\n") {
 		if v, ok := strings.CutPrefix(ln, "usage_usec "); ok {
@@ -258,7 +247,7 @@ func parseCPUUsageUsec(cpuStat string) (int64, error) {
 	return 0, fmt.Errorf("usage_usec not found in cpu.stat")
 }
 
-// readGPUMetrics returns per-GPU stats via nvidia-smi, or nil if it's absent or errors (CPU nodes have no driver).
+// nil when nvidia-smi is absent or errors: a CPU node has no driver.
 func readGPUMetrics() []gpuMetric {
 	out, err := exec.Command("nvidia-smi",
 		"--query-gpu=index,utilization.gpu,memory.used,memory.total",
@@ -269,7 +258,6 @@ func readGPUMetrics() []gpuMetric {
 	return parseGPUMetrics(string(out))
 }
 
-// parseGPUMetrics parses `index, util, memUsed, memTotal` CSV rows; rows that do not scan (blank, [N/A]) are skipped.
 func parseGPUMetrics(out string) []gpuMetric {
 	var gpus []gpuMetric
 	for ln := range strings.SplitSeq(strings.TrimSpace(out), "\n") {

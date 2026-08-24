@@ -7,8 +7,7 @@ import (
 	"time"
 )
 
-// TestOutputWhileRunning reads a process's output while it is still writing.
-// Under -race this is what catches an unguarded output buffer.
+// Under -race, this is what catches an unguarded output buffer.
 func TestOutputWhileRunning(t *testing.T) {
 	id, err := Global.Start(exec.Command("sh", "-c", "echo first; sleep 0.3; echo second"))
 	if err != nil {

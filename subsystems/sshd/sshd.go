@@ -1,9 +1,6 @@
-// Package sshd is linkspan's embedded SSH server. Resilience invariant: every
-// handler boundary is panic-isolated and the supervisor restarts the listener
-// after a fatal exit, so one bad connection can never take linkspan down.
-//
-// It knows nothing about its callers: subsystems/vscode is the REST surface
-// that drives it for VS Code Remote-SSH, and it is the only caller today.
+// Package sshd is linkspan's embedded SSH server. Every handler boundary is
+// panic-isolated and the supervisor restarts the listener, so one bad
+// connection cannot take linkspan down. subsystems/vscode is its only caller.
 package sshd
 
 import (
@@ -28,27 +25,18 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-// --- server ---
-
-// Start runs a supervised, auto-restarting SSH server for a session and
-// registers it for later shutdown.
 func Start(sessionID, addr, publicKey string) *SSHServer {
 	return supervise(sessionID, addr, func() *ssh.Server { return newServer(addr, publicKey) })
 }
 
-// newServer runs per (re)start, because ForwardedTCPHandler holds per-server
-// state that must not outlive the listener it belongs to.
-//
-// The sftp subsystem and direct-streamlocal handler are load-bearing for VS
-// Code Remote-SSH -- its bootstrap fallback uses SFTP and
-// remote.SSH.remoteServerListenOnSocket uses streamlocal. Neither shows up in a
-// cs-bridge grep, because the client is VS Code, not cs-bridge.
+// Built per (re)start: ForwardedTCPHandler holds per-server state. sftp and
+// streamlocal look unused because the client is VS Code, not cs-bridge.
 func newServer(addr, publicKey string) *ssh.Server {
 	fwd := &ssh.ForwardedTCPHandler{}
 	return &ssh.Server{
 		Addr:                          addr,
 		Handler:                       guardSession("session", handleSession),
-		PublicKeyHandler:              authorizer(publicKey), // PasswordHandler stays nil: this key is the only way in
+		PublicKeyHandler:              authorizer(publicKey), // PasswordHandler stays nil: keys only
 		ConnCallback:                  keepAlive(30 * time.Second),
 		LocalPortForwardingCallback:   allowForward("local port forwarding"),
 		ReversePortForwardingCallback: allowForward("reverse port forwarding"),
@@ -67,7 +55,6 @@ func newServer(addr, publicKey string) *ssh.Server {
 	}
 }
 
-// authorizer accepts one key; a key that fails to parse refuses every connection.
 func authorizer(publicKey string) ssh.PublicKeyHandler {
 	authorized, _, _, _, err := gossh.ParseAuthorizedKey([]byte(publicKey))
 	if err != nil {
@@ -85,8 +72,7 @@ func allowForward(kind string) func(ssh.Context, string, uint32) bool {
 	}
 }
 
-// keepAlive holds a quiet session open at the TCP layer; IdleTimeout and
-// MaxTimeout deliberately stay unset (0).
+// IdleTimeout and MaxTimeout deliberately stay unset (0).
 func keepAlive(period time.Duration) func(ssh.Context, net.Conn) net.Conn {
 	return func(_ ssh.Context, conn net.Conn) net.Conn {
 		if tc, ok := conn.(*net.TCPConn); ok {
@@ -96,8 +82,6 @@ func keepAlive(period time.Duration) func(ssh.Context, net.Conn) net.Conn {
 		return conn
 	}
 }
-
-// --- client connect ---
 
 func handleSession(s ssh.Session) {
 	user, remote := peer(s)
@@ -132,8 +116,6 @@ func runHostCommand(s ssh.Session, cmd *exec.Cmd) {
 	}
 }
 
-// runPTYShell bridges the session to a PTY-backed shell. The copy and resize
-// goroutines are panic-isolated so a copy fault cannot crash the agent.
 func runPTYShell(s ssh.Session) {
 	ptyReq, winCh, _ := s.Pty()
 	cmd := exec.Command(shellPath())
@@ -173,16 +155,13 @@ func handleSFTP(s ssh.Session) {
 	}
 }
 
-// streamLocalChannelData is the direct-streamlocal@openssh.com open payload
-// (OpenSSH PROTOCOL).
+// direct-streamlocal@openssh.com open payload (OpenSSH PROTOCOL).
 type streamLocalChannelData struct {
 	SocketPath string
 	Reserved0  string
 	Reserved1  uint32
 }
 
-// directStreamLocal bridges a channel to a local unix socket -- OpenSSH's
-// AllowStreamLocalForwarding.
 func directStreamLocal(_ *ssh.Server, _ *gossh.ServerConn, newChan gossh.NewChannel, _ ssh.Context) {
 	var d streamLocalChannelData
 	if err := gossh.Unmarshal(newChan.ExtraData(), &d); err != nil {
@@ -210,8 +189,6 @@ func directStreamLocal(_ *ssh.Server, _ *gossh.ServerConn, newChan gossh.NewChan
 
 func shellPath() string { return cmp.Or(os.Getenv("SHELL"), "/bin/sh") }
 
-// --- panic isolation ---
-
 func logPanic(name string) {
 	if r := recover(); r != nil {
 		log.Printf("[ssh] recovered panic in %s: %v\n%s", name, r, debug.Stack())
@@ -227,7 +204,7 @@ func guardChannel(name string, h ssh.ChannelHandler) ssh.ChannelHandler {
 	}
 }
 
-// guardRequest rejects the request on panic: the zero return is (false, nil).
+// On panic the zero return, (false, nil), rejects the request.
 func guardRequest(name string, h ssh.RequestHandler) ssh.RequestHandler {
 	return func(ctx ssh.Context, srv *ssh.Server, req *gossh.Request) (bool, []byte) {
 		defer logPanic("request " + name)
@@ -235,9 +212,8 @@ func guardRequest(name string, h ssh.RequestHandler) ssh.RequestHandler {
 	}
 }
 
-// guardSession wraps the handler itself rather than its channel: gliderlabs
-// dispatches Handler and SubsystemHandlers on a freshly spawned goroutine,
-// which a channel-level recover cannot reach.
+// Wraps the handler, not its channel: gliderlabs dispatches these on a fresh
+// goroutine that a channel-level recover cannot reach.
 func guardSession(name string, h func(ssh.Session)) func(ssh.Session) {
 	return func(s ssh.Session) {
 		defer logPanic("handler " + name)
@@ -245,9 +221,7 @@ func guardSession(name string, h func(ssh.Session)) func(ssh.Session) {
 	}
 }
 
-// --- supervisor ---
-
-// Tuning, as vars so tests can shrink them.
+// Vars so tests can shrink them.
 var (
 	maxConsecutiveFailures = 5
 	minRestartBackoff      = 1 * time.Second
@@ -285,8 +259,6 @@ func supervise(sessionID, addr string, build func() *ssh.Server) *SSHServer {
 	return s
 }
 
-// run restarts the listener on non-graceful exits up to maxConsecutiveFailures;
-// a run of at least healthyRunThreshold resets the count.
 func (s *SSHServer) run(build func() *ssh.Server) {
 	backoff, consecutive := minRestartBackoff, 0
 
@@ -333,7 +305,6 @@ func (s *SSHServer) run(build func() *ssh.Server) {
 		}
 	}
 
-	// Clean stops deregister; a failed server stays registered for observability.
 	s.mu.Lock()
 	failed := s.state == stateFailed
 	s.mu.Unlock()
@@ -353,7 +324,6 @@ func (s *SSHServer) signalStop() *ssh.Server {
 	return s.current
 }
 
-// Stop gracefully shuts down the SSH server and its supervisor.
 func (s *SSHServer) Stop(ctx context.Context) error {
 	if srv := s.signalStop(); srv != nil {
 		return srv.Shutdown(ctx)
@@ -361,7 +331,6 @@ func (s *SSHServer) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Close immediately closes the SSH server and its supervisor.
 func (s *SSHServer) Close() error {
 	if srv := s.signalStop(); srv != nil {
 		return srv.Close()
@@ -369,9 +338,7 @@ func (s *SSHServer) Close() error {
 	return nil
 }
 
-// --- registry ---
-
-// A failed server stays registered so its status is queryable.
+// A failed server stays registered, so its status stays queryable.
 var (
 	activeServers   = make(map[string]*SSHServer)
 	activeServersMu sync.Mutex
@@ -385,15 +352,13 @@ func deleteServer(sessionID string) (*SSHServer, bool) {
 	return server, exists
 }
 
-// snapshotServers copies the registry so callers can iterate without holding
-// its lock -- nothing may take a server's own lock while activeServersMu is held.
+// Nothing may take a server's own lock while activeServersMu is held.
 func snapshotServers() []*SSHServer {
 	activeServersMu.Lock()
 	defer activeServersMu.Unlock()
 	return slices.Collect(maps.Values(activeServers))
 }
 
-// StopAll stops every registered SSH server.
 func StopAll() {
 	for _, server := range snapshotServers() {
 		if err := server.Close(); err != nil {
@@ -408,7 +373,6 @@ type SessionStatus struct {
 	Addr  string `json:"addr,omitempty"`
 }
 
-// Statuses reports the state of every registered SSH server.
 func Statuses() []*SessionStatus {
 	servers := snapshotServers()
 	statuses := make([]*SessionStatus, 0, len(servers))

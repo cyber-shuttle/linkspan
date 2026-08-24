@@ -1,6 +1,5 @@
-// Package process tracks background CLI processes so they can be killed and
-// their output read while they still run. The devtunnel host relay is the only
-// thing linkspan starts this way.
+// Package process tracks background CLI processes -- today only the devtunnel
+// host relay -- so they can be killed and read while they still run.
 package process
 
 import (
@@ -24,7 +23,6 @@ type proc struct {
 	done           chan struct{}
 }
 
-// Start runs cmd in the background and returns the id Kill and Output take.
 func (m *Manager) Start(cmd *exec.Cmd) (string, error) {
 	if cmd == nil {
 		return "", fmt.Errorf("nil cmd")
@@ -51,7 +49,6 @@ func (m *Manager) Kill(id string) error {
 	return p.kill()
 }
 
-// Output returns what the process has written so far; it need not have exited.
 func (m *Manager) Output(id string) (stdout, stderr string, err error) {
 	p, err := m.lookup(id)
 	if err != nil {
@@ -60,8 +57,7 @@ func (m *Manager) Output(id string) (stdout, stderr string, err error) {
 	return p.stdout.String(), p.stderr.String(), nil
 }
 
-// KillAll kills and deregisters every process, waiting briefly for each to be
-// reaped so it cannot linger as a zombie.
+// Waits briefly for each process to be reaped, so none lingers as a zombie.
 func (m *Manager) KillAll() {
 	m.mu.Lock()
 	procs := m.procs
@@ -95,8 +91,8 @@ func (p *proc) kill() error {
 	return p.cmd.Process.Kill()
 }
 
-// buffer is the io.Writer exec copies into. Output reads it while that copy is
-// still running, so a plain bytes.Buffer would race.
+// Output reads this while exec is still copying into it, so a plain
+// bytes.Buffer would race.
 type buffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
