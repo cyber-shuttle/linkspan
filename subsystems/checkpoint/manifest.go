@@ -44,6 +44,7 @@ type Manifest struct {
 	CompletedAt     time.Time         `json:"completed_at,omitempty"`
 	Trigger         CheckpointTrigger `json:"trigger"`
 	Mode            CheckpointMode    `json:"mode"`
+	Network         NetworkPolicy     `json:"network"`
 	Reason          string            `json:"reason,omitempty"`
 	LeaveRunning    bool              `json:"leave_running"`
 	ProcessID       string            `json:"process_id"`
@@ -97,6 +98,7 @@ type manifestParams struct {
 	CheckpointID    string
 	Trigger         CheckpointTrigger
 	Mode            CheckpointMode
+	Network         NetworkPolicy
 	Reason          string
 	LeaveRunning    bool
 }
@@ -113,6 +115,7 @@ func gatherManifest(ctx context.Context, p manifestParams) *Manifest {
 		CreatedAt:       time.Now().UTC(),
 		Trigger:         p.Trigger,
 		Mode:            p.Mode,
+		Network:         p.Network,
 		Reason:          p.Reason,
 		LeaveRunning:    p.LeaveRunning,
 		ProcessID:       p.ProcessID,

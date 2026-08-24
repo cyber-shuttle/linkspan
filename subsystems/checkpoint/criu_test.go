@@ -12,7 +12,7 @@ import (
 )
 
 func TestBuildDumpArgs(t *testing.T) {
-	args := buildDumpArgs(1234, "/ckpt/c1/images", "/ckpt/c1", "dump.log", false, "", []string{"--ext-mount-map", "auto"})
+	args := buildDumpArgs(dumpOptions{PID: 1234, ImagesDir: "/ckpt/c1/images", WorkDir: "/ckpt/c1", LogFile: "dump.log", Extra: []string{"--ext-mount-map", "auto"}})
 
 	if args[0] != "dump" {
 		t.Fatalf("expected first arg to be \"dump\", got %q", args[0])
@@ -36,14 +36,14 @@ func TestBuildDumpArgs(t *testing.T) {
 }
 
 func TestBuildDumpArgsLeaveRunning(t *testing.T) {
-	args := buildDumpArgs(1234, "/ckpt/c1/images", "/ckpt/c1", "dump.log", true, "", nil)
+	args := buildDumpArgs(dumpOptions{PID: 1234, ImagesDir: "/ckpt/c1/images", WorkDir: "/ckpt/c1", LogFile: "dump.log", LeaveRunning: true})
 	if !strings.Contains(strings.Join(args, " "), "--leave-running") {
 		t.Fatalf("expected --leave-running in dump args, got %v", args)
 	}
 }
 
 func TestBuildRestoreArgs(t *testing.T) {
-	args := buildRestoreArgs("/ckpt/c1/images", "/ckpt/c1", "restore.log", "restore.pid", "", []string{"--ext-mount-map", "auto"})
+	args := buildRestoreArgs(restoreOptions{ImagesDir: "/ckpt/c1/images", WorkDir: "/ckpt/c1", LogFile: "restore.log", PidFile: "restore.pid", Extra: []string{"--ext-mount-map", "auto"}})
 
 	if args[0] != "restore" {
 		t.Fatalf("expected first arg to be \"restore\", got %q", args[0])

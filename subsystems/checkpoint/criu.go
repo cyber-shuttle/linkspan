@@ -25,6 +25,7 @@ type criuCheckpointer struct {
 	AdditionalCriuOpts     []string
 	CheckpointRoot         string
 	AllowedCheckpointUsers []string
+	Network                NetworkPolicy
 	GPU                    GPUConfig
 	LinkspanVersion        string
 	LinkspanCommit         string
@@ -52,46 +53,72 @@ const (
 	pidFileRetryDelay = 100 * time.Millisecond
 )
 
-func buildDumpArgs(pid int, imagesDir, workDir, logFile string, leaveRunning bool, pluginDir string, extra []string) []string {
+// dumpOptions is what a CRIU dump argv is built from. It is a struct because
+// the argument list outgrew the point where positional parameters were
+// readable at the call site.
+type dumpOptions struct {
+	PID          int
+	ImagesDir    string
+	WorkDir      string
+	LogFile      string
+	LeaveRunning bool
+	PluginDir    string // CRIU --libdir, for the CUDA plugin
+	Network      NetworkPolicy
+	Extra        []string
+}
+
+func buildDumpArgs(o dumpOptions) []string {
 	args := []string{
 		"dump",
-		"-t", strconv.Itoa(pid),
+		"-t", strconv.Itoa(o.PID),
 		"--shell-job",
-		"--tcp-established",
 		"--unprivileged",
-		"--images-dir", imagesDir,
-		"--work-dir", workDir,
-		"--log-file", logFile,
+		"--images-dir", o.ImagesDir,
+		"--work-dir", o.WorkDir,
+		"--log-file", o.LogFile,
 	}
 	// Without this CRIU kills the tree it just dumped, which is right at
 	// walltime and wrong for a snapshot of a job that should carry on.
-	if leaveRunning {
+	if o.LeaveRunning {
 		args = append(args, "--leave-running")
 	}
 	// CRIU only searches its compiled-in plugin directory, so a CUDA plugin
 	// installed anywhere else is invisible without this.
-	if pluginDir != "" {
-		args = append(args, "--libdir", pluginDir)
+	if o.PluginDir != "" {
+		args = append(args, "--libdir", o.PluginDir)
 	}
-	return append(args, extra...)
+	args = append(args, o.Network.criuArgs()...)
+	return append(args, o.Extra...)
 }
 
-func buildRestoreArgs(imagesDir, workDir, logFile, pidFile string, pluginDir string, extra []string) []string {
+// restoreOptions mirrors dumpOptions; the two must agree on the plugin
+// directory and the network policy or the restore does not match the dump.
+type restoreOptions struct {
+	ImagesDir string
+	WorkDir   string
+	LogFile   string
+	PidFile   string
+	PluginDir string
+	Network   NetworkPolicy
+	Extra     []string
+}
+
+func buildRestoreArgs(o restoreOptions) []string {
 	args := []string{
 		"restore",
 		"--shell-job",
-		"--tcp-established",
 		"--unprivileged",
 		"--restore-detached",
-		"--images-dir", imagesDir,
-		"--work-dir", workDir,
-		"--log-file", logFile,
-		"--pidfile", pidFile,
+		"--images-dir", o.ImagesDir,
+		"--work-dir", o.WorkDir,
+		"--log-file", o.LogFile,
+		"--pidfile", o.PidFile,
 	}
-	if pluginDir != "" {
-		args = append(args, "--libdir", pluginDir)
+	if o.PluginDir != "" {
+		args = append(args, "--libdir", o.PluginDir)
 	}
-	return append(args, extra...)
+	args = append(args, o.Network.criuArgs()...)
+	return append(args, o.Extra...)
 }
 
 func exitCodeOf(cmd *exec.Cmd, runErr error) int {
@@ -227,6 +254,7 @@ func (c *criuCheckpointer) checkpoint(ctx context.Context, processID string, pid
 		CheckpointID:    checkpointID,
 		Trigger:         opts.Trigger,
 		Mode:            opts.Mode,
+		Network:         c.networkPolicy(),
 		Reason:          opts.Reason,
 		LeaveRunning:    opts.leaveRunning(),
 	})
@@ -238,7 +266,16 @@ func (c *criuCheckpointer) checkpoint(ctx context.Context, processID string, pid
 	if gpu != nil {
 		pluginDir = gpu.CriuPluginDir
 	}
-	args := buildDumpArgs(pid, imagesDir, checkpointDir, "dump.log", opts.leaveRunning(), pluginDir, c.AdditionalCriuOpts)
+	args := buildDumpArgs(dumpOptions{
+		PID:          pid,
+		ImagesDir:    imagesDir,
+		WorkDir:      checkpointDir,
+		LogFile:      "dump.log",
+		LeaveRunning: opts.leaveRunning(),
+		PluginDir:    pluginDir,
+		Network:      c.networkPolicy(),
+		Extra:        c.AdditionalCriuOpts,
+	})
 	log.Printf("[Checkpoint] executing: %s %s", c.CriuPath, strings.Join(args, " "))
 
 	var stdout, stderr bytes.Buffer
@@ -342,7 +379,15 @@ func (c *criuCheckpointer) restore(ctx context.Context, workloadID, checkpointID
 	// here from the manifest rather than assumed.
 	pluginDir, cudaCheckpoint := c.gpuRestoreSetup(checkpointDir)
 
-	args := buildRestoreArgs(imagesDir, checkpointDir, "restore.log", "restore.pid", pluginDir, c.AdditionalCriuOpts)
+	args := buildRestoreArgs(restoreOptions{
+		ImagesDir: imagesDir,
+		WorkDir:   checkpointDir,
+		LogFile:   "restore.log",
+		PidFile:   "restore.pid",
+		PluginDir: pluginDir,
+		Network:   c.restoreNetworkPolicy(checkpointDir),
+		Extra:     c.AdditionalCriuOpts,
+	})
 	log.Printf("[Checkpoint] executing: %s %s", c.CriuPath, strings.Join(args, " "))
 
 	var stdout, stderr bytes.Buffer
@@ -407,4 +452,30 @@ func (c *criuCheckpointer) gpuRestoreSetup(checkpointDir string) (pluginDir, cud
 		cudaCheckpoint = path
 	}
 	return pluginDir, cudaCheckpoint
+}
+
+// networkPolicy is this allocation's configured policy, defaulting to
+// reconstruction rather than silently migrating TCP state.
+func (c *criuCheckpointer) networkPolicy() NetworkPolicy {
+	if c.Network == "" {
+		return DefaultNetworkPolicy
+	}
+	return c.Network
+}
+
+/*
+restoreNetworkPolicy takes the policy from the checkpoint rather than from this
+allocation's flags.
+
+A checkpoint dumped with --tcp-established has to be restored with it too, and
+the allocation doing the restore may have been started with different flags —
+or, in the fresh-allocation case this whole feature exists for, by a different
+person entirely.
+*/
+func (c *criuCheckpointer) restoreNetworkPolicy(checkpointDir string) NetworkPolicy {
+	m, err := ReadManifest(checkpointDir)
+	if err != nil || m.Network == "" {
+		return c.networkPolicy()
+	}
+	return m.Network
 }

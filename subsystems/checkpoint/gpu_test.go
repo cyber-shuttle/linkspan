@@ -91,17 +91,17 @@ under /usr/local is invisible without --libdir. Losing this argument is the
 difference between a GPU checkpoint and a silently CPU-only one.
 */
 func TestPluginDirReachesTheCriuCommand(t *testing.T) {
-	dump := strings.Join(buildDumpArgs(1, "/i", "/w", "d.log", false, "/usr/local/lib/criu", nil), " ")
+	dump := strings.Join(buildDumpArgs(dumpOptions{PID: 1, ImagesDir: "/i", WorkDir: "/w", LogFile: "d.log", PluginDir: "/usr/local/lib/criu"}), " ")
 	if !strings.Contains(dump, "--libdir /usr/local/lib/criu") {
 		t.Fatalf("expected --libdir in dump args, got %s", dump)
 	}
-	restore := strings.Join(buildRestoreArgs("/i", "/w", "r.log", "r.pid", "/usr/local/lib/criu", nil), " ")
+	restore := strings.Join(buildRestoreArgs(restoreOptions{ImagesDir: "/i", WorkDir: "/w", LogFile: "r.log", PidFile: "r.pid", PluginDir: "/usr/local/lib/criu"}), " ")
 	if !strings.Contains(restore, "--libdir /usr/local/lib/criu") {
 		t.Fatalf("expected --libdir in restore args, got %s", restore)
 	}
 
 	// A CPU-only checkpoint must not pass it at all.
-	cpu := strings.Join(buildDumpArgs(1, "/i", "/w", "d.log", false, "", nil), " ")
+	cpu := strings.Join(buildDumpArgs(dumpOptions{PID: 1, ImagesDir: "/i", WorkDir: "/w", LogFile: "d.log"}), " ")
 	if strings.Contains(cpu, "--libdir") {
 		t.Fatalf("a CPU checkpoint must not pass --libdir, got %s", cpu)
 	}

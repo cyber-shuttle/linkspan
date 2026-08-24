@@ -15,7 +15,8 @@ type LinkspanConfig struct {
 	CheckpointRoot         string   `yaml:"checkpoint_root"`
 	CheckpointMode         string   `yaml:"checkpoint_mode"`
 	CudaCheckpointPath     string   `yaml:"cuda_checkpoint_path"`
-	CriuPluginDir          string   `yaml:"criu_plugin_dir"`
+	CriuLibDir             string   `yaml:"criu_libdir"`
+	CheckpointNetwork      string   `yaml:"checkpoint_network"`
 	WorkloadID             string   `yaml:"workload_id"`
 	AllowedCheckpointUsers []string `yaml:"allowed_checkpoint_users"`
 
@@ -60,7 +61,8 @@ func NewDefaultLinkspanConfig() *LinkspanConfig {
 		CheckpointRoot:           "",
 		CheckpointMode:           "auto",
 		CudaCheckpointPath:       "",
-		CriuPluginDir:            "",
+		CriuLibDir:               "",
+		CheckpointNetwork:        "reconstruct",
 		WorkloadID:               "",
 		AllowedCheckpointUsers:   []string{},
 		TunnelApi:                "devtunnels",
