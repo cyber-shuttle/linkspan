@@ -142,3 +142,14 @@ const (
 // ErrWorkloadBusy is returned (wrapped) when a workload is not in a state
 // that allows the requested operation.
 var ErrWorkloadBusy = errors.New("workload is not in a state that allows this operation")
+
+// ValidateMode rejects an unknown checkpoint mode at startup, where the error
+// is cheap, rather than at the first checkpoint, where it may not be.
+func ValidateMode(mode string) error {
+	switch CheckpointMode(mode) {
+	case "", ModeAuto, ModeCPU, ModeGPU:
+		return nil
+	default:
+		return fmt.Errorf("unknown checkpoint mode %q, expected one of %q, %q, %q", mode, ModeCPU, ModeGPU, ModeAuto)
+	}
+}
