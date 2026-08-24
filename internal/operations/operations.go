@@ -214,7 +214,7 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	c.ServerHost = *serverHostFlag
 	c.ForkCommand = *forkCommand
 	c.ShutdownOnForkCompletion = shutdownOnForkCompletion
-	c.RestoreCheckpointID = *restoreCheckpointID
+	c.RestoreCheckpointID = resolveRenamedFlag(restoreCheckpoint, restoreCheckpointID, "restore-checkpoint", "restore-checkpoint-id")
 	c.SocketPath = *socketPath
 	c.CRIUPath = *criuPath
 	c.SupportGpuCheckpoint = supportGpuCheckpoint
@@ -222,7 +222,9 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	c.CheckpointRoot = *checkpointRoot
 	c.CheckpointMode = *checkpointMode
 	c.CudaCheckpointPath = *cudaCheckpointPath
-	c.CriuPluginDir = *criuPluginDir
+	c.CriuLibDir = resolveRenamedFlag(criuLibDir, criuPluginDir, "criu-libdir", "criu-plugin-dir")
+	c.CheckpointNetwork = *checkpointNetwork
+	c.CheckpointOnSigterm = checkpointOnSigterm
 	c.WorkloadID = *workloadID
 	c.AllowedCheckpointUsers = allowedCheckpointUsers
 	c.CheckpointForkAfterDelay = *checkpointForkAfterDelay
@@ -275,4 +277,26 @@ func CleanupResources(c config.LinkspanConfig) {
 	tunnel.DeleteAllFRPTunnels()
 	vscode.StopAllSSHServers()
 	log.Println("Resource cleanup completed.")
+}
+
+/*
+resolveRenamedFlag accepts a flag under both its current and its former name.
+
+Old names stay working for a release so existing job scripts do not break the
+day they are renamed, but they warn, and giving both names conflicting values
+is an error rather than a silent pick.
+*/
+func resolveRenamedFlag(current, deprecated *string, currentName, deprecatedName string) string {
+	switch {
+	case *current != "" && *deprecated != "":
+		if *current != *deprecated {
+			log.Fatalf("--%s and --%s are the same setting given different values; use --%s", currentName, deprecatedName, currentName)
+		}
+		return *current
+	case *deprecated != "":
+		log.Printf("warning: --%s is deprecated and will be removed; use --%s", deprecatedName, currentName)
+		return *deprecated
+	default:
+		return *current
+	}
 }

@@ -38,9 +38,10 @@ func newCriuCheckpointer(c *config.LinkspanConfig) *criuCheckpointer {
 		AdditionalCriuOpts:     c.AdditionalCriuOpts,
 		CheckpointRoot:         c.CheckpointRoot,
 		AllowedCheckpointUsers: c.AllowedCheckpointUsers,
+		Network:                NetworkPolicy(c.CheckpointNetwork),
 		GPU: GPUConfig{
 			CudaCheckpointPath: c.CudaCheckpointPath,
-			CriuPluginDir:      c.CriuPluginDir,
+			CriuPluginDir:      c.CriuLibDir,
 		},
 		LinkspanVersion: c.Version,
 		LinkspanCommit:  c.Commit,
