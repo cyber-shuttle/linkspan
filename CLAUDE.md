@@ -33,13 +33,15 @@ Reach `--socket` in-cluster (no tunnel/TCP port): `srun --jobid=<id> --overlap c
 ## Architecture
 
 ```
-main.go                         # CLI flags, HTTP router (net/http ServeMux), tunnel bring-up, job metrics
+main.go                         # CLI flags, startup, shutdown -- no request handling
 internal/
+  httpapi/                      # the /api/v1 route table and the listeners it is served on
   workflow/                     # YAML workflow: load, then run shell.exec steps in order
   process/                      # background process tracking, process.Global singleton
 subsystems/
+  metrics/                      # cgroup-v2 memory/cpu + per-GPU nvidia-smi
   sshd/                         # Supervised SSH server (gliderlabs/ssh) with PTY support
-  tunnel/                       # devtunnel CLI download + relay hosting
+  tunnel/                       # devtunnel CLI download + relay hosting, retried
   vscode/                       # REST surface for /vscode/sessions; drives sshd, holds no SSH logic
 utils/                          # JSON helpers, port finding
 ```

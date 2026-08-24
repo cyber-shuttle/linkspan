@@ -77,11 +77,13 @@ tunnel, never the node's network.
 
 ```
 linkspan
-├── main.go                    # CLI flags, HTTP router, tunnel bring-up, job metrics
+├── main.go                    # CLI flags, startup, shutdown
 ├── internal/
+│   ├── httpapi/               # /api/v1 route table + unix socket listener
 │   ├── workflow/              # YAML workflow: load and run shell.exec steps in order
 │   └── process/               # Process manager for background CLI processes
 ├── subsystems/
+│   ├── metrics/               # cgroup-v2 + nvidia-smi job metrics
 │   ├── sshd/                  # Supervised SSH server (gliderlabs/ssh) with PTY support
 │   ├── tunnel/                # devtunnel CLI download + relay hosting
 │   └── vscode/                # REST surface for /vscode/sessions; drives sshd
