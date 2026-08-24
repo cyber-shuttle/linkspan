@@ -154,10 +154,18 @@ func CreateCheckpointHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The allocation's --checkpoint-mode has to be applied here rather than
+	// left to CreateCheckpoint: applyDefaults below would otherwise fill the
+	// mode in as "auto" first, and the flag would never take effect.
+	mode := CheckpointMode(req.Mode)
+	if mode == "" {
+		mode = svc.DefaultMode()
+	}
+
 	opts := CreateOptions{
 		WorkloadID:   workloadID,
 		Trigger:      CheckpointTrigger(req.Trigger),
-		Mode:         CheckpointMode(req.Mode),
+		Mode:         mode,
 		LeaveRunning: req.LeaveRunning,
 		Reason:       req.Reason,
 	}

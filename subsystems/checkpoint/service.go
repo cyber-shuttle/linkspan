@@ -142,6 +142,14 @@ func (s *CheckpointService) DefaultWorkloadID() string {
 	return s.defaultWorkloadID
 }
 
+// DefaultMode is the allocation's --checkpoint-mode, which a request that
+// names no mode inherits.
+func (s *CheckpointService) DefaultMode() CheckpointMode {
+	s.defaultsMu.RLock()
+	defer s.defaultsMu.RUnlock()
+	return s.defaultMode
+}
+
 // SetDefaultWorkloadID is called after a restore, which adopts the workload
 // identity recorded in the checkpoint rather than this allocation's.
 func (s *CheckpointService) SetDefaultWorkloadID(id string) {

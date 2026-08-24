@@ -373,3 +373,40 @@ func TestRestoreOverRESTHonoursRequestOverrides(t *testing.T) {
 	}
 	defer pm.GlobalProcessManager.Kill(resp.ProcessID)
 }
+
+/*
+A REST request that names no mode must inherit the allocation's
+--checkpoint-mode.
+
+This regressed once: the handler called applyDefaults() before the service
+could apply its default, which filled the mode in as "auto" and made the flag
+a no-op — a gpu-mode allocation silently took CPU-mode checkpoints.
+
+The assertion holds either way the host falls: with full GPU tooling the
+checkpoint is created and records gpu mode; without it, GPU preflight refuses.
+What must never happen is a successful CPU-mode checkpoint.
+*/
+func TestCreateCheckpointInheritsTheAllocationMode(t *testing.T) {
+	svc := newTestService(t, requireCriu(t), "")
+	svc.defaultMode = ModeGPU
+	svc.SetDefaultWorkloadID("wl-mode")
+	installTestService(t, svc)
+
+	if got := svc.DefaultMode(); got != ModeGPU {
+		t.Fatalf("expected the allocation default to be %q, got %q", ModeGPU, got)
+	}
+
+	pid := startDetachedProcess(t, "600")
+	rr := doRequest(t, http.MethodPost, "/api/v1/checkpoints", `{"pid":`+strconv.Itoa(pid)+`}`)
+
+	if rr.Code == http.StatusCreated {
+		resp := decodeCheckpoint(t, rr)
+		if resp.Mode != ModeGPU {
+			t.Fatalf("the allocation is gpu-mode, but the checkpoint recorded mode %q", resp.Mode)
+		}
+		return
+	}
+	if !strings.Contains(rr.Body.String(), "gpu") {
+		t.Fatalf("expected the refusal to name gpu mode, got %s", rr.Body.String())
+	}
+}
