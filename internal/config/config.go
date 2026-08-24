@@ -40,6 +40,10 @@ type LinkspanConfig struct {
 	RestoreEnsureDirs   []string `yaml:"restore_ensure_dirs"`
 	RestoreRequireFiles []string `yaml:"restore_require_files"`
 	RestoreForce        bool     `yaml:"restore_force"`
+
+	// Automatic checkpointing before a Slurm allocation expires.
+	CheckpointBeforeWalltime time.Duration `yaml:"checkpoint_before_walltime"`
+	CheckpointSignal         string        `yaml:"checkpoint_signal"`
 }
 
 func NewDefaultLinkspanConfig() *LinkspanConfig {
@@ -69,5 +73,7 @@ func NewDefaultLinkspanConfig() *LinkspanConfig {
 		RestoreEnsureDirs:        []string{},
 		RestoreRequireFiles:      []string{},
 		RestoreForce:             false,
+		CheckpointBeforeWalltime: 0,
+		CheckpointSignal:         "SIGUSR1",
 	}
 }

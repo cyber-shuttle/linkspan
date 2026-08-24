@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/cyber-shuttle/linkspan/internal/config"
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
+	"github.com/cyber-shuttle/linkspan/subsystems/checkpoint"
 	"github.com/cyber-shuttle/linkspan/subsystems/fork"
 	"github.com/cyber-shuttle/linkspan/subsystems/mount"
 	"github.com/cyber-shuttle/linkspan/subsystems/tunnel"
@@ -126,6 +127,8 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	workloadID := flag.String("workload-id", "", "logical workload identity checkpoints are grouped under; auto-generated and logged if not provided")
 	checkpointForkAfterDelay := flag.Int64("checkpoint-fork-after-delay", 0, "delay in seconds after fork process start before triggering checkpoint")
 	restoreCheckpointID := flag.String("restore-checkpoint-id", "", "checkpoint id to restore (its workload is resolved automatically)")
+	checkpointBeforeWalltime := flag.String("checkpoint-before-walltime", "", "checkpoint this long before the Slurm allocation ends, e.g. 5m or 90s; empty or 0 disables automatic walltime checkpointing")
+	checkpointSignal := flag.String("checkpoint-signal", "SIGUSR1", "signal the scheduler sends as an early walltime warning (match sbatch --signal=<sig>@<seconds>)")
 	restoreForceFlag := flag.String("restore-force", "false", "restore even when compatibility checks fail, downgrading their errors to warnings (true/false)")
 
 	var restorePreCommands, restoreEnsureDirs, restoreRequireFiles repeatableFlag
@@ -161,6 +164,23 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 		}
 	}
 
+	// An unparseable margin must not silently disable walltime checkpointing:
+	// the whole point of the flag is that the job is expected to be saved.
+	var checkpointBeforeWalltimeDuration time.Duration
+	if trimmed := strings.TrimSpace(*checkpointBeforeWalltime); trimmed != "" {
+		parsed, err := time.ParseDuration(trimmed)
+		if err != nil {
+			log.Fatalf("invalid value for --checkpoint-before-walltime: %s (expected a duration such as 5m or 90s)", *checkpointBeforeWalltime)
+		}
+		if parsed < 0 {
+			log.Fatalf("invalid value for --checkpoint-before-walltime: %s (must not be negative)", *checkpointBeforeWalltime)
+		}
+		checkpointBeforeWalltimeDuration = parsed
+	}
+	if _, err := checkpoint.ParseSignal(*checkpointSignal); err != nil {
+		log.Fatalf("invalid value for --checkpoint-signal: %v", err)
+	}
+
 	// Parse allowed checkpoint users (comma-separated)
 	var allowedCheckpointUsers []string
 	if *allowedCheckpointUsersFlag != "" {
@@ -191,6 +211,8 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	c.WorkloadID = *workloadID
 	c.AllowedCheckpointUsers = allowedCheckpointUsers
 	c.CheckpointForkAfterDelay = *checkpointForkAfterDelay
+	c.CheckpointBeforeWalltime = checkpointBeforeWalltimeDuration
+	c.CheckpointSignal = *checkpointSignal
 	c.RestorePreCommands = restorePreCommands
 	c.RestoreEnsureDirs = restoreEnsureDirs
 	c.RestoreRequireFiles = restoreRequireFiles
