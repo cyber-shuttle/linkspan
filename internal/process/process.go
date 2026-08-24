@@ -75,6 +75,21 @@ func (m *Manager) KillAll() {
 	}
 }
 
+// Exited reports whether the process has finished. An unknown id counts as
+// exited: nothing is running under it.
+func (m *Manager) Exited(id string) bool {
+	p, err := m.lookup(id)
+	if err != nil {
+		return true
+	}
+	select {
+	case <-p.done:
+		return true
+	default:
+		return false
+	}
+}
+
 func (m *Manager) lookup(id string) (*proc, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

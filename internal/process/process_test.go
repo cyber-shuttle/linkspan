@@ -48,3 +48,25 @@ func TestStartRejectsNilAndUnknownIDs(t *testing.T) {
 		t.Fatal("expected an error for an unknown id")
 	}
 }
+
+func TestExitedTracksTheProcess(t *testing.T) {
+	id, err := Global.Start(exec.Command("sh", "-c", "sleep 0.3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(Global.KillAll)
+
+	if Global.Exited(id) {
+		t.Fatal("a just-started process should not report exited")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && !Global.Exited(id) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !Global.Exited(id) {
+		t.Fatal("process never reported exited")
+	}
+	if !Global.Exited("p-nope") {
+		t.Fatal("an unknown id has nothing running under it, so it counts as exited")
+	}
+}
