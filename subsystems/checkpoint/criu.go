@@ -1,0 +1,482 @@
+package checkpoint
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/cyber-shuttle/linkspan/internal/config"
+)
+
+// criuCheckpointer is the low-level CRIU mechanics: building argv, invoking
+// the binary, and writing the durable checkpoint layout. It is unexported
+// on purpose — CheckpointService (service.go) is the only thing allowed to
+// construct or call it, so CRIU mechanics can never leak into main.go.
+type criuCheckpointer struct {
+	CriuPath               string
+	SupportGpuCheckpoint   bool
+	AdditionalCriuOpts     []string
+	CheckpointRoot         string
+	AllowedCheckpointUsers []string
+	Network                NetworkPolicy
+	GPU                    GPUConfig
+	LinkspanVersion        string
+	LinkspanCommit         string
+}
+
+func newCriuCheckpointer(c *config.LinkspanConfig) *criuCheckpointer {
+	return &criuCheckpointer{
+		CriuPath:               c.CRIUPath,
+		SupportGpuCheckpoint:   c.SupportGpuCheckpoint,
+		AdditionalCriuOpts:     c.AdditionalCriuOpts,
+		CheckpointRoot:         c.CheckpointRoot,
+		AllowedCheckpointUsers: c.AllowedCheckpointUsers,
+		Network:                NetworkPolicy(c.CheckpointNetwork),
+		GPU: GPUConfig{
+			CudaCheckpointPath: c.CudaCheckpointPath,
+			CriuPluginDir:      c.CriuLibDir,
+		},
+		LinkspanVersion: c.Version,
+		LinkspanCommit:  c.Commit,
+	}
+}
+
+// Retry budget for reading CRIU's pidfile after a detached restore.
+const (
+	pidFileAttempts   = 10
+	pidFileRetryDelay = 100 * time.Millisecond
+)
+
+// dumpOptions is what a CRIU dump argv is built from. It is a struct because
+// the argument list outgrew the point where positional parameters were
+// readable at the call site.
+type dumpOptions struct {
+	PID          int
+	ImagesDir    string
+	WorkDir      string
+	LogFile      string
+	LeaveRunning bool
+	PluginDir    string // CRIU --libdir, for the CUDA plugin
+	Network      NetworkPolicy
+	Extra        []string
+}
+
+func buildDumpArgs(o dumpOptions) []string {
+	args := []string{
+		"dump",
+		"-t", strconv.Itoa(o.PID),
+		"--shell-job",
+		"--unprivileged",
+		"--images-dir", o.ImagesDir,
+		"--work-dir", o.WorkDir,
+		"--log-file", o.LogFile,
+	}
+	// Without this CRIU kills the tree it just dumped, which is right at
+	// walltime and wrong for a snapshot of a job that should carry on.
+	if o.LeaveRunning {
+		args = append(args, "--leave-running")
+	}
+	// CRIU only searches its compiled-in plugin directory, so a CUDA plugin
+	// installed anywhere else is invisible without this.
+	if o.PluginDir != "" {
+		args = append(args, "--libdir", o.PluginDir)
+	}
+	args = append(args, o.Network.criuArgs()...)
+	return append(args, o.Extra...)
+}
+
+// restoreOptions mirrors dumpOptions; the two must agree on the plugin
+// directory and the network policy or the restore does not match the dump.
+type restoreOptions struct {
+	ImagesDir string
+	WorkDir   string
+	LogFile   string
+	PidFile   string
+	PluginDir string
+	Network   NetworkPolicy
+	Extra     []string
+}
+
+func buildRestoreArgs(o restoreOptions) []string {
+	args := []string{
+		"restore",
+		"--shell-job",
+		"--unprivileged",
+		"--restore-detached",
+		"--images-dir", o.ImagesDir,
+		"--work-dir", o.WorkDir,
+		"--log-file", o.LogFile,
+		"--pidfile", o.PidFile,
+	}
+	if o.PluginDir != "" {
+		args = append(args, "--libdir", o.PluginDir)
+	}
+	args = append(args, o.Network.criuArgs()...)
+	return append(args, o.Extra...)
+}
+
+func exitCodeOf(cmd *exec.Cmd, runErr error) int {
+	if cmd.ProcessState != nil {
+		return cmd.ProcessState.ExitCode()
+	}
+	if runErr != nil {
+		return -1
+	}
+	return 0
+}
+
+func readPidFile(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, fmt.Errorf("pidfile %s does not contain a pid: %w", path, err)
+	}
+	if pid <= 0 {
+		return 0, fmt.Errorf("pidfile %s contains invalid pid %d", path, pid)
+	}
+	return pid, nil
+}
+
+// awaitPidFile reads CRIU's pidfile, retrying briefly: on shared storage the
+// file can lag the CRIU exit.
+func awaitPidFile(path string) (int, error) {
+	var err error
+	for i := 0; i < pidFileAttempts; i++ {
+		var pid int
+		if pid, err = readPidFile(path); err == nil {
+			return pid, nil
+		}
+		time.Sleep(pidFileRetryDelay)
+	}
+	return 0, err
+}
+
+/*
+resolveGPUMode decides whether this checkpoint engages CRIU's CUDA plugin, and
+refuses rather than guessing when the answer would be unsafe.
+
+A CUDA process dumped without the plugin produces a checkpoint that looks
+complete and cannot restore: device state lives outside the address space CRIU
+saves. So a process holding an NVIDIA device is never silently checkpointed in
+CPU mode — not under "auto", and not under an explicit "cpu" either.
+*/
+func (c *criuCheckpointer) resolveGPUMode(ctx context.Context, mode CheckpointMode, pid int) (*GPUDetails, error) {
+	usesGPU, detectErr := ProcessUsesGPU(pid)
+
+	switch mode {
+	case ModeCPU:
+		if usesGPU {
+			return nil, fmt.Errorf("process %d has an NVIDIA device open, so checkpoint mode %q would silently produce an unrestorable checkpoint; use mode %q or %q",
+				pid, ModeCPU, ModeGPU, ModeAuto)
+		}
+		return nil, nil
+
+	case ModeGPU:
+		details, err := gpuPreflight(ctx, c.GPU, pid)
+		if err != nil {
+			return nil, fmt.Errorf("checkpoint mode %q requested but GPU preflight failed: %w", ModeGPU, err)
+		}
+		return details, nil
+
+	default: // ModeAuto
+		// The legacy --support-gpu-checkpoint boolean still forces GPU mode.
+		if !usesGPU && !c.SupportGpuCheckpoint {
+			if detectErr != nil {
+				return nil, fmt.Errorf("could not determine whether process %d uses a GPU: %w", pid, detectErr)
+			}
+			return nil, nil
+		}
+		details, err := gpuPreflight(ctx, c.GPU, pid)
+		if err != nil {
+			return nil, fmt.Errorf("process %d is using an NVIDIA GPU but GPU preflight failed, and falling back to a CPU-only checkpoint would produce an unrestorable checkpoint: %w", pid, err)
+		}
+		return details, nil
+	}
+}
+
+/*
+checkpoint checkpoints the process at pid, identified for provenance by
+opts.WorkloadID and (optionally, when the target came from linkspan's
+ProcessManager) processID. It runs CRIU directly (no shell), waits for the
+dump to finish, and only returns success once CRIU has actually completed
+the checkpoint and a manifest + completion marker have been durably written
+under CheckpointRoot/workloadID/<new checkpoint id>/.
+
+opts is expected to have been through applyDefaults already.
+*/
+func (c *criuCheckpointer) checkpoint(ctx context.Context, processID string, pid int, opts CreateOptions) (*CheckpointResult, error) {
+	if pid <= 0 {
+		return nil, fmt.Errorf("invalid PID %d", pid)
+	}
+	workloadID := opts.WorkloadID
+	if workloadID == "" {
+		return nil, fmt.Errorf("workloadID is required")
+	}
+	if err := c.CRIUCheck(ctx); err != nil {
+		return nil, fmt.Errorf("CRIU preflight check failed: %w", err)
+	}
+	if err := checkPidExists(pid); err != nil {
+		return nil, fmt.Errorf("CRIU preflight check failed: %w", err)
+	}
+	if err := checkAllowedUser(pid, c.AllowedCheckpointUsers); err != nil {
+		return nil, fmt.Errorf("CRIU preflight check failed: %w", err)
+	}
+	gpu, err := c.resolveGPUMode(ctx, opts.Mode, pid)
+	if err != nil {
+		return nil, fmt.Errorf("CRIU preflight check failed: %w", err)
+	}
+
+	checkpointID := NewCheckpointID()
+	checkpointDir := checkpointDirPath(c.CheckpointRoot, workloadID, checkpointID)
+	imagesDir := imagesDirPath(checkpointDir)
+	if err := os.MkdirAll(imagesDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create checkpoint directory %s: %w", imagesDir, err)
+	}
+
+	manifest := gatherManifest(ctx, manifestParams{
+		CriuPath:        c.CriuPath,
+		WorkloadID:      workloadID,
+		LinkspanVersion: c.LinkspanVersion,
+		LinkspanCommit:  c.LinkspanCommit,
+		GPUMode:         gpu != nil,
+		GPU:             gpu,
+		ProcessID:       processID,
+		PID:             pid,
+		CheckpointID:    checkpointID,
+		Trigger:         opts.Trigger,
+		Mode:            opts.Mode,
+		Network:         c.networkPolicy(),
+		Reason:          opts.Reason,
+		LeaveRunning:    opts.leaveRunning(),
+	})
+	if err := writeManifest(checkpointDir, manifest); err != nil {
+		return nil, fmt.Errorf("failed to write manifest for checkpoint %s: %w", checkpointID, err)
+	}
+
+	pluginDir := ""
+	if gpu != nil {
+		pluginDir = gpu.CriuPluginDir
+	}
+	args := buildDumpArgs(dumpOptions{
+		PID:          pid,
+		ImagesDir:    imagesDir,
+		WorkDir:      checkpointDir,
+		LogFile:      "dump.log",
+		LeaveRunning: opts.leaveRunning(),
+		PluginDir:    pluginDir,
+		Network:      c.networkPolicy(),
+		Extra:        c.AdditionalCriuOpts,
+	})
+	log.Printf("[Checkpoint] executing: %s %s", c.CriuPath, strings.Join(args, " "))
+
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, c.CriuPath, args...)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if gpu != nil {
+		if cudaCheckpoint, err := resolveCudaCheckpoint(c.GPU); err == nil {
+			cmd.Env = gpuCriuEnv(os.Environ(), cudaCheckpoint)
+		}
+	}
+
+	startedAt := time.Now()
+	runErr := cmd.Run()
+	finishedAt := time.Now()
+	exitCode := exitCodeOf(cmd, runErr)
+
+	manifest.CompletedAt = finishedAt.UTC()
+	manifest.ExitCode = exitCode
+	manifest.CRIUOptions = args
+
+	if ctx.Err() != nil {
+		manifest.State = StateFailed
+		if werr := writeManifest(checkpointDir, manifest); werr != nil {
+			log.Printf("[Checkpoint] warning: failed to record failed state for checkpoint %s: %v", checkpointID, werr)
+		}
+		return nil, fmt.Errorf("checkpoint of workload %s canceled: %w", workloadID, ctx.Err())
+	}
+	if runErr != nil {
+		manifest.State = StateFailed
+		if werr := writeManifest(checkpointDir, manifest); werr != nil {
+			log.Printf("[Checkpoint] warning: failed to record failed state for checkpoint %s: %v", checkpointID, werr)
+		}
+		return nil, fmt.Errorf("criu dump failed for workload %s (exit code %d): %w: %s", workloadID, exitCode, runErr, strings.TrimSpace(stderr.String()))
+	}
+
+	manifest.State = StateComplete
+	if err := writeManifest(checkpointDir, manifest); err != nil {
+		return nil, fmt.Errorf("checkpoint %s: criu dump succeeded but failed to finalize manifest: %w", checkpointID, err)
+	}
+	if err := os.WriteFile(filepath.Join(checkpointDir, completeFileName), []byte{}, 0644); err != nil {
+		return nil, fmt.Errorf("checkpoint %s: criu dump succeeded but failed to write completion marker: %w", checkpointID, err)
+	}
+
+	log.Printf("[Checkpoint] workload %s checkpointed successfully to %s (checkpoint=%s)", workloadID, checkpointDir, checkpointID)
+
+	return &CheckpointResult{
+		WorkloadID:    workloadID,
+		CheckpointID:  checkpointID,
+		ProcessID:     processID,
+		Pid:           pid,
+		CheckpointDir: checkpointDir,
+		ImagesDir:     imagesDir,
+		ManifestPath:  filepath.Join(checkpointDir, manifestFileName),
+		LogFile:       filepath.Join(checkpointDir, "dump.log"),
+		ExitCode:      exitCode,
+		Stdout:        stdout.String(),
+		Stderr:        stderr.String(),
+		StartedAt:     startedAt,
+		FinishedAt:    finishedAt,
+	}, nil
+}
+
+/*
+restore restores a process from the images under
+CheckpointRoot/workloadID/checkpointID and returns the restored root task's
+PID, read from CRIU's --pidfile. CRIU runs directly (no shell) and detached
+(--restore-detached), so this returns once the restore is confirmed rather
+than blocking for the process's remaining lifetime.
+
+Host and compatibility checks belong to the caller: CheckpointService runs
+them as validation phases, which is what makes them overridable with
+--restore-force. The completion-marker gate stays here regardless, since
+restoring a partial checkpoint is never correct.
+*/
+func (c *criuCheckpointer) restore(ctx context.Context, workloadID, checkpointID string) (*RestoreResult, error) {
+	if workloadID == "" || checkpointID == "" {
+		return nil, fmt.Errorf("both workloadID and checkpointID are required to restore")
+	}
+
+	checkpointDir := checkpointDirPath(c.CheckpointRoot, workloadID, checkpointID)
+	if info, err := os.Stat(checkpointDir); err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("checkpoint not found at %s", checkpointDir)
+	}
+	if !isCheckpointComplete(checkpointDir) {
+		return nil, fmt.Errorf("checkpoint %s/%s is missing its completion marker or its manifest state is not %q; refusing to restore a possibly-partial checkpoint", workloadID, checkpointID, StateComplete)
+	}
+
+	imagesDir := imagesDirPath(checkpointDir)
+
+	// A previous restore of this same checkpoint left its pidfile behind, and
+	// awaitPidFile returns on the first successful read — without this, a
+	// retried restore can adopt the earlier attempt's pid.
+	pidFile := filepath.Join(checkpointDir, "restore.pid")
+	if err := os.Remove(pidFile); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to clear stale pidfile %s: %w", pidFile, err)
+	}
+
+	// A GPU checkpoint has to be restored with the same plugin that wrote it,
+	// so the plugin directory and cuda-checkpoint's PATH are reconstructed
+	// here from the manifest rather than assumed.
+	pluginDir, cudaCheckpoint := c.gpuRestoreSetup(checkpointDir)
+
+	args := buildRestoreArgs(restoreOptions{
+		ImagesDir: imagesDir,
+		WorkDir:   checkpointDir,
+		LogFile:   "restore.log",
+		PidFile:   "restore.pid",
+		PluginDir: pluginDir,
+		Network:   c.restoreNetworkPolicy(checkpointDir),
+		Extra:     c.AdditionalCriuOpts,
+	})
+	log.Printf("[Checkpoint] executing: %s %s", c.CriuPath, strings.Join(args, " "))
+
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, c.CriuPath, args...)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if cudaCheckpoint != "" {
+		cmd.Env = gpuCriuEnv(os.Environ(), cudaCheckpoint)
+	}
+
+	startedAt := time.Now()
+	runErr := cmd.Run()
+	finishedAt := time.Now()
+	exitCode := exitCodeOf(cmd, runErr)
+
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("restore of %s/%s canceled: %w", workloadID, checkpointID, ctx.Err())
+	}
+	if runErr != nil {
+		return nil, fmt.Errorf("criu restore failed for %s/%s (exit code %d): %w: %s", workloadID, checkpointID, exitCode, runErr, strings.TrimSpace(stderr.String()))
+	}
+
+	restoredPid, err := awaitPidFile(pidFile)
+	if err != nil {
+		return nil, fmt.Errorf("criu restore of %s/%s reported success but its pidfile could not be read (%w); the restored process may be running unsupervised and must be found and cleaned up manually", workloadID, checkpointID, err)
+	}
+
+	log.Printf("[Checkpoint] restore of %s/%s completed successfully (pid=%d)", workloadID, checkpointID, restoredPid)
+
+	return &RestoreResult{
+		WorkloadID:   workloadID,
+		CheckpointID: checkpointID,
+		ImagesDir:    imagesDir,
+		ManifestPath: filepath.Join(checkpointDir, manifestFileName),
+		LogFile:      filepath.Join(checkpointDir, "restore.log"),
+		ExitCode:     exitCode,
+		Stdout:       stdout.String(),
+		Stderr:       stderr.String(),
+		StartedAt:    startedAt,
+		FinishedAt:   finishedAt,
+		Pid:          restoredPid,
+	}, nil
+}
+
+/*
+gpuRestoreSetup reports the CRIU plugin directory and cuda-checkpoint binary a
+restore needs, or empty strings for a CPU-only checkpoint.
+
+It is best-effort on purpose: a GPU checkpoint whose tooling is missing here is
+caught by the restore validation phase, which produces a far better error than
+CRIU failing to load a plugin.
+*/
+func (c *criuCheckpointer) gpuRestoreSetup(checkpointDir string) (pluginDir, cudaCheckpoint string) {
+	m, err := ReadManifest(checkpointDir)
+	if err != nil || !m.GPUMode {
+		return "", ""
+	}
+	if dir, err := resolveCriuPluginDir(c.GPU); err == nil {
+		pluginDir = dir
+	}
+	if path, err := resolveCudaCheckpoint(c.GPU); err == nil {
+		cudaCheckpoint = path
+	}
+	return pluginDir, cudaCheckpoint
+}
+
+// networkPolicy is this allocation's configured policy, defaulting to
+// reconstruction rather than silently migrating TCP state.
+func (c *criuCheckpointer) networkPolicy() NetworkPolicy {
+	if c.Network == "" {
+		return DefaultNetworkPolicy
+	}
+	return c.Network
+}
+
+/*
+restoreNetworkPolicy takes the policy from the checkpoint rather than from this
+allocation's flags.
+
+A checkpoint dumped with --tcp-established has to be restored with it too, and
+the allocation doing the restore may have been started with different flags —
+or, in the fresh-allocation case this whole feature exists for, by a different
+person entirely.
+*/
+func (c *criuCheckpointer) restoreNetworkPolicy(checkpointDir string) NetworkPolicy {
+	m, err := ReadManifest(checkpointDir)
+	if err != nil || m.Network == "" {
+		return c.networkPolicy()
+	}
+	return m.Network
+}

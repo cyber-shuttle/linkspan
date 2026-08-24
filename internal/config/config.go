@@ -9,10 +9,16 @@ type LinkspanConfig struct {
 	ServerHost string `yaml:"server_host"`
 	SocketPath string `yaml:"socket_path"`
 
-	CRIUPath             string   `yaml:"criu_path"`
-	SupportGpuCheckpoint bool     `yaml:"support_gpu_checkpoint"`
-	AdditionalCriuOpts   []string `yaml:"additional_criu_opts"`
-	DumpDirRoot          string   `yaml:"dump_dir_root"`
+	CRIUPath               string   `yaml:"criu_path"`
+	SupportGpuCheckpoint   bool     `yaml:"support_gpu_checkpoint"`
+	AdditionalCriuOpts     []string `yaml:"additional_criu_opts"`
+	CheckpointRoot         string   `yaml:"checkpoint_root"`
+	CheckpointMode         string   `yaml:"checkpoint_mode"`
+	CudaCheckpointPath     string   `yaml:"cuda_checkpoint_path"`
+	CriuLibDir             string   `yaml:"criu_libdir"`
+	CheckpointNetwork      string   `yaml:"checkpoint_network"`
+	WorkloadID             string   `yaml:"workload_id"`
+	AllowedCheckpointUsers []string `yaml:"allowed_checkpoint_users"`
 
 	TunnelApi                string        `yaml:"tunnel_api"`
 	EnableAPITunnelAtStartup bool          `yaml:"enable_api_tunnel_at_startup"`
@@ -28,10 +34,22 @@ type LinkspanConfig struct {
 	Date    string `yaml:"date"`
 	Version string `yaml:"version"`
 
+	WorkflowPath             string `yaml:"workflow_path"`
 	ForkCommand              string `yaml:"fork_command"`
 	ShutdownOnForkCompletion bool   `yaml:"shutdown_on_fork_completion"`
 	CheckpointForkAfterDelay int64  `yaml:"checkpoint_fork_after_delay"`
-	RestorePath              string `yaml:"restore_path"`
+	RestoreCheckpointID      string `yaml:"restore_checkpoint_id"`
+
+	// Prerequisites the new allocation must satisfy before a CRIU restore.
+	RestorePreCommands  []string `yaml:"restore_pre_commands"`
+	RestoreEnsureDirs   []string `yaml:"restore_ensure_dirs"`
+	RestoreRequireFiles []string `yaml:"restore_require_files"`
+	RestoreForce        bool     `yaml:"restore_force"`
+
+	// Automatic checkpointing before a Slurm allocation expires.
+	CheckpointBeforeWalltime time.Duration `yaml:"checkpoint_before_walltime"`
+	CheckpointSignal         string        `yaml:"checkpoint_signal"`
+	CheckpointOnSigterm      bool          `yaml:"checkpoint_on_sigterm"`
 }
 
 func NewDefaultLinkspanConfig() *LinkspanConfig {
@@ -42,7 +60,13 @@ func NewDefaultLinkspanConfig() *LinkspanConfig {
 		CRIUPath:                 "",
 		SupportGpuCheckpoint:     false,
 		AdditionalCriuOpts:       []string{},
-		DumpDirRoot:              "/tmp/linkspan_dumps",
+		CheckpointRoot:           "",
+		CheckpointMode:           "auto",
+		CudaCheckpointPath:       "",
+		CriuLibDir:               "",
+		CheckpointNetwork:        "reconstruct",
+		WorkloadID:               "",
+		AllowedCheckpointUsers:   []string{},
 		TunnelApi:                "devtunnels",
 		EnableAPITunnelAtStartup: false,
 		TunnelId:                 "",
@@ -51,9 +75,17 @@ func NewDefaultLinkspanConfig() *LinkspanConfig {
 		TunnelRetries:            3,
 		TunnelRetryDelay:         2 * time.Second,
 		TunnelAttemptTimeout:     10 * time.Second,
+		WorkflowPath:             "",
 		ForkCommand:              "",
 		ShutdownOnForkCompletion: false,
 		CheckpointForkAfterDelay: 0,
-		RestorePath:              "",
+		RestoreCheckpointID:      "",
+		RestorePreCommands:       []string{},
+		RestoreEnsureDirs:        []string{},
+		RestoreRequireFiles:      []string{},
+		RestoreForce:             false,
+		CheckpointBeforeWalltime: 0,
+		CheckpointSignal:         "SIGUSR1",
+		CheckpointOnSigterm:      true,
 	}
 }

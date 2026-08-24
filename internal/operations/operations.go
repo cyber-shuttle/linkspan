@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/cyber-shuttle/linkspan/internal/config"
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
+	"github.com/cyber-shuttle/linkspan/subsystems/checkpoint"
 	"github.com/cyber-shuttle/linkspan/subsystems/fork"
 	"github.com/cyber-shuttle/linkspan/subsystems/mount"
 	"github.com/cyber-shuttle/linkspan/subsystems/tunnel"
@@ -91,6 +92,17 @@ func StartAPIDevTunnel(tunnelToken string, tunnelID string,
 	return nil
 }
 
+// repeatableFlag collects a flag given more than once, for values that
+// cannot be comma-separated because they are shell commands or paths.
+type repeatableFlag []string
+
+func (r *repeatableFlag) String() string { return strings.Join(*r, ", ") }
+
+func (r *repeatableFlag) Set(value string) error {
+	*r = append(*r, value)
+	return nil
+}
+
 func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	versionFlag := flag.Bool("version", false, "print version information and exit")
 	verboseVersionFlag := flag.Bool("verbose-version", false, "print verbose version information and exit")
@@ -105,15 +117,34 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	tunnelAttemptTimeout := flag.Duration("tunnel-attempt-timeout", 10*time.Second, "timeout per tunnel setup attempt")
 	serverPortFlag := flag.Int("port", 8080, "port for the HTTP server to listen on")
 	serverHostFlag := flag.String("host", "0.0.0.0", "host/IP for the HTTP server to bind to")
+	workflowPath := flag.String("workflow", "", "YAML workflow to run once the server is up; \"-\" reads it from stdin")
 	forkCommand := flag.String("fork-command", "", "command to execute as a fork process")
 	shutdownOnForkCompletionFlag := flag.String("shutdown-on-fork-completion", "false", "gracefully shutdown when fork process completes (true/false)")
 	socketPath := flag.String("socket", "", "also listen on this unix socket path (in-cluster access via `srun --jobid`)")
 	criuPath := flag.String("criu-path", "", "path to the CRIU binary")
 	supportGpuCheckpointFlag := flag.String("support-gpu-checkpoint", "false", "enable GPU checkpoint support (true/false)")
 	additionalCriuOptsFlag := flag.String("additional-criu-opts", "", "comma-separated list of additional CRIU options")
-	dumpDirRoot := flag.String("dump-dir-root", "/tmp/linkspan_dumps", "root directory for CRIU checkpoint dumps")
-	checkpointForkAfterDelay := flag.Int64("checkpoint-fork-after-delay", 0, "delay in seconds after fork process start before triggering checkpoint")
-	restorePath := flag.String("restore-path", "", "path to the restore directory")
+	checkpointMode := flag.String("checkpoint-mode", "auto", "checkpoint mode: auto (engage GPU support when the process uses a GPU), cpu, or gpu")
+	cudaCheckpointPath := flag.String("cuda-checkpoint-path", "", "path to NVIDIA's cuda-checkpoint binary; looked up on PATH when unset")
+	criuLibDir := flag.String("criu-libdir", "", "CRIU plugin directory (passed as --libdir), holding cuda_plugin.so; probed under /usr/local/lib/criu, /usr/lib/criu, /usr/lib64/criu when unset")
+	criuPluginDir := flag.String("criu-plugin-dir", "", "deprecated alias for --criu-libdir")
+	checkpointNetwork := flag.String("checkpoint-network", "reconstruct", "network state policy: reconstruct (rebuild sockets in the new allocation) or migrate (carry established TCP connections, adds CRIU --tcp-established)")
+	checkpointOnSigtermFlag := flag.String("checkpoint-on-sigterm", "true", "take a last-chance checkpoint on SIGTERM when walltime checkpointing is armed (true/false)")
+	checkpointRoot := flag.String("checkpoint-root", "", "root directory for durable checkpoint storage; must be shared storage reachable from any allocation (e.g. Lustre, GPFS, NFS, project scratch)")
+	workloadID := flag.String("workload-id", "", "logical workload identity checkpoints are grouped under; auto-generated and logged if not provided")
+	checkpointForkAfterDelay := flag.Int64("checkpoint-fork-after-delay", 0, "EXPERIMENTAL test path: seconds after the fork process starts before checkpointing it; use --checkpoint-before-walltime for real workloads")
+	restoreCheckpoint := flag.String("restore-checkpoint", "", "checkpoint id to restore (its workload is resolved automatically)")
+	restoreCheckpointID := flag.String("restore-checkpoint-id", "", "deprecated alias for --restore-checkpoint")
+	checkpointBeforeWalltime := flag.String("checkpoint-before-walltime", "", "checkpoint this long before the Slurm allocation ends, e.g. 5m or 90s; empty or 0 disables automatic walltime checkpointing")
+	checkpointSignal := flag.String("checkpoint-signal", "SIGUSR1", "signal the scheduler sends as an early walltime warning (match sbatch --signal=<sig>@<seconds>)")
+	restoreForceFlag := flag.String("restore-force", "false", "restore even when compatibility checks fail, downgrading their errors to warnings (true/false)")
+
+	var restorePreCommands, restoreEnsureDirs, restoreRequireFiles repeatableFlag
+	flag.Var(&restorePreCommands, "restore-pre-command", "shell command to run before a CRIU restore to reconstruct the environment (mount storage, load modules, stage credentials); repeatable, runs in order")
+	flag.Var(&restoreEnsureDirs, "restore-ensure-dir", "directory that must exist before a CRIU restore; created if missing (repeatable)")
+	flag.Var(&restoreRequireFiles, "restore-require-file", "file that must exist before a CRIU restore, e.g. a credential (repeatable)")
+
+	allowedCheckpointUsersFlag := flag.String("allowed-checkpoint-users", "", "comma-separated list of usernames/uids allowed to be checkpointed (default: linkspan's own user only); use \"*\" to allow any user")
 	flag.Parse()
 
 	// Parse boolean flags
@@ -127,12 +158,58 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 		log.Fatalf("invalid value for --support-gpu-checkpoint: %s (expected true or false)", *supportGpuCheckpointFlag)
 	}
 
+	restoreForce, err := strconv.ParseBool(*restoreForceFlag)
+	if err != nil {
+		log.Fatalf("invalid value for --restore-force: %s (expected true or false)", *restoreForceFlag)
+	}
+
 	// Parse additional CRIU options (comma-separated)
 	var additionalCriuOpts []string
 	if *additionalCriuOptsFlag != "" {
 		additionalCriuOpts = strings.Split(*additionalCriuOptsFlag, ",")
 		for i := range additionalCriuOpts {
 			additionalCriuOpts[i] = strings.TrimSpace(additionalCriuOpts[i])
+		}
+	}
+
+	// An unparseable margin must not silently disable walltime checkpointing:
+	// the whole point of the flag is that the job is expected to be saved.
+	var checkpointBeforeWalltimeDuration time.Duration
+	if trimmed := strings.TrimSpace(*checkpointBeforeWalltime); trimmed != "" {
+		parsed, err := time.ParseDuration(trimmed)
+		if err != nil {
+			log.Fatalf("invalid value for --checkpoint-before-walltime: %s (expected a duration such as 5m or 90s)", *checkpointBeforeWalltime)
+		}
+		if parsed < 0 {
+			log.Fatalf("invalid value for --checkpoint-before-walltime: %s (must not be negative)", *checkpointBeforeWalltime)
+		}
+		checkpointBeforeWalltimeDuration = parsed
+	}
+	// A bad mode must fail at startup, not at the first checkpoint: by then
+	// the allocation may be minutes from expiring.
+	if err := checkpoint.ValidateMode(*checkpointMode); err != nil {
+		log.Fatalf("invalid value for --checkpoint-mode: %v", err)
+	}
+	if err := checkpoint.ValidateNetworkPolicy(*checkpointNetwork); err != nil {
+		log.Fatalf("invalid value for --checkpoint-network: %v", err)
+	}
+	checkpointOnSigterm, err := strconv.ParseBool(*checkpointOnSigtermFlag)
+	if err != nil {
+		log.Fatalf("invalid value for --checkpoint-on-sigterm: %s (expected true or false)", *checkpointOnSigtermFlag)
+	}
+	if *checkpointForkAfterDelay > 0 {
+		log.Printf("warning: --checkpoint-fork-after-delay is an experimental test path and will be removed; use --checkpoint-before-walltime")
+	}
+	if _, err := checkpoint.ParseSignal(*checkpointSignal); err != nil {
+		log.Fatalf("invalid value for --checkpoint-signal: %v", err)
+	}
+
+	// Parse allowed checkpoint users (comma-separated)
+	var allowedCheckpointUsers []string
+	if *allowedCheckpointUsersFlag != "" {
+		allowedCheckpointUsers = strings.Split(*allowedCheckpointUsersFlag, ",")
+		for i := range allowedCheckpointUsers {
+			allowedCheckpointUsers[i] = strings.TrimSpace(allowedCheckpointUsers[i])
 		}
 	}
 
@@ -146,15 +223,29 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	c.TunnelAttemptTimeout = *tunnelAttemptTimeout
 	c.ServerPort = *serverPortFlag
 	c.ServerHost = *serverHostFlag
+	c.WorkflowPath = *workflowPath
 	c.ForkCommand = *forkCommand
 	c.ShutdownOnForkCompletion = shutdownOnForkCompletion
-	c.RestorePath = *restorePath
+	c.RestoreCheckpointID = resolveRenamedFlag(restoreCheckpoint, restoreCheckpointID, "restore-checkpoint", "restore-checkpoint-id")
 	c.SocketPath = *socketPath
 	c.CRIUPath = *criuPath
 	c.SupportGpuCheckpoint = supportGpuCheckpoint
 	c.AdditionalCriuOpts = additionalCriuOpts
-	c.DumpDirRoot = *dumpDirRoot
+	c.CheckpointRoot = *checkpointRoot
+	c.CheckpointMode = *checkpointMode
+	c.CudaCheckpointPath = *cudaCheckpointPath
+	c.CriuLibDir = resolveRenamedFlag(criuLibDir, criuPluginDir, "criu-libdir", "criu-plugin-dir")
+	c.CheckpointNetwork = *checkpointNetwork
+	c.CheckpointOnSigterm = checkpointOnSigterm
+	c.WorkloadID = *workloadID
+	c.AllowedCheckpointUsers = allowedCheckpointUsers
 	c.CheckpointForkAfterDelay = *checkpointForkAfterDelay
+	c.CheckpointBeforeWalltime = checkpointBeforeWalltimeDuration
+	c.CheckpointSignal = *checkpointSignal
+	c.RestorePreCommands = restorePreCommands
+	c.RestoreEnsureDirs = restoreEnsureDirs
+	c.RestoreRequireFiles = restoreRequireFiles
+	c.RestoreForce = restoreForce
 	if *versionFlag {
 		fmt.Printf("%s\n", c.Version)
 		os.Exit(0)
@@ -198,4 +289,26 @@ func CleanupResources(c config.LinkspanConfig) {
 	tunnel.DeleteAllFRPTunnels()
 	vscode.StopAllSSHServers()
 	log.Println("Resource cleanup completed.")
+}
+
+/*
+resolveRenamedFlag accepts a flag under both its current and its former name.
+
+Old names stay working for a release so existing job scripts do not break the
+day they are renamed, but they warn, and giving both names conflicting values
+is an error rather than a silent pick.
+*/
+func resolveRenamedFlag(current, deprecated *string, currentName, deprecatedName string) string {
+	switch {
+	case *current != "" && *deprecated != "":
+		if *current != *deprecated {
+			log.Fatalf("--%s and --%s are the same setting given different values; use --%s", currentName, deprecatedName, currentName)
+		}
+		return *current
+	case *deprecated != "":
+		log.Printf("warning: --%s is deprecated and will be removed; use --%s", deprecatedName, currentName)
+		return *deprecated
+	default:
+		return *current
+	}
 }

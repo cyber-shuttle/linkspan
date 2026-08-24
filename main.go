@@ -16,6 +16,7 @@ import (
 	"github.com/cyber-shuttle/linkspan/internal/controller"
 	"github.com/cyber-shuttle/linkspan/internal/logstream"
 	ops "github.com/cyber-shuttle/linkspan/internal/operations"
+	"github.com/cyber-shuttle/linkspan/internal/workflow"
 	"github.com/cyber-shuttle/linkspan/subsystems/checkpoint"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs"
 	"github.com/gorilla/mux"
@@ -52,11 +53,41 @@ func main() {
 	// Support users passing `--tunnel-api=devtunnels` by trimming leading '='
 	apiTunnelType := strings.TrimLeft(c.TunnelApi, "=")
 
-	ctx, stop := signal.NotifyContext(context.Background(),
-		os.Interrupt,    // Ctrl+C
-		syscall.SIGTERM, // termination (reliable on Linux/macOS)
-	)
+	// The walltime guard takes ownership of SIGTERM when it is armed: a
+	// last-chance checkpoint has to run *because* of that signal, and a
+	// context cancelled by it would abort the very dump it asked for.
+	// Ctrl+C still shuts down immediately either way.
+	walltimeArmed := c.CheckpointBeforeWalltime > 0 && c.CRIUPath != "" && c.CheckpointRoot != ""
+	shutdownSignals := []os.Signal{os.Interrupt, syscall.SIGTERM}
+	if walltimeArmed && c.CheckpointOnSigterm {
+		shutdownSignals = []os.Signal{os.Interrupt}
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), shutdownSignals...)
 	defer stop()
+
+	// guardCtx deliberately does not descend from ctx, so the guard outlives
+	// the shutdown signal long enough to finish writing a checkpoint.
+	guardCtx, cancelGuard := context.WithCancel(context.Background())
+	defer cancelGuard()
+
+	restoreRequested := c.RestoreCheckpointID != ""
+	if restoreRequested && c.ForkCommand != "" {
+		log.Fatalf("Can not perform restore and fork execution at same time")
+	}
+
+	// A restore inherits its workload id from the checkpoint, so only a
+	// fresh workload needs one minted here.
+	if c.WorkloadID == "" && !restoreRequested {
+		c.WorkloadID = checkpoint.NewWorkloadID()
+		log.Printf("No --workload-id provided; generated workload id %s (record this to restore this workload later)", c.WorkloadID)
+	}
+
+	// svc is the only thing main.go talks to for checkpoint/restore — all
+	// CRIU mechanics live behind it in the checkpoint package. Installed
+	// before the routes are served so /checkpoints has something to act on.
+	svc := checkpoint.NewCheckpointService(c)
+	checkpoint.GlobalCheckpointService = svc
 
 	r := mux.NewRouter()
 	api := r.PathPrefix("/api/v1").Subrouter()
@@ -102,25 +133,37 @@ func main() {
 		log.Printf("also listening on unix socket %s", c.SocketPath)
 	}
 
-	if c.RestorePath != "" && c.ForkCommand != "" {
-		log.Fatalf("Can not perform restore and fork execution at same time")
-	}
-
-	if c.RestorePath != "" {
-		log.Printf("Restoring from path %s", c.RestorePath)
-		cp := &checkpoint.CriuCheckpointer{CriuPath: c.CRIUPath, SupportGpuCheckpoint: c.SupportGpuCheckpoint,
-			AdditionalCriuOpts: c.AdditionalCriuOpts, DumpDirRoot: c.DumpDirRoot}
-		intProcess, err := cp.RestoreProcess(c.RestorePath, c.ShutdownOnForkCompletion)
-
+	if restoreRequested {
+		log.Printf("Restoring checkpoint %s", c.RestoreCheckpointID)
+		result, err := svc.RestoreCheckpoint(ctx, c.RestoreCheckpointID, checkpoint.RestoreOptions{
+			ShutdownOnCompletion: c.ShutdownOnForkCompletion,
+			PreRestoreCommands:   c.RestorePreCommands,
+			EnsureDirs:           c.RestoreEnsureDirs,
+			RequireFiles:         c.RestoreRequireFiles,
+			Force:                c.RestoreForce,
+		})
 		if err != nil {
-			log.Fatalf("Failed to restore process from path %s: %v", c.RestorePath, err)
+			log.Fatalf("Failed to restore checkpoint %s: %v", c.RestoreCheckpointID, err)
 		}
+
+		// The restored workload keeps the identity recorded in the
+		// checkpoint, so this allocation reports the same workload id as
+		// the allocation that checkpointed it.
+		c.WorkloadID = result.WorkloadID
+		svc.SetDefaultWorkloadID(result.WorkloadID)
+		log.Printf("Restore completed successfully (workload=%s process_id=%s pid=%d)", result.WorkloadID, result.ProcessID, result.Pid)
+
+		armWalltimeGuard(guardCtx, c, svc, result.WorkloadID, result.ProcessID, walltimeArmed)
 
 		if c.CheckpointForkAfterDelay > 0 {
-			log.Printf("waiting %d seconds before checkpointing restored process %s", c.CheckpointForkAfterDelay, intProcess)
-			cp.CheckpointProcessAfterDelay(intProcess, c.CheckpointForkAfterDelay)
+			log.Printf("waiting %d seconds before re-checkpointing restored process %s", c.CheckpointForkAfterDelay, result.ProcessID)
+			target := checkpoint.TargetFromProcessID(result.ProcessID)
+			opts := checkpoint.CreateOptions{WorkloadID: result.WorkloadID, Trigger: checkpoint.TriggerManual}
+			delay := time.Duration(c.CheckpointForkAfterDelay) * time.Second
+			if err := svc.ScheduleCheckpoint(ctx, target, opts, delay); err != nil {
+				log.Printf("failed to schedule checkpoint for restored process %s: %v", result.ProcessID, err)
+			}
 		}
-		log.Printf("Restore completed successfully")
 	}
 
 	// Start fork process if specified
@@ -130,11 +173,16 @@ func main() {
 			log.Fatalf("Failed to start fork process: %v", err)
 		}
 
+		armWalltimeGuard(guardCtx, c, svc, c.WorkloadID, internalProcessId, walltimeArmed)
+
 		if c.CheckpointForkAfterDelay > 0 && c.CRIUPath != "" {
 			log.Printf("waiting %d seconds before checkpointing fork process %s", c.CheckpointForkAfterDelay, internalProcessId)
-			cp := &checkpoint.CriuCheckpointer{CriuPath: c.CRIUPath, SupportGpuCheckpoint: c.SupportGpuCheckpoint,
-				AdditionalCriuOpts: c.AdditionalCriuOpts, DumpDirRoot: c.DumpDirRoot}
-			cp.CheckpointProcessAfterDelay(internalProcessId, c.CheckpointForkAfterDelay)
+			target := checkpoint.TargetFromProcessID(internalProcessId)
+			opts := checkpoint.CreateOptions{WorkloadID: c.WorkloadID, Trigger: checkpoint.TriggerManual}
+			delay := time.Duration(c.CheckpointForkAfterDelay) * time.Second
+			if err := svc.ScheduleCheckpoint(ctx, target, opts, delay); err != nil {
+				log.Printf("failed to schedule checkpoint for process %s: %v", internalProcessId, err)
+			}
 		}
 	}
 
@@ -144,6 +192,15 @@ func main() {
 		err := srv.Serve(listener)
 		serverErr <- err
 	}()
+
+	// The workflow starts only once the server is listening: its actions drive
+	// linkspan's own subsystems, and a tunnel or vscode step expects the bound
+	// port to already be real.
+	if c.WorkflowPath != "" {
+		if err := startWorkflow(ctx, c); err != nil {
+			log.Fatalf("failed to load workflow %s: %v", c.WorkflowPath, err)
+		}
+	}
 
 	select {
 	case <-ctx.Done():
@@ -187,4 +244,94 @@ func listenUnix(srv *http.Server, path string) (net.Listener, error) {
 		}
 	}()
 	return ln, nil
+}
+
+/*
+armWalltimeGuard turns on automatic checkpointing before the Slurm allocation
+expires, for whichever application this allocation is running — one just
+started, or one just restored from an earlier allocation.
+
+Linkspan never submits the next allocation itself: it writes the checkpoint and
+logs the id, and an external script hands that id to the next sbatch.
+*/
+func armWalltimeGuard(ctx context.Context, c *config.LinkspanConfig, svc *checkpoint.CheckpointService, workloadID, processID string, armed bool) {
+	if !armed {
+		return
+	}
+	if !checkpoint.InSlurm() {
+		log.Printf("--checkpoint-before-walltime is set but SLURM_JOB_ID is unset; walltime checkpointing only applies inside a Slurm allocation")
+		return
+	}
+
+	sig, err := checkpoint.ParseSignal(c.CheckpointSignal)
+	if err != nil {
+		log.Printf("walltime checkpointing disabled: %v", err)
+		return
+	}
+
+	guard := checkpoint.NewWalltimeGuard(
+		svc,
+		checkpoint.TargetFromProcessID(processID),
+		checkpoint.CreateOptions{WorkloadID: workloadID},
+		checkpoint.NewSlurmDeadlineProvider(),
+		checkpoint.WalltimeOptions{
+			Margin:              c.CheckpointBeforeWalltime,
+			PreWalltimeSignals:  []os.Signal{sig},
+			CheckpointOnSigterm: c.CheckpointOnSigterm,
+			// The allocation is ending anyway, so release it as soon as the
+			// checkpoint is durable rather than idling until walltime.
+			ShutdownAfterCheckpoint: true,
+		},
+	)
+
+	if err := guard.Start(ctx); err != nil {
+		log.Printf("failed to arm walltime checkpointing for process %s: %v", processID, err)
+		return
+	}
+	log.Printf("walltime checkpointing armed for Slurm job %s: workload %s will be checkpointed %s before the allocation ends, or on %s",
+		checkpoint.SlurmJobID(), workloadID, c.CheckpointBeforeWalltime, sig)
+}
+
+/*
+startWorkflow loads the workflow and runs it in the background.
+
+A failing step is logged rather than fatal, and the HTTP server keeps serving:
+the workflow is one way to drive linkspan, not the reason the process exists —
+an operator still needs /status to see what failed, and the tunnel to reach it.
+
+ctx is the shutdown context, which Engine.Run checks between steps, so a signal
+interrupts a workflow without waiting for the current step.
+*/
+func startWorkflow(ctx context.Context, c *config.LinkspanConfig) error {
+	var (
+		wf  *workflow.WorkflowConfig
+		err error
+	)
+	if c.WorkflowPath == "-" {
+		wf, err = workflow.LoadReader(os.Stdin)
+	} else {
+		wf, err = workflow.LoadFile(c.WorkflowPath)
+	}
+	if err != nil {
+		return err
+	}
+
+	// Seed the variables a workflow cannot discover for itself, so steps can
+	// interpolate this allocation's identity with {{.WorkloadID}} and friends.
+	engine := workflow.NewEngine(workflow.DefaultRegistry(), map[string]any{
+		"WorkloadID":     c.WorkloadID,
+		"ServerHost":     c.ServerHost,
+		"ServerPort":     c.ServerPort,
+		"CheckpointRoot": c.CheckpointRoot,
+		"SlurmJobID":     checkpoint.SlurmJobID(),
+	})
+	workflow.GlobalEngine = engine
+
+	log.Printf("running workflow %q (%d steps) from %s", wf.Name, len(wf.Steps), c.WorkflowPath)
+	go func() {
+		if err := engine.Run(ctx, wf); err != nil {
+			log.Printf("workflow %q failed: %v", wf.Name, err)
+		}
+	}()
+	return nil
 }
