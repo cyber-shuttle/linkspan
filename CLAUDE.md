@@ -75,7 +75,8 @@ how they are passed.
 
 A workflow is a `name` and a list of `steps`, run in order, stopping at the first failure. `shell.exec` is
 the only action: `params.command` is split on whitespace and run without a shell, so nothing is expanded.
-Cancellation is checked between steps; the current step is not preempted.
+Cancelling the context kills the running step (`exec.CommandContext`, i.e. SIGKILL with no chance to
+clean up) and stops the workflow.
 
 A step's output goes straight to linkspan's stdout as it happens, not captured and logged afterwards: a
 step that daemonises (cs-control ends with `setsid --fork python -m jupyter_server`) keeps the descriptors

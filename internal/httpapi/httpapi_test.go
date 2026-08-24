@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -128,4 +129,75 @@ func TestListenUnixSocketIsNotGroupOrWorldAccessible(t *testing.T) {
 	if perm := info.Mode().Perm(); perm&0o077 != 0 {
 		t.Fatalf("socket mode %v; group and other must have no access", perm)
 	}
+}
+
+// cs-bridge reads these bodies, not just the status codes.
+func TestContractResponseBodies(t *testing.T) {
+	t.Cleanup(sshd.StopAll)
+
+	get := func(path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		Mux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", path, rec.Code)
+		}
+		return rec
+	}
+
+	if got := strings.TrimSpace(get("/api/v1/health").Body.String()); got != `{"status":"ok"}` {
+		t.Fatalf("health body = %s, want {\"status\":\"ok\"}", got)
+	}
+
+	// A JSON object, so absent sources are omitted rather than sent as zeroes.
+	var snap map[string]any
+	if err := json.Unmarshal(get("/api/v1/metrics").Body.Bytes(), &snap); err != nil {
+		t.Fatalf("metrics body is not an object: %v (%s)", err, get("/api/v1/metrics").Body)
+	}
+
+	_, _, err := startTestSession(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sessions []struct {
+		ID    string `json:"id"`
+		State string `json:"state"`
+		Addr  string `json:"addr"`
+	}
+	if err := json.Unmarshal(get("/api/v1/vscode/sessions").Body.Bytes(), &sessions); err != nil {
+		t.Fatalf("sessions body is not the documented array: %v", err)
+	}
+	if len(sessions) == 0 {
+		t.Fatal("no sessions listed after creating one")
+	}
+	s := sessions[0]
+	if s.ID == "" || s.Addr == "" {
+		t.Fatalf("id/addr missing from %+v", s)
+	}
+	if s.State != "running" {
+		t.Fatalf("state = %q, want %q -- cs-bridge compares against this literal", s.State, "running")
+	}
+}
+
+// startTestSession creates one through the real route and returns its id/port.
+func startTestSession(t *testing.T) (string, int32, error) {
+	t.Helper()
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return "", 0, err
+	}
+	signer, err := gossh.NewSignerFromKey(private)
+	if err != nil {
+		return "", 0, err
+	}
+	body := `{"authorized_key":` + strconv.Quote(string(gossh.MarshalAuthorizedKey(signer.PublicKey()))) + `}`
+	rec := httptest.NewRecorder()
+	Mux().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/vscode/sessions", strings.NewReader(body)))
+	if rec.Code != http.StatusCreated {
+		return "", 0, fmt.Errorf("create = %d: %s", rec.Code, rec.Body)
+	}
+	var out struct {
+		ID       string `json:"id"`
+		BindPort int32  `json:"bind_port"`
+	}
+	return out.ID, out.BindPort, json.Unmarshal(rec.Body.Bytes(), &out)
 }
