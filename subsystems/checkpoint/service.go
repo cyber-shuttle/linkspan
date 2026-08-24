@@ -209,9 +209,16 @@ func (s *CheckpointService) resolveTarget(target CheckpointTarget) (pid int, pro
 	}
 }
 
-// CreateCheckpoint checkpoints target under opts.WorkloadID. Only one
-// checkpoint or restore may be in flight for a given workload at a time —
-// a concurrent call on the same workload fails fast with ErrWorkloadBusy.
+/*
+CreateCheckpoint checkpoints target under opts.WorkloadID.
+
+Every way of asking for a checkpoint arrives here and nowhere else — a REST
+request, a workflow action, the walltime watcher, the scheduler's pre-walltime
+signal, and the SIGTERM fallback — so the preflight checks, the manifest, and
+the state machine cannot diverge between them. Only one checkpoint or restore
+may be in flight for a workload at a time; a concurrent call on the same
+workload fails fast with ErrWorkloadBusy.
+*/
 func (s *CheckpointService) CreateCheckpoint(ctx context.Context, target CheckpointTarget, opts CreateOptions) (*CheckpointResult, error) {
 	if err := opts.applyDefaults(); err != nil {
 		return nil, err
