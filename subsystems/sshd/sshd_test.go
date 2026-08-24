@@ -152,7 +152,7 @@ func TestSupervisorStopHonored(t *testing.T) {
 // sftp and streamlocal have no cs-bridge caller to notice they went missing.
 func TestNewServerWiring(t *testing.T) {
 	_, key := testKeyPair(t)
-	srv := newServer(":0", key)
+	srv := newServer(key)
 
 	if srv.Handler == nil || srv.PublicKeyHandler == nil || srv.PasswordHandler != nil ||
 		srv.ConnCallback == nil || srv.LocalPortForwardingCallback == nil || srv.ReversePortForwardingCallback == nil {
@@ -193,7 +193,7 @@ func TestDirectStreamLocalForwarding(t *testing.T) {
 	}()
 
 	signer, authorizedKey := testKeyPair(t)
-	srv := newServer("127.0.0.1:0", authorizedKey)
+	srv := newServer(authorizedKey)
 	tl, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -283,7 +283,6 @@ func TestRunHostCommandReportsAnUnrunnableCommand(t *testing.T) {
 	}
 }
 
-// Stderr() returns nil to exercise the fallback onto the session's main stream.
 type captureSession struct {
 	ssh.Session
 	mu   sync.Mutex
@@ -297,7 +296,7 @@ func (c *captureSession) Write(p []byte) (int, error) {
 	defer c.mu.Unlock()
 	return c.out.Write(p)
 }
-func (c *captureSession) Stderr() io.ReadWriter { return nil }
+func (c *captureSession) Stderr() io.ReadWriter { return c }
 func (c *captureSession) Exit(code int) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
