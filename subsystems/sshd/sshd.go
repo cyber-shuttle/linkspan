@@ -1,3 +1,11 @@
+// Package sshd is linkspan's embedded SSH server, organized as two blocks —
+// SERVER START and CLIENT CONNECT — over shared building blocks. Resilience
+// invariant: every handler boundary is panic-isolated and the supervisor
+// restarts the listener after a fatal exit, so one bad connection can never
+// take linkspan down.
+//
+// It knows nothing about its callers: subsystems/vscode is the REST surface
+// that drives it for VS Code Remote-SSH, and it is the only caller today.
 package sshd
 
 import (
@@ -18,15 +26,6 @@ import (
 	"github.com/pkg/sftp"
 	gossh "golang.org/x/crypto/ssh"
 )
-
-// Package sshd is linkspan's embedded SSH server, organized as two blocks —
-// SERVER START and CLIENT CONNECT — over shared building blocks. Resilience
-// invariant: every handler boundary is panic-isolated and the supervisor
-// restarts the listener after a fatal exit, so one bad connection can never
-// take linkspan down.
-//
-// It knows nothing about its callers: subsystems/vscode is the REST surface
-// that drives it for VS Code Remote-SSH, and it is the only caller today.
 
 // ═══════════════════════════ SERVER START ═══════════════════════════
 
