@@ -2,6 +2,14 @@ package httpapi
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/json"
+	"strconv"
+	"strings"
+
+	"github.com/cyber-shuttle/linkspan/subsystems/sshd"
+	gossh "golang.org/x/crypto/ssh"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -49,5 +57,51 @@ func TestMuxRoutesTheConsumerContract(t *testing.T) {
 		if _, pattern := mux.Handler(httptest.NewRequest(r[0], r[1], nil)); pattern == "" {
 			t.Errorf("%s %s is not routed", r[0], r[1])
 		}
+	}
+}
+
+// cs-bridge parses {"id":"s-<port>","bind_port":<port>} and strips the "s-" to
+// get the port (linkspanSupport.ts). Renaming either field, changing the id
+// shape, or answering anything but 201 breaks it on the next release.
+func TestCreateSessionResponseShape(t *testing.T) {
+	t.Cleanup(sshd.StopAll)
+
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := gossh.NewSignerFromKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"authorized_key":` + strconv.Quote(string(gossh.MarshalAuthorizedKey(signer.PublicKey()))) + `}`
+
+	rec := httptest.NewRecorder()
+	Mux().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/vscode/sessions", strings.NewReader(body)))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body %s", rec.Code, rec.Body)
+	}
+	var got struct {
+		ID       string `json:"id"`
+		BindPort int32  `json:"bind_port"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("response is not the documented object: %v (%s)", err, rec.Body)
+	}
+	if got.BindPort == 0 {
+		t.Fatalf("bind_port missing or zero: %s", rec.Body)
+	}
+	if want := "s-" + strconv.Itoa(int(got.BindPort)); got.ID != want {
+		t.Fatalf("id = %q, want %q", got.ID, want)
+	}
+}
+
+func TestCreateSessionRejectsAnUnusableKey(t *testing.T) {
+	rec := httptest.NewRecorder()
+	Mux().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/vscode/sessions",
+		strings.NewReader(`{"authorized_key":"not-a-key"}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }

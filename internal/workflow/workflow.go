@@ -13,6 +13,8 @@ import (
 
 // shell.exec is the only action. Its command is split on whitespace and run
 // without a shell, so nothing is expanded.
+const actionShellExec = "shell.exec"
+
 type Config struct {
 	Name  string `yaml:"name"`
 	Steps []struct {
@@ -38,13 +40,18 @@ func LoadFile(path string) (*Config, error) {
 
 // ctx is checked between steps; the running step is not preempted.
 func Run(ctx context.Context, wf *Config) error {
+	// Reject the whole document first: a typo in the last step should not be
+	// found only after the earlier ones have already changed the node.
+	for i, step := range wf.Steps {
+		if step.Action != actionShellExec {
+			return fmt.Errorf("workflow step %d: unknown action %q", i+1, step.Action)
+		}
+	}
+
 	log.Printf("workflow: starting %q (%d steps)", wf.Name, len(wf.Steps))
 	for i, step := range wf.Steps {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("workflow cancelled at step %d (%s): %w", i+1, step.Name, err)
-		}
-		if step.Action != "shell.exec" {
-			return fmt.Errorf("workflow step %d: unknown action %q", i+1, step.Action)
 		}
 		log.Printf("workflow: [%d/%d] %s", i+1, len(wf.Steps), step.Name)
 		if err := shellExec(ctx, step.Params.Command); err != nil {

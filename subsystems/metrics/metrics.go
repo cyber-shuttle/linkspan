@@ -44,7 +44,7 @@ func Read(ctx context.Context) Snapshot {
 	return m
 }
 
-func readCgroup[T any](path string, parse func(string) (T, error)) *T {
+func readCgroup(path string, parse func(string) (int64, error)) *int64 {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil
