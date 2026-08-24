@@ -1,4 +1,7 @@
-package vscode
+// Package sshd is linkspan's embedded SSH server. Every handler boundary is
+// panic-isolated and the supervisor restarts the listener, so one bad
+// connection cannot take linkspan down. subsystems/vscode is its only caller.
+package sshd
 
 import (
 	"context"
@@ -19,16 +22,11 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-// SSH server for VS Code sessions, organized as two blocks — SERVER START and
-// CLIENT CONNECT — over shared building blocks. Resilience invariant: every
-// handler boundary is panic-isolated and the supervisor restarts the listener
-// after a fatal exit, so one bad connection can never take linkspan down.
-
 // ═══════════════════════════ SERVER START ═══════════════════════════
 
-// StartSSHServer starts a supervised, auto-restarting SSH
-// server for a session and registers it for later shutdown.
-func StartSSHServer(sessionID, addr string, publicKey string) *SSHServer {
+// Start starts a supervised, auto-restarting SSH server for a
+// session and registers it for later shutdown.
+func Start(sessionID, addr string, publicKey string) *SSHServer {
 	return supervise(sessionID, addr, func() *ssh.Server {
 		return newServer(addr,
 			onConnect(handleSession),
@@ -439,8 +437,8 @@ func snapshotServers() []*SSHServer {
 	return servers
 }
 
-// StopAllSSHServers stops every registered SSH server.
-func StopAllSSHServers() {
+// StopAll stops every registered SSH server.
+func StopAll() {
 	for _, server := range snapshotServers() {
 		if err := server.Close(); err != nil {
 			log.Printf("error stopping ssh server: %v", err)
@@ -456,7 +454,7 @@ type SessionStatus struct {
 	Addr  string `json:"addr,omitempty"`
 }
 
-// status snapshots what a caller of GET /vscode/sessions is shown.
+// status snapshots what a session listing shows.
 func (s *SSHServer) status() *SessionStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -467,7 +465,8 @@ func (s *SSHServer) status() *SessionStatus {
 	}
 }
 
-func listAllSessionStatuses() []*SessionStatus {
+// Statuses reports the state of every registered SSH server.
+func Statuses() []*SessionStatus {
 	servers := snapshotServers()
 	statuses := make([]*SessionStatus, 0, len(servers))
 	for _, server := range servers {

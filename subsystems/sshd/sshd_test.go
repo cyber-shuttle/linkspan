@@ -1,4 +1,4 @@
-package vscode
+package sshd
 
 import (
 	"bytes"
@@ -19,10 +19,10 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-// TestVSCodeSSHServerLifecycle starts a real supervised server, checks it reports
+// TestSSHServerLifecycle starts a real supervised server, checks it reports
 // running, then stops it and confirms it is deregistered.
-func TestVSCodeSSHServerLifecycle(t *testing.T) {
-	s := StartSSHServer("test-session", "127.0.0.1:0", "dummy-key")
+func TestSSHServerLifecycle(t *testing.T) {
+	s := Start("test-session", "127.0.0.1:0", "dummy-key")
 	if s == nil {
 		t.Fatal("failed to start SSH server")
 	}
@@ -326,7 +326,7 @@ func testKeyPair(t *testing.T) (gossh.Signer, string) {
 // Test-only lookups over the live registry, so production keeps only what the
 // two surviving routes need.
 func statusOf(id string) (*SessionStatus, bool) {
-	for _, s := range listAllSessionStatuses() {
+	for _, s := range Statuses() {
 		if s.ID == id {
 			return s, true
 		}

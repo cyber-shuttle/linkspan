@@ -82,8 +82,9 @@ linkspan
 │   ├── workflow/              # YAML workflow: load and run shell.exec steps in order
 │   └── process/               # Process manager for background CLI processes
 ├── subsystems/
-│   ├── vscode/                # Supervised SSH server for VS Code Remote-SSH
-│   └── tunnel/                # devtunnel CLI download + relay hosting
+│   ├── sshd/                  # Supervised SSH server (gliderlabs/ssh) with PTY support
+│   ├── tunnel/                # devtunnel CLI download + relay hosting
+│   └── vscode/                # REST surface for /vscode/sessions; drives sshd
 └── utils/                     # Shared helpers (port finding, JSON responses)
 ```
 

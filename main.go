@@ -18,6 +18,7 @@ import (
 
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
 	"github.com/cyber-shuttle/linkspan/internal/workflow"
+	"github.com/cyber-shuttle/linkspan/subsystems/sshd"
 	"github.com/cyber-shuttle/linkspan/subsystems/tunnel"
 	"github.com/cyber-shuttle/linkspan/subsystems/vscode"
 	"github.com/cyber-shuttle/linkspan/utils"
@@ -123,7 +124,7 @@ func main() {
 		}
 	}
 	pm.GlobalProcessManager.KillAll()
-	vscode.StopAllSSHServers()
+	sshd.StopAll()
 	log.Println("Server gracefully stopped.")
 }
 
