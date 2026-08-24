@@ -237,18 +237,19 @@ func (c *criuCheckpointer) checkpoint(ctx context.Context, processID string, pid
 	log.Printf("[Checkpoint] workload %s checkpointed successfully to %s (checkpoint=%s)", workloadID, checkpointDir, checkpointID)
 
 	return &CheckpointResult{
-		WorkloadID:   workloadID,
-		CheckpointID: checkpointID,
-		ProcessID:    processID,
-		Pid:          pid,
-		ImagesDir:    imagesDir,
-		ManifestPath: filepath.Join(checkpointDir, manifestFileName),
-		LogFile:      filepath.Join(checkpointDir, "dump.log"),
-		ExitCode:     exitCode,
-		Stdout:       stdout.String(),
-		Stderr:       stderr.String(),
-		StartedAt:    startedAt,
-		FinishedAt:   finishedAt,
+		WorkloadID:    workloadID,
+		CheckpointID:  checkpointID,
+		ProcessID:     processID,
+		Pid:           pid,
+		CheckpointDir: checkpointDir,
+		ImagesDir:     imagesDir,
+		ManifestPath:  filepath.Join(checkpointDir, manifestFileName),
+		LogFile:       filepath.Join(checkpointDir, "dump.log"),
+		ExitCode:      exitCode,
+		Stdout:        stdout.String(),
+		Stderr:        stderr.String(),
+		StartedAt:     startedAt,
+		FinishedAt:    finishedAt,
 	}, nil
 }
 

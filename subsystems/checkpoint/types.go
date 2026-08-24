@@ -8,18 +8,19 @@ import (
 
 // CheckpointResult describes the outcome of a successful CRIU dump.
 type CheckpointResult struct {
-	WorkloadID   string
-	CheckpointID string
-	ProcessID    string
-	Pid          int
-	ImagesDir    string // directory containing the CRIU checkpoint images
-	ManifestPath string
-	LogFile      string // CRIU's own dump log, sibling of ImagesDir
-	ExitCode     int
-	Stdout       string
-	Stderr       string
-	StartedAt    time.Time
-	FinishedAt   time.Time
+	WorkloadID    string
+	CheckpointID  string
+	ProcessID     string
+	Pid           int
+	CheckpointDir string // the checkpoint's own directory, parent of ImagesDir
+	ImagesDir     string // directory containing the CRIU checkpoint images
+	ManifestPath  string
+	LogFile       string // CRIU's own dump log, sibling of ImagesDir
+	ExitCode      int
+	Stdout        string
+	Stderr        string
+	StartedAt     time.Time
+	FinishedAt    time.Time
 }
 
 // RestoreResult describes the outcome of a successful CRIU restore. Pid and
