@@ -67,6 +67,7 @@ type Manifest struct {
 	CPUInfo         string            `json:"cpu_info"`
 	GPUMode         bool              `json:"gpu_mode"`
 	GPUInfo         []string          `json:"gpu_info,omitempty"`
+	GPU             *GPUDetails       `json:"gpu,omitempty"`
 	SlurmJobID      string            `json:"slurm_job_id,omitempty"`
 	SlurmNode       string            `json:"slurm_node,omitempty"`
 	CRIUOptions     []string          `json:"criu_options"`
@@ -90,6 +91,7 @@ type manifestParams struct {
 	LinkspanVersion string
 	LinkspanCommit  string
 	GPUMode         bool
+	GPU             *GPUDetails
 	ProcessID       string
 	PID             int
 	CheckpointID    string
@@ -120,6 +122,7 @@ func gatherManifest(ctx context.Context, p manifestParams) *Manifest {
 		OS:              runtime.GOOS,
 		Arch:            runtime.GOARCH,
 		GPUMode:         p.GPUMode,
+		GPU:             p.GPU,
 		State:           StateCreating,
 	}
 

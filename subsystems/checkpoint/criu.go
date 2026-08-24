@@ -25,6 +25,7 @@ type criuCheckpointer struct {
 	AdditionalCriuOpts     []string
 	CheckpointRoot         string
 	AllowedCheckpointUsers []string
+	GPU                    GPUConfig
 	LinkspanVersion        string
 	LinkspanCommit         string
 }
@@ -36,8 +37,12 @@ func newCriuCheckpointer(c *config.LinkspanConfig) *criuCheckpointer {
 		AdditionalCriuOpts:     c.AdditionalCriuOpts,
 		CheckpointRoot:         c.CheckpointRoot,
 		AllowedCheckpointUsers: c.AllowedCheckpointUsers,
-		LinkspanVersion:        c.Version,
-		LinkspanCommit:         c.Commit,
+		GPU: GPUConfig{
+			CudaCheckpointPath: c.CudaCheckpointPath,
+			CriuPluginDir:      c.CriuPluginDir,
+		},
+		LinkspanVersion: c.Version,
+		LinkspanCommit:  c.Commit,
 	}
 }
 
@@ -47,7 +52,7 @@ const (
 	pidFileRetryDelay = 100 * time.Millisecond
 )
 
-func buildDumpArgs(pid int, imagesDir, workDir, logFile string, leaveRunning bool, extra []string) []string {
+func buildDumpArgs(pid int, imagesDir, workDir, logFile string, leaveRunning bool, pluginDir string, extra []string) []string {
 	args := []string{
 		"dump",
 		"-t", strconv.Itoa(pid),
@@ -63,10 +68,15 @@ func buildDumpArgs(pid int, imagesDir, workDir, logFile string, leaveRunning boo
 	if leaveRunning {
 		args = append(args, "--leave-running")
 	}
+	// CRIU only searches its compiled-in plugin directory, so a CUDA plugin
+	// installed anywhere else is invisible without this.
+	if pluginDir != "" {
+		args = append(args, "--libdir", pluginDir)
+	}
 	return append(args, extra...)
 }
 
-func buildRestoreArgs(imagesDir, workDir, logFile, pidFile string, extra []string) []string {
+func buildRestoreArgs(imagesDir, workDir, logFile, pidFile string, pluginDir string, extra []string) []string {
 	args := []string{
 		"restore",
 		"--shell-job",
@@ -77,6 +87,9 @@ func buildRestoreArgs(imagesDir, workDir, logFile, pidFile string, extra []strin
 		"--work-dir", workDir,
 		"--log-file", logFile,
 		"--pidfile", pidFile,
+	}
+	if pluginDir != "" {
+		args = append(args, "--libdir", pluginDir)
 	}
 	return append(args, extra...)
 }
@@ -120,20 +133,46 @@ func awaitPidFile(path string) (int, error) {
 	return 0, err
 }
 
-// resolveGPUMode turns a requested mode into a decision for this host. An
-// explicit "gpu" fails loudly when the tooling is absent; "auto" only engages
-// GPU support when it is actually there.
-func (c *criuCheckpointer) resolveGPUMode(ctx context.Context, mode CheckpointMode) (bool, error) {
+/*
+resolveGPUMode decides whether this checkpoint engages CRIU's CUDA plugin, and
+refuses rather than guessing when the answer would be unsafe.
+
+A CUDA process dumped without the plugin produces a checkpoint that looks
+complete and cannot restore: device state lives outside the address space CRIU
+saves. So a process holding an NVIDIA device is never silently checkpointed in
+CPU mode — not under "auto", and not under an explicit "cpu" either.
+*/
+func (c *criuCheckpointer) resolveGPUMode(ctx context.Context, mode CheckpointMode, pid int) (*GPUDetails, error) {
+	usesGPU, detectErr := ProcessUsesGPU(pid)
+
 	switch mode {
 	case ModeCPU:
-		return false, nil
-	case ModeGPU:
-		if err := checkGpuPrerequisites(ctx); err != nil {
-			return false, fmt.Errorf("checkpoint mode %q requested but this host fails GPU prerequisites: %w", ModeGPU, err)
+		if usesGPU {
+			return nil, fmt.Errorf("process %d has an NVIDIA device open, so checkpoint mode %q would silently produce an unrestorable checkpoint; use mode %q or %q",
+				pid, ModeCPU, ModeGPU, ModeAuto)
 		}
-		return true, nil
-	default:
-		return c.SupportGpuCheckpoint || checkGpuPrerequisites(ctx) == nil, nil
+		return nil, nil
+
+	case ModeGPU:
+		details, err := gpuPreflight(ctx, c.GPU, pid)
+		if err != nil {
+			return nil, fmt.Errorf("checkpoint mode %q requested but GPU preflight failed: %w", ModeGPU, err)
+		}
+		return details, nil
+
+	default: // ModeAuto
+		// The legacy --support-gpu-checkpoint boolean still forces GPU mode.
+		if !usesGPU && !c.SupportGpuCheckpoint {
+			if detectErr != nil {
+				return nil, fmt.Errorf("could not determine whether process %d uses a GPU: %w", pid, detectErr)
+			}
+			return nil, nil
+		}
+		details, err := gpuPreflight(ctx, c.GPU, pid)
+		if err != nil {
+			return nil, fmt.Errorf("process %d is using an NVIDIA GPU but GPU preflight failed, and falling back to a CPU-only checkpoint would produce an unrestorable checkpoint: %w", pid, err)
+		}
+		return details, nil
 	}
 }
 
@@ -164,7 +203,7 @@ func (c *criuCheckpointer) checkpoint(ctx context.Context, processID string, pid
 	if err := checkAllowedUser(pid, c.AllowedCheckpointUsers); err != nil {
 		return nil, fmt.Errorf("CRIU preflight check failed: %w", err)
 	}
-	gpuMode, err := c.resolveGPUMode(ctx, opts.Mode)
+	gpu, err := c.resolveGPUMode(ctx, opts.Mode, pid)
 	if err != nil {
 		return nil, fmt.Errorf("CRIU preflight check failed: %w", err)
 	}
@@ -181,7 +220,8 @@ func (c *criuCheckpointer) checkpoint(ctx context.Context, processID string, pid
 		WorkloadID:      workloadID,
 		LinkspanVersion: c.LinkspanVersion,
 		LinkspanCommit:  c.LinkspanCommit,
-		GPUMode:         gpuMode,
+		GPUMode:         gpu != nil,
+		GPU:             gpu,
 		ProcessID:       processID,
 		PID:             pid,
 		CheckpointID:    checkpointID,
@@ -194,13 +234,22 @@ func (c *criuCheckpointer) checkpoint(ctx context.Context, processID string, pid
 		return nil, fmt.Errorf("failed to write manifest for checkpoint %s: %w", checkpointID, err)
 	}
 
-	args := buildDumpArgs(pid, imagesDir, checkpointDir, "dump.log", opts.leaveRunning(), c.AdditionalCriuOpts)
+	pluginDir := ""
+	if gpu != nil {
+		pluginDir = gpu.CriuPluginDir
+	}
+	args := buildDumpArgs(pid, imagesDir, checkpointDir, "dump.log", opts.leaveRunning(), pluginDir, c.AdditionalCriuOpts)
 	log.Printf("[Checkpoint] executing: %s %s", c.CriuPath, strings.Join(args, " "))
 
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, c.CriuPath, args...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	if gpu != nil {
+		if cudaCheckpoint, err := resolveCudaCheckpoint(c.GPU); err == nil {
+			cmd.Env = gpuCriuEnv(os.Environ(), cudaCheckpoint)
+		}
+	}
 
 	startedAt := time.Now()
 	runErr := cmd.Run()
@@ -288,13 +337,21 @@ func (c *criuCheckpointer) restore(ctx context.Context, workloadID, checkpointID
 		return nil, fmt.Errorf("failed to clear stale pidfile %s: %w", pidFile, err)
 	}
 
-	args := buildRestoreArgs(imagesDir, checkpointDir, "restore.log", "restore.pid", c.AdditionalCriuOpts)
+	// A GPU checkpoint has to be restored with the same plugin that wrote it,
+	// so the plugin directory and cuda-checkpoint's PATH are reconstructed
+	// here from the manifest rather than assumed.
+	pluginDir, cudaCheckpoint := c.gpuRestoreSetup(checkpointDir)
+
+	args := buildRestoreArgs(imagesDir, checkpointDir, "restore.log", "restore.pid", pluginDir, c.AdditionalCriuOpts)
 	log.Printf("[Checkpoint] executing: %s %s", c.CriuPath, strings.Join(args, " "))
 
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, c.CriuPath, args...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	if cudaCheckpoint != "" {
+		cmd.Env = gpuCriuEnv(os.Environ(), cudaCheckpoint)
+	}
 
 	startedAt := time.Now()
 	runErr := cmd.Run()
@@ -328,4 +385,26 @@ func (c *criuCheckpointer) restore(ctx context.Context, workloadID, checkpointID
 		FinishedAt:   finishedAt,
 		Pid:          restoredPid,
 	}, nil
+}
+
+/*
+gpuRestoreSetup reports the CRIU plugin directory and cuda-checkpoint binary a
+restore needs, or empty strings for a CPU-only checkpoint.
+
+It is best-effort on purpose: a GPU checkpoint whose tooling is missing here is
+caught by the restore validation phase, which produces a far better error than
+CRIU failing to load a plugin.
+*/
+func (c *criuCheckpointer) gpuRestoreSetup(checkpointDir string) (pluginDir, cudaCheckpoint string) {
+	m, err := ReadManifest(checkpointDir)
+	if err != nil || !m.GPUMode {
+		return "", ""
+	}
+	if dir, err := resolveCriuPluginDir(c.GPU); err == nil {
+		pluginDir = dir
+	}
+	if path, err := resolveCudaCheckpoint(c.GPU); err == nil {
+		cudaCheckpoint = path
+	}
+	return pluginDir, cudaCheckpoint
 }
