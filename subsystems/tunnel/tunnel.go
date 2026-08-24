@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -11,9 +12,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
-
-	pm "github.com/cyber-shuttle/linkspan/internal/process"
 )
 
 var devtunnelAsset = map[string]string{
@@ -32,6 +32,80 @@ const (
 	hostReadyTimeout = 30 * time.Second
 	hostReadyPoll    = 500 * time.Millisecond
 )
+
+// linkspan hosts exactly one tunnel, so there is exactly one relay. It is
+// package state because main has to stop it on the way out.
+var (
+	relayMu sync.Mutex
+	relay   *process
+)
+
+// StopRelay kills the hosted relay, if any. Without it the devtunnel process
+// outlives linkspan: a child is not killed when its parent exits.
+func StopRelay() {
+	relayMu.Lock()
+	r := relay
+	relay = nil
+	relayMu.Unlock()
+	r.kill()
+}
+
+// process is the running devtunnel CLI. Its output is read while waiting for
+// the ready marker, so the buffer is guarded, and capped: after that wait
+// nothing reads it again and the relay runs for the life of the allocation
+// inside a memory-capped cgroup.
+type process struct {
+	cmd  *exec.Cmd
+	done chan struct{}
+
+	mu     sync.Mutex
+	output bytes.Buffer
+}
+
+const outputLimit = 64 << 10
+
+func (p *process) Write(b []byte) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if room := outputLimit - p.output.Len(); room > 0 {
+		p.output.Write(b[:min(room, len(b))])
+	}
+	return len(b), nil // never fail the child's write
+}
+
+func (p *process) String() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.output.String()
+}
+
+func (p *process) exited() bool {
+	select {
+	case <-p.done:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *process) kill() {
+	if p == nil || p.cmd.Process == nil {
+		return
+	}
+	_ = p.cmd.Process.Kill()
+}
+
+// start runs cmd with its stdout and stderr collected together; the marker and
+// any failure both arrive there, and the two were never told apart.
+func start(cmd *exec.Cmd) (*process, error) {
+	p := &process{cmd: cmd, done: make(chan struct{})}
+	cmd.Stdout, cmd.Stderr = p, p
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	go func() { defer close(p.done); _ = cmd.Wait() }()
+	return p, nil
+}
 
 func devtunnelBin(ctx context.Context) (string, error) {
 	home, err := os.UserHomeDir()
@@ -108,14 +182,15 @@ func Host(ctx context.Context, tunnelID, clusterID, hostToken string) error {
 	for attempt := 1; attempt <= retries; attempt++ {
 		log.Printf("devtunnel: attempt %d/%d to host tunnel %s", attempt, retries, tunnelID)
 
-		id, err := hostOnce(ctx, tunnelID, clusterID, hostToken)
+		p, err := hostOnce(ctx, tunnelID, clusterID, hostToken)
 		if err == nil {
+			relayMu.Lock()
+			relay = p
+			relayMu.Unlock()
 			log.Printf("devtunnel: successfully hosting %s", tunnelID)
 			return nil
 		}
-		if id != "" {
-			_ = pm.Global.Kill(id)
-		}
+		p.kill()
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -136,45 +211,41 @@ func Host(ctx context.Context, tunnelID, clusterID, hostToken string) error {
 // forwards or deletes a tunnel, so no ports are passed -- the relay forwards
 // whatever the client already registered.
 //
-// Every return after the relay starts carries its id, so the caller can kill it.
-func hostOnce(ctx context.Context, tunnelID, clusterID, hostToken string) (string, error) {
+// Every return after the relay starts carries it, so the caller can kill it.
+func hostOnce(ctx context.Context, tunnelID, clusterID, hostToken string) (*process, error) {
 	qualified := tunnelID
 	if clusterID != "" {
 		qualified = tunnelID + "." + clusterID
 	}
 	bin, err := devtunnelBin(ctx)
 	if err != nil {
-		return "", fmt.Errorf("devtunnel host %q: %w", qualified, err)
+		return nil, fmt.Errorf("devtunnel host %q: %w", qualified, err)
 	}
 
 	log.Printf("devtunnel host: running %s host %s --access-token [redacted]", bin, qualified)
 	//nolint:gosec // the binary path is one we downloaded to a path we chose
-	id, err := pm.Global.Start(exec.Command(bin, "host", qualified, "--access-token", hostToken))
+	p, err := start(exec.Command(bin, "host", qualified, "--access-token", hostToken))
 	if err != nil {
-		return "", fmt.Errorf("devtunnel host %q: start: %w", qualified, err)
+		return nil, fmt.Errorf("devtunnel host %q: start: %w", qualified, err)
 	}
 
 	for deadline := time.Now().Add(hostReadyTimeout); time.Now().Before(deadline); {
 		select {
 		case <-time.After(hostReadyPoll):
 		case <-ctx.Done():
-			return id, ctx.Err()
+			return p, ctx.Err()
 		}
-		stdout, stderr, _ := pm.Global.Output(id)
-		if strings.Contains(stdout, hostReadyMarker) {
+		if out := p.String(); strings.Contains(out, hostReadyMarker) {
 			log.Printf("devtunnel host: tunnel %q ready at https://%s.devtunnels.ms", qualified, qualified)
-			return id, nil
+			return p, nil
 		}
 		// The CLI exiting without the marker is the failure signal. Reading it
 		// off stderr instead was wrong twice over: the CLI writes lines there
 		// that do not stop it hosting, and a single one containing "Warning"
 		// made every later line -- including a real error -- look benign.
-		if pm.Global.Exited(id) {
-			return id, fmt.Errorf("devtunnel host %q: exited before signalling ready (stdout=%q stderr=%q)",
-				qualified, stdout, stderr)
+		if p.exited() {
+			return p, fmt.Errorf("devtunnel host %q: exited before signalling ready (output=%q)", qualified, p.String())
 		}
 	}
-	stdout, stderr, _ := pm.Global.Output(id)
-	return id, fmt.Errorf("devtunnel host %q: no ready signal within %s (stdout=%q stderr=%q)",
-		qualified, hostReadyTimeout, stdout, stderr)
+	return p, fmt.Errorf("devtunnel host %q: no ready signal within %s (output=%q)", qualified, hostReadyTimeout, p.String())
 }

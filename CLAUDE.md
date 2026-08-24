@@ -37,7 +37,6 @@ main.go                         # CLI flags, startup, shutdown -- no request han
 internal/
   httpapi/                      # every route, handler and listener
   workflow/                     # YAML workflow: load, then run shell.exec steps in order
-  process/                      # background process tracking, process.Global singleton
 subsystems/
   metrics/                      # cgroup-v2 memory/cpu + per-GPU nvidia-smi, as a Snapshot
   sshd/                         # Supervised SSH server (gliderlabs/ssh) with PTY support
@@ -85,8 +84,10 @@ path; those are the only two background failures that are fatal.
 
 ## Key Patterns
 
-- **process.Global** singleton tracks long-running processes (the devtunnel host CLI); its output
-  buffers are mutex-guarded because callers read them while the process is still writing
+- **subsystems/tunnel owns the relay process it starts.** Its output buffer is guarded, because the
+  ready-wait reads it while the CLI is still writing, and capped, because nothing reads it after that and
+  the relay then runs for the life of the allocation. `tunnel.StopRelay` is what stops it: a child is not
+  killed when its parent exits
 - The client owns the tunnel: it creates it, registers its ports, and mints a host-scoped token. Linkspan
   hosts the relay and never creates, forwards, refreshes or deletes a tunnel.
 - **internal/httpapi is the only package that serves HTTP.** Subsystems report data — `metrics.Read(ctx)`
