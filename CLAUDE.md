@@ -38,8 +38,9 @@ internal/
   workflow/                     # YAML workflow: load, then run shell.exec steps in order
   process/                      # ManagedProcess tracking, GlobalProcessManager singleton
 subsystems/
+  sshd/                         # Supervised SSH server (gliderlabs/ssh) with PTY support
   tunnel/                       # devtunnel CLI download + relay hosting
-  vscode/                       # Supervised SSH server (gliderlabs/ssh) with PTY support
+  vscode/                       # REST surface for /vscode/sessions; drives sshd, holds no SSH logic
 utils/                          # JSON helpers, port finding
 ```
 

@@ -1,3 +1,6 @@
+// Package vscode is the REST surface cs-bridge drives for VS Code Remote-SSH:
+// it validates a caller's public key, picks a loopback port, and hands both to
+// subsystems/sshd. The SSH server itself lives there.
 package vscode
 
 import (
@@ -5,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/cyber-shuttle/linkspan/subsystems/sshd"
 	"github.com/cyber-shuttle/linkspan/utils"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -19,7 +23,7 @@ type SessionResponse struct {
 }
 
 func ListSessions(w http.ResponseWriter, r *http.Request) {
-	sessions := listAllSessionStatuses()
+	sessions := sshd.Statuses()
 	utils.RespondJSON(w, http.StatusOK, sessions)
 }
 
@@ -47,7 +51,7 @@ func CreateSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := fmt.Sprintf("s-%d", availablePort)
 
 	// Loopback only: the port reaches clients through the tunnel, never the node's network.
-	StartSSHServer(sessionID, fmt.Sprintf("127.0.0.1:%d", availablePort), sessionReq.AuthorizedKey)
+	sshd.Start(sessionID, fmt.Sprintf("127.0.0.1:%d", availablePort), sessionReq.AuthorizedKey)
 
 	utils.RespondJSON(w, http.StatusCreated, SessionResponse{ID: sessionID, BindPort: int32(availablePort)})
 }
