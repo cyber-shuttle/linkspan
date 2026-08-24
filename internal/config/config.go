@@ -13,6 +13,9 @@ type LinkspanConfig struct {
 	SupportGpuCheckpoint   bool     `yaml:"support_gpu_checkpoint"`
 	AdditionalCriuOpts     []string `yaml:"additional_criu_opts"`
 	CheckpointRoot         string   `yaml:"checkpoint_root"`
+	CheckpointMode         string   `yaml:"checkpoint_mode"`
+	CudaCheckpointPath     string   `yaml:"cuda_checkpoint_path"`
+	CriuPluginDir          string   `yaml:"criu_plugin_dir"`
 	WorkloadID             string   `yaml:"workload_id"`
 	AllowedCheckpointUsers []string `yaml:"allowed_checkpoint_users"`
 
@@ -55,6 +58,9 @@ func NewDefaultLinkspanConfig() *LinkspanConfig {
 		SupportGpuCheckpoint:     false,
 		AdditionalCriuOpts:       []string{},
 		CheckpointRoot:           "",
+		CheckpointMode:           "auto",
+		CudaCheckpointPath:       "",
+		CriuPluginDir:            "",
 		WorkloadID:               "",
 		AllowedCheckpointUsers:   []string{},
 		TunnelApi:                "devtunnels",

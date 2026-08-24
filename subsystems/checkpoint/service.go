@@ -60,6 +60,7 @@ type CheckpointService struct {
 	// so it needs its own lock.
 	defaultsMu        sync.RWMutex
 	defaultWorkloadID string
+	defaultMode       CheckpointMode
 	restoreDefaults   RestoreOptions
 }
 
@@ -68,6 +69,7 @@ func NewCheckpointService(c *config.LinkspanConfig) *CheckpointService {
 		criu:              newCriuCheckpointer(c),
 		workloads:         make(map[string]*workloadEntry),
 		defaultWorkloadID: c.WorkloadID,
+		defaultMode:       CheckpointMode(c.CheckpointMode),
 		restoreDefaults: RestoreOptions{
 			ShutdownOnCompletion: c.ShutdownOnForkCompletion,
 			PreRestoreCommands:   c.RestorePreCommands,
@@ -220,6 +222,13 @@ may be in flight for a workload at a time; a concurrent call on the same
 workload fails fast with ErrWorkloadBusy.
 */
 func (s *CheckpointService) CreateCheckpoint(ctx context.Context, target CheckpointTarget, opts CreateOptions) (*CheckpointResult, error) {
+	// A request that names no mode inherits the allocation's --checkpoint-mode
+	// before defaults are applied, so the flag actually governs.
+	if opts.Mode == "" {
+		s.defaultsMu.RLock()
+		opts.Mode = s.defaultMode
+		s.defaultsMu.RUnlock()
+	}
 	if err := opts.applyDefaults(); err != nil {
 		return nil, err
 	}

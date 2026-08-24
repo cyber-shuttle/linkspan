@@ -123,6 +123,9 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	criuPath := flag.String("criu-path", "", "path to the CRIU binary")
 	supportGpuCheckpointFlag := flag.String("support-gpu-checkpoint", "false", "enable GPU checkpoint support (true/false)")
 	additionalCriuOptsFlag := flag.String("additional-criu-opts", "", "comma-separated list of additional CRIU options")
+	checkpointMode := flag.String("checkpoint-mode", "auto", "checkpoint mode: auto (engage GPU support when the process uses a GPU), cpu, or gpu")
+	cudaCheckpointPath := flag.String("cuda-checkpoint-path", "", "path to NVIDIA's cuda-checkpoint binary; looked up on PATH when unset")
+	criuPluginDir := flag.String("criu-plugin-dir", "", "directory holding CRIU's cuda_plugin.so; probed under /usr/local/lib/criu, /usr/lib/criu, /usr/lib64/criu when unset")
 	checkpointRoot := flag.String("checkpoint-root", "", "root directory for durable checkpoint storage; must be shared storage reachable from any allocation (e.g. Lustre, GPFS, NFS, project scratch)")
 	workloadID := flag.String("workload-id", "", "logical workload identity checkpoints are grouped under; auto-generated and logged if not provided")
 	checkpointForkAfterDelay := flag.Int64("checkpoint-fork-after-delay", 0, "delay in seconds after fork process start before triggering checkpoint")
@@ -177,6 +180,11 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 		}
 		checkpointBeforeWalltimeDuration = parsed
 	}
+	// A bad mode must fail at startup, not at the first checkpoint: by then
+	// the allocation may be minutes from expiring.
+	if err := checkpoint.ValidateMode(*checkpointMode); err != nil {
+		log.Fatalf("invalid value for --checkpoint-mode: %v", err)
+	}
 	if _, err := checkpoint.ParseSignal(*checkpointSignal); err != nil {
 		log.Fatalf("invalid value for --checkpoint-signal: %v", err)
 	}
@@ -208,6 +216,9 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	c.SupportGpuCheckpoint = supportGpuCheckpoint
 	c.AdditionalCriuOpts = additionalCriuOpts
 	c.CheckpointRoot = *checkpointRoot
+	c.CheckpointMode = *checkpointMode
+	c.CudaCheckpointPath = *cudaCheckpointPath
+	c.CriuPluginDir = *criuPluginDir
 	c.WorkloadID = *workloadID
 	c.AllowedCheckpointUsers = allowedCheckpointUsers
 	c.CheckpointForkAfterDelay = *checkpointForkAfterDelay
