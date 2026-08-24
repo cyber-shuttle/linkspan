@@ -5,7 +5,6 @@ package sshd
 
 import (
 	"cmp"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -25,18 +24,18 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-func Start(sessionID, addr, publicKey string) *SSHServer {
-	return supervise(sessionID, addr, func() *ssh.Server { return newServer(addr, publicKey) })
+func Start(sessionID, addr string, authorized ssh.PublicKey) *SSHServer {
+	return supervise(sessionID, addr, func() *ssh.Server { return newServer(addr, authorized) })
 }
 
 // Built per (re)start: ForwardedTCPHandler holds per-server state. sftp and
 // streamlocal look unused because the client is VS Code, not cs-bridge.
-func newServer(addr, publicKey string) *ssh.Server {
+func newServer(addr string, authorized ssh.PublicKey) *ssh.Server {
 	fwd := &ssh.ForwardedTCPHandler{}
 	return &ssh.Server{
 		Addr:                          addr,
 		Handler:                       guardSession("session", handleSession),
-		PublicKeyHandler:              authorizer(publicKey), // PasswordHandler stays nil: keys only
+		PublicKeyHandler:              authorizer(authorized), // PasswordHandler stays nil: keys only
 		ConnCallback:                  keepAlive(30 * time.Second),
 		LocalPortForwardingCallback:   allowForward("local port forwarding"),
 		ReversePortForwardingCallback: allowForward("reverse port forwarding"),
@@ -55,11 +54,7 @@ func newServer(addr, publicKey string) *ssh.Server {
 	}
 }
 
-func authorizer(publicKey string) ssh.PublicKeyHandler {
-	authorized, _, _, _, err := gossh.ParseAuthorizedKey([]byte(publicKey))
-	if err != nil {
-		log.Printf("[ssh] unusable authorized key, refusing every connection: %v", err)
-	}
+func authorizer(authorized ssh.PublicKey) ssh.PublicKeyHandler {
 	return func(_ ssh.Context, key ssh.PublicKey) bool {
 		return authorized != nil && ssh.KeysEqual(key, authorized)
 	}
@@ -91,11 +86,11 @@ func handleSession(s ssh.Session) {
 	switch _, _, isPTY := s.Pty(); {
 	case len(s.Command()) > 0: // raw command via sh -c, like OpenSSH
 		log.Printf("exec request: user=%s remote=%s cmd=%q", user, remote, s.RawCommand())
-		runHostCommand(s, exec.Command("sh", "-c", s.RawCommand()))
+		runHostCommand(s, exec.CommandContext(s.Context(), "sh", "-c", s.RawCommand()))
 	case isPTY:
 		runPTYShell(s)
 	default:
-		runHostCommand(s, exec.Command(shellPath(), "-s"))
+		runHostCommand(s, exec.CommandContext(s.Context(), shellPath(), "-s"))
 	}
 }
 
@@ -106,19 +101,47 @@ func peer(s ssh.Session) (user, remote string) {
 	return s.User(), remote
 }
 
+// The client is told the command's own exit status. Without the Exit call
+// gliderlabs sends 0 for every session, so a failed command looks successful.
 func runHostCommand(s ssh.Session, cmd *exec.Cmd) {
-	cmd.Env, cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Environ(), s, s, s
+	var stderr io.Writer = s
 	if w := s.Stderr(); w != nil { // a separate stderr stream is used when present
-		cmd.Stderr = w
+		stderr = w
 	}
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(s, "command error: %v\n", err)
+	cmd.Env, cmd.Stdout, cmd.Stderr = os.Environ(), s, stderr
+
+	// Not cmd.Stdin = s. Wait would then block on an stdin copy that only ends
+	// when the client closes its own stdin, so a command that had already
+	// finished would hang the session. Wait closes this pipe when the process
+	// exits, which ends the copy instead.
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		fmt.Fprintf(stderr, "command error: %v\n", err)
+		_ = s.Exit(127)
+		return
+	}
+	safeGo("session stdin copy", func() { defer stdin.Close(); _, _ = io.Copy(stdin, s) })
+
+	err = cmd.Run()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		_ = s.Exit(0)
+	case errors.As(err, &exit):
+		code := exit.ExitCode()
+		if code < 0 { // killed by a signal; we do not send SSH exit-signal
+			code = 255
+		}
+		_ = s.Exit(code)
+	default: // it never ran
+		fmt.Fprintf(stderr, "command error: %v\n", err)
+		_ = s.Exit(127)
 	}
 }
 
 func runPTYShell(s ssh.Session) {
 	ptyReq, winCh, _ := s.Pty()
-	cmd := exec.Command(shellPath())
+	cmd := exec.CommandContext(s.Context(), shellPath())
 	f, err := pty.Start(cmd)
 	if err != nil {
 		fmt.Fprintf(s, "failed to start pty shell: %v\n", err)
@@ -286,7 +309,8 @@ func (s *SSHServer) run(build func() *ssh.Server) {
 		if ranFor >= healthyRunThreshold {
 			consecutive, backoff = 0, minRestartBackoff
 		}
-		if consecutive++; consecutive >= maxConsecutiveFailures {
+		consecutive++
+		if consecutive >= maxConsecutiveFailures {
 			s.state = stateFailed
 			s.mu.Unlock()
 			log.Printf("[ssh] session %s: giving up after %d failures (%v)", s.sessionID, consecutive, err)
@@ -300,9 +324,7 @@ func (s *SSHServer) run(build func() *ssh.Server) {
 		case <-time.After(backoff):
 		case <-s.stopCh:
 		}
-		if backoff *= 2; backoff > maxRestartBackoff {
-			backoff = maxRestartBackoff
-		}
+		backoff = min(backoff*2, maxRestartBackoff)
 	}
 
 	s.mu.Lock()
@@ -322,13 +344,6 @@ func (s *SSHServer) signalStop() *ssh.Server {
 		close(s.stopCh)
 	}
 	return s.current
-}
-
-func (s *SSHServer) Stop(ctx context.Context) error {
-	if srv := s.signalStop(); srv != nil {
-		return srv.Shutdown(ctx)
-	}
-	return nil
 }
 
 func (s *SSHServer) Close() error {

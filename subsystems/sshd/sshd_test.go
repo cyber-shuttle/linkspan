@@ -20,7 +20,8 @@ import (
 )
 
 func TestSSHServerLifecycle(t *testing.T) {
-	s := Start("test-session", "127.0.0.1:0", "dummy-key")
+	_, key := testKeyPair(t)
+	s := Start("test-session", "127.0.0.1:0", key)
 	if s == nil {
 		t.Fatal("failed to start SSH server")
 	}
@@ -139,7 +140,8 @@ func TestSupervisorStopHonored(t *testing.T) {
 
 // sftp and streamlocal have no cs-bridge caller to notice they went missing.
 func TestNewServerWiring(t *testing.T) {
-	srv := newServer(":0", "key")
+	_, key := testKeyPair(t)
+	srv := newServer(":0", key)
 
 	if srv.Handler == nil || srv.PublicKeyHandler == nil || srv.PasswordHandler != nil ||
 		srv.ConnCallback == nil || srv.LocalPortForwardingCallback == nil || srv.ReversePortForwardingCallback == nil {
@@ -219,13 +221,63 @@ func TestRunHostCommandWiresStdio(t *testing.T) {
 	if got := c.String(); !strings.Contains(got, "hello") {
 		t.Fatalf("expected command stdout written to the session, got %q", got)
 	}
+	if c.exitCode() != 0 {
+		t.Fatalf("exit status = %d, want 0", c.exitCode())
+	}
+}
+
+// gliderlabs sends 0 for any session whose handler just returns, so a failing
+// command would look successful to the client unless we send the real status.
+func TestRunHostCommandReportsExitStatus(t *testing.T) {
+	c := &captureSession{}
+	runHostCommand(c, exec.Command("sh", "-c", "exit 42"))
+	if c.exitCode() != 42 {
+		t.Fatalf("exit status = %d, want 42", c.exitCode())
+	}
+	if got := c.String(); strings.Contains(got, "command error") {
+		t.Fatalf("a failing command must not write diagnostics to stdout, got %q", got)
+	}
+}
+
+// A client that keeps its own stdin open never sends EOF. The command has still
+// finished, so the session must end anyway.
+func TestRunHostCommandReturnsWhileStdinIsStillOpen(t *testing.T) {
+	c := &blockingStdinSession{release: make(chan struct{})}
+	defer close(c.release)
+
+	done := make(chan struct{})
+	go func() { defer close(done); runHostCommand(c, exec.Command("sh", "-c", "echo hi")) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runHostCommand blocked on a client that never closed its stdin")
+	}
+	if c.exitCode() != 0 {
+		t.Fatalf("exit status = %d, want 0", c.exitCode())
+	}
+}
+
+type blockingStdinSession struct {
+	captureSession
+	release chan struct{}
+}
+
+func (b *blockingStdinSession) Read([]byte) (int, error) { <-b.release; return 0, io.EOF }
+
+func TestRunHostCommandReportsAnUnrunnableCommand(t *testing.T) {
+	c := &captureSession{}
+	runHostCommand(c, exec.Command("/nonexistent/binary"))
+	if c.exitCode() != 127 {
+		t.Fatalf("exit status = %d, want 127", c.exitCode())
+	}
 }
 
 // Stderr() returns nil to exercise the fallback onto the session's main stream.
 type captureSession struct {
 	ssh.Session
-	mu  sync.Mutex
-	out bytes.Buffer
+	mu   sync.Mutex
+	out  bytes.Buffer
+	code int
 }
 
 func (c *captureSession) Read([]byte) (int, error) { return 0, io.EOF }
@@ -235,6 +287,17 @@ func (c *captureSession) Write(p []byte) (int, error) {
 	return c.out.Write(p)
 }
 func (c *captureSession) Stderr() io.ReadWriter { return nil }
+func (c *captureSession) Exit(code int) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.code = code
+	return nil
+}
+func (c *captureSession) exitCode() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.code
+}
 func (c *captureSession) String() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -277,7 +340,7 @@ func waitFor(t *testing.T, cond func() bool) bool {
 	return false
 }
 
-func testKeyPair(t *testing.T) (gossh.Signer, string) {
+func testKeyPair(t *testing.T) (gossh.Signer, ssh.PublicKey) {
 	t.Helper()
 	_, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -287,7 +350,7 @@ func testKeyPair(t *testing.T) (gossh.Signer, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return signer, string(gossh.MarshalAuthorizedKey(signer.PublicKey()))
+	return signer, signer.PublicKey()
 }
 
 // Test-only registry lookups: production needs only what the two routes use.

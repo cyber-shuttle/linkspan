@@ -69,8 +69,11 @@ Both also run `--version`, and cs-control greps `--help` for `-tunnel-host-token
 
 A workflow is a `name` and a list of `steps`, run in order, stopping at the first failure. `shell.exec` is
 the only action: `params.command` is split on whitespace and run without a shell, so nothing is expanded.
-Cancellation is checked between steps; the current step is not preempted. A step failure stops the workflow
-but leaves the HTTP server running.
+Cancellation is checked between steps; the current step is not preempted.
+
+**A failing step exits the whole process with status 1**, after shutting the HTTP server, the SSH sessions
+and the tunnel relay down. That is deliberate — an allocation whose setup failed has nothing left to serve —
+but it means a workflow is not a background nicety: any step that can fail is a startup dependency.
 
 ## Key Patterns
 
@@ -80,7 +83,7 @@ but leaves the HTTP server running.
   hosts the relay and never creates, forwards, refreshes or deletes a tunnel.
 - The SSH server accepts exactly one public key, supplied at create time, and binds loopback only
 - The SSH server is supervised: it restarts on non-graceful exit, bounded by consecutive failures
-- Port 0 binding: the actual port is read back off the listener after bind
+- With `--port 0` the OS assigns the port; it is read back off the listener and appears only in the startup log line
 
 ## Gotchas
 
@@ -94,5 +97,5 @@ but leaves the HTTP server running.
 - The SSH server keeps the `sftp` subsystem and the `direct-streamlocal@openssh.com` handler: VS Code
   Remote-SSH's bootstrap fallback uses SFTP, and `remote.SSH.remoteServerListenOnSocket` uses streamlocal.
   Neither shows up in a cs-bridge grep because the client is VS Code, not cs-bridge.
-- Workflow cancellation checks context between steps — the current step is NOT preempted
 - SSH server spawns a shell via PTY (creack/pty) — resize handled via the SSH window-change channel
+- `make` refuses to build unless HEAD is tagged `X.Y.Z` or `X.Y.Z.<commit>`; use `go build` for a dev binary
