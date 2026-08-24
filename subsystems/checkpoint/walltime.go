@@ -245,7 +245,7 @@ func (g *WalltimeGuard) attempt(ctx context.Context, trigger CheckpointTrigger, 
 
 	g.checkpointed.Store(true)
 	g.checkpointID.Store(result.CheckpointID)
-	log.Printf("[Walltime] checkpoint %s written to %s; restore it in the next allocation with --restore-checkpoint-id %s",
+	log.Printf("[Walltime] checkpoint %s written to %s; restore it in the next allocation with --restore-checkpoint %s",
 		result.CheckpointID, result.CheckpointDir, result.CheckpointID)
 
 	if g.cfg.ShutdownAfterCheckpoint {
