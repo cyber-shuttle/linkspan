@@ -78,6 +78,26 @@ func NewCheckpointService(c *config.LinkspanConfig) *CheckpointService {
 	}
 }
 
+/*
+ActiveService returns the process-wide CheckpointService, but only if this
+allocation can actually checkpoint.
+
+Both the REST handlers and the workflow actions resolve the service through
+here, so a checkpoint taken by a workflow step and one taken over HTTP share
+the same workload state machine — two services over one checkpoint root would
+each think they alone owned it.
+*/
+func ActiveService() (*CheckpointService, error) {
+	svc := GlobalCheckpointService
+	if svc == nil {
+		return nil, fmt.Errorf("checkpoint service is not available")
+	}
+	if err := svc.Configured(); err != nil {
+		return nil, err
+	}
+	return svc, nil
+}
+
 // Configured reports whether checkpointing can work here at all, so the REST
 // layer can refuse at the edge instead of failing deep inside preflight.
 func (s *CheckpointService) Configured() error {
@@ -88,6 +108,12 @@ func (s *CheckpointService) Configured() error {
 		return fmt.Errorf("checkpointing is not configured on this allocation: --checkpoint-root is not set")
 	}
 	return nil
+}
+
+// Preflight reports whether CRIU is actually usable on this host, so a caller
+// can fail early rather than discovering it partway through a dump.
+func (s *CheckpointService) Preflight(ctx context.Context) error {
+	return s.criu.CRIUCheck(ctx)
 }
 
 // DefaultWorkloadID is the workload a create request falls back to when it

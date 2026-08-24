@@ -111,15 +111,11 @@ func respondServiceError(w http.ResponseWriter, err error, fallback int) {
 	}
 }
 
-// activeService resolves the service and reports whether it can actually work,
-// answering 503 when this allocation was started without checkpoint flags.
+// activeService adapts ActiveService to HTTP, answering 503 when this
+// allocation was started without checkpoint flags.
 func activeService(w http.ResponseWriter) (*CheckpointService, bool) {
-	svc := GlobalCheckpointService
-	if svc == nil {
-		respondErrorJSON(w, http.StatusServiceUnavailable, "checkpoint service is not available")
-		return nil, false
-	}
-	if err := svc.Configured(); err != nil {
+	svc, err := ActiveService()
+	if err != nil {
 		respondErrorJSON(w, http.StatusServiceUnavailable, err.Error())
 		return nil, false
 	}
