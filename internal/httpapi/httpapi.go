@@ -1,6 +1,7 @@
-// Package httpapi is linkspan's HTTP surface: the route table, the handlers
-// behind it, and the listeners they are served on. It is the only package that
-// serves HTTP -- the subsystems report data and know nothing about requests.
+// Package httpapi is linkspan's HTTP surface: the route table and the handlers
+// behind it. It is the only package that serves HTTP -- the subsystems report
+// data and know nothing about requests. main owns the http.Server and the TCP
+// listener; ListenUnix here adds the optional unix socket.
 package httpapi
 
 import (
@@ -33,8 +34,8 @@ func health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func jobMetrics(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, metrics.Read())
+func jobMetrics(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, metrics.Read(r.Context()))
 }
 
 func listSessions(w http.ResponseWriter, _ *http.Request) {
