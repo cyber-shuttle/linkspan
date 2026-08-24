@@ -134,6 +134,7 @@ const (
 	WorkloadCheckpointing    WorkloadState = "checkpointing"
 	WorkloadCheckpointed     WorkloadState = "checkpointed"
 	WorkloadRestoring        WorkloadState = "restoring"
+	WorkloadCompleted        WorkloadState = "completed" // ran to completion; nothing left to checkpoint
 	WorkloadCheckpointFailed WorkloadState = "checkpoint_failed"
 	WorkloadRestoreFailed    WorkloadState = "restore_failed"
 )

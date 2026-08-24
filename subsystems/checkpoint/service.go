@@ -110,6 +110,22 @@ func (s *CheckpointService) Configured() error {
 	return nil
 }
 
+/*
+MarkWorkloadCompleted records that the application ran to completion.
+
+This is a terminal state on purpose: an application that finished has nothing
+left to checkpoint, so a walltime or signal trigger arriving afterwards is
+refused by the state machine rather than dumping a dead process.
+*/
+func (s *CheckpointService) MarkWorkloadCompleted(workloadID string) {
+	if workloadID == "" {
+		return
+	}
+	w := s.getOrCreateWorkload(workloadID, WorkloadCompleted)
+	w.setState(WorkloadCompleted)
+	log.Printf("[Checkpoint] workload %s completed", workloadID)
+}
+
 // Preflight reports whether CRIU is actually usable on this host, so a caller
 // can fail early rather than discovering it partway through a dump.
 func (s *CheckpointService) Preflight(ctx context.Context) error {
