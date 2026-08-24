@@ -301,18 +301,19 @@ const (
 	stateStopped    = "stopped"
 )
 
-type SSHServer struct {
+type supervisor struct {
 	mu        sync.Mutex
 	current   *ssh.Server // rebuilt on each restart
 	state     string
 	addr      string
 	sessionID string
+	listener  net.Listener // closed by signalStop, so a stop always ends Accept
 	stopCh    chan struct{}
 	stopped   bool
 }
 
 func supervise(sessionID, addr string, first net.Listener, build func() *ssh.Server) {
-	s := &SSHServer{state: stateRunning, addr: addr, sessionID: sessionID, stopCh: make(chan struct{})}
+	s := &supervisor{state: stateRunning, addr: addr, sessionID: sessionID, stopCh: make(chan struct{})}
 
 	activeServersMu.Lock()
 	activeServers[sessionID] = s
@@ -322,7 +323,7 @@ func supervise(sessionID, addr string, first net.Listener, build func() *ssh.Ser
 	safeGo("ssh supervisor "+sessionID, func() { s.run(build, first) })
 }
 
-func (s *SSHServer) run(build func() *ssh.Server, first net.Listener) {
+func (s *supervisor) run(build func() *ssh.Server, first net.Listener) {
 	backoff, consecutive := minRestartBackoff, 0
 	defer func() {
 		if first != nil { // stopped before it was ever served
@@ -346,6 +347,23 @@ func (s *SSHServer) run(build func() *ssh.Server, first net.Listener) {
 		if ln == nil { // every restart rebinds; Serve closed the last listener
 			ln, err = net.Listen("tcp", s.addr)
 		}
+		// Publish the listener before serving. A stop between here and Serve
+		// would otherwise leave no trace: gliderlabs' trackListener resets the
+		// server's doneChan when it has no listeners yet, so Close is erased and
+		// Serve accepts forever on a listener nothing shuts. signalStop closes
+		// whatever is published, so either order ends the same way.
+		s.mu.Lock()
+		if s.stopped {
+			s.state = stateStopped
+			s.mu.Unlock()
+			if ln != nil {
+				_ = ln.Close()
+			}
+			break
+		}
+		s.listener = ln
+		s.mu.Unlock()
+
 		start := nowFunc()
 		if err == nil {
 			err = srv.Serve(ln)
@@ -383,35 +401,54 @@ func (s *SSHServer) run(build func() *ssh.Server, first net.Listener) {
 	failed := s.state == stateFailed
 	s.mu.Unlock()
 	if !failed {
-		deleteServer(s.sessionID)
+		s.deregister()
 		log.Printf("[ssh] session %s: supervisor exited (stopped)", s.sessionID)
 	}
 }
 
-func (s *SSHServer) signalStop() *ssh.Server {
+func (s *supervisor) signalStop() *ssh.Server {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.stopped {
 		s.stopped = true
 		close(s.stopCh)
 	}
+	if s.listener != nil {
+		_ = s.listener.Close() // ends Accept even if Serve has not started yet
+	}
 	return s.current
 }
 
-func (s *SSHServer) Close() error {
+// signalStop may already have closed the listener, and gliderlabs closes it
+// again on its way out. A listener that is already shut is what was asked for.
+func (s *supervisor) Close() error {
 	if srv := s.signalStop(); srv != nil {
-		return srv.Close()
+		if err := srv.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			return err
+		}
 	}
 	return nil
 }
 
 // A failed server stays registered, so its status stays queryable.
 var (
-	activeServers   = make(map[string]*SSHServer)
+	activeServers   = make(map[string]*supervisor)
 	activeServersMu sync.Mutex
 )
 
-func deleteServer(sessionID string) (*SSHServer, bool) {
+// deregister removes this supervisor's entry, and only its own. The id is
+// s-<port>, so a later session can be handed the same port and therefore the
+// same id; deleting by id alone would take that live session out of the
+// registry when this one finally exited.
+func (s *supervisor) deregister() {
+	activeServersMu.Lock()
+	defer activeServersMu.Unlock()
+	if activeServers[s.sessionID] == s {
+		delete(activeServers, s.sessionID)
+	}
+}
+
+func deleteServer(sessionID string) (*supervisor, bool) {
 	activeServersMu.Lock()
 	defer activeServersMu.Unlock()
 	server, exists := activeServers[sessionID]
@@ -420,7 +457,7 @@ func deleteServer(sessionID string) (*SSHServer, bool) {
 }
 
 // Nothing may take a server's own lock while activeServersMu is held.
-func snapshotServers() []*SSHServer {
+func snapshotServers() []*supervisor {
 	activeServersMu.Lock()
 	defer activeServersMu.Unlock()
 	return slices.Collect(maps.Values(activeServers))
