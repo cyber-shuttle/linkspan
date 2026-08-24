@@ -72,7 +72,7 @@ func (c *criuCheckpointer) validateHostCompatibility(ctx context.Context, m *Man
 	validateFiles(m, v)
 	validatePlatform(m, v)
 	c.validateCriuHost(ctx, m, v)
-	validateGPU(ctx, m, v)
+	c.validateGPU(ctx, m, v)
 	return v
 }
 
@@ -187,7 +187,7 @@ func (c *criuCheckpointer) validateCriuHost(ctx context.Context, m *Manifest, v 
 
 // validateGPU applies only to GPU-mode checkpoints; a CPU-only one restores
 // fine with or without GPUs present.
-func validateGPU(ctx context.Context, m *Manifest, v *RestoreValidation) {
+func (c *criuCheckpointer) validateGPU(ctx context.Context, m *Manifest, v *RestoreValidation) {
 	if !m.GPUMode {
 		return
 	}
@@ -203,6 +203,7 @@ func validateGPU(ctx context.Context, m *Manifest, v *RestoreValidation) {
 		v.errorf("checkpoint used %d GPU(s) but this host exposes %d", len(m.GPUInfo), len(current))
 		return
 	}
+	c.validateGPUDetails(ctx, m, v)
 	if gpuModel(m.GPUInfo[0]) != gpuModel(current[0]) {
 		v.errorf("checkpoint was taken on %q but this host has %q; CUDA state cannot be restored onto a different GPU model", gpuModel(m.GPUInfo[0]), gpuModel(current[0]))
 	}
@@ -219,4 +220,43 @@ func gpuModel(line string) string {
 		rest = rest[:idx]
 	}
 	return strings.TrimSpace(rest)
+}
+
+/*
+validateGPUDetails enforces the narrow GPU contract against the recorded
+provenance: same GPU model class, at least as much memory, and a driver
+generation that can load the same CUDA state.
+
+These are errors rather than warnings because CUDA state restored onto a
+different device class does not fail cleanly — it corrupts.
+*/
+func (c *criuCheckpointer) validateGPUDetails(ctx context.Context, m *Manifest, v *RestoreValidation) {
+	if m.GPU == nil {
+		v.warnf("checkpoint was taken in GPU mode but recorded no GPU details; skipping GPU compatibility checks")
+		return
+	}
+
+	here, err := gpuPreflight(ctx, c.GPU, 0)
+	if err != nil {
+		v.errorf("checkpoint was taken in GPU mode but this host fails GPU preflight: %v", err)
+		return
+	}
+
+	if m.GPU.Name != here.Name {
+		v.errorf("checkpoint was taken on %q but this host has %q; CUDA state cannot be restored onto a different GPU model", m.GPU.Name, here.Name)
+	}
+	if here.MemoryTotalMiB < m.GPU.MemoryTotalMiB {
+		v.errorf("checkpoint was taken on a GPU with %d MiB but this host's GPU has %d MiB", m.GPU.MemoryTotalMiB, here.MemoryTotalMiB)
+	}
+
+	checkpointDriver, err1 := majorVersion(m.GPU.DriverVersion)
+	hostDriver, err2 := majorVersion(here.DriverVersion)
+	switch {
+	case err1 != nil || err2 != nil:
+		v.warnf("could not compare NVIDIA driver versions (checkpoint %q, host %q)", m.GPU.DriverVersion, here.DriverVersion)
+	case hostDriver < checkpointDriver:
+		v.errorf("checkpoint was taken with NVIDIA driver %s but this host has the older %s", m.GPU.DriverVersion, here.DriverVersion)
+	case hostDriver != checkpointDriver:
+		v.warnf("checkpoint was taken with NVIDIA driver %s and this host has %s; a different driver generation may not restore CUDA state", m.GPU.DriverVersion, here.DriverVersion)
+	}
 }
