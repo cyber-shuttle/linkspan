@@ -95,7 +95,19 @@ func handleSession(s ssh.Session) {
 	log.Printf("client connected: user=%s remote=%s", user, remote)
 	defer log.Printf("client disconnected: user=%s remote=%s", user, remote)
 
-	switch _, _, isPTY := s.Pty(); {
+	_, winCh, isPTY := s.Pty()
+	if isPTY && len(s.Command()) > 0 {
+		// A pty was allocated but a command was given, so runPTYShell -- the only
+		// reader of window-change -- never runs. gliderlabs delivers those with an
+		// unbuffered-in-effect send (cap 1, pre-filled), so an unread resize wedges
+		// this session's request loop.
+		safeGo("drain window-change", func() {
+			for range winCh {
+			}
+		})
+	}
+
+	switch {
 	case len(s.Command()) > 0: // raw command via sh -c, like OpenSSH
 		log.Printf("exec request: user=%s remote=%s cmd=%q", user, remote, s.RawCommand())
 		runHostCommand(s, exec.CommandContext(s.Context(), "sh", "-c", s.RawCommand()))

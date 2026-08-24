@@ -90,12 +90,16 @@ func run() int {
 		}()
 	}
 
+	hosted := make(chan struct{})
+	close(hosted) // no tunnel: nothing to wait for on the way out
 	if *tunnelEnable {
 		if *tunnelID == "" || *tunnelCluster == "" || *tunnelHostToken == "" {
 			log.Printf("devtunnel: --tunnel-enable needs --tunnel-id, --tunnel-cluster and --tunnel-host-token")
 			return 1
 		}
+		hosted = make(chan struct{})
 		go func() {
+			defer close(hosted)
 			if err := tunnel.Host(ctx, *tunnelID, *tunnelCluster, *tunnelHostToken); err != nil {
 				abort(fmt.Errorf("devtunnel: %w", err))
 			}
@@ -106,6 +110,15 @@ func run() int {
 	// devtunnel relay running or SSH sessions accepting.
 	defer func() {
 		abort(nil) // stop the tunnel retry loop before killing what it started
+		// A relay that has not reported ready yet is known only to Host, which
+		// kills it on its own failure path. Exiting without letting that finish
+		// orphans the devtunnel child -- it is not killed when we exit. Bounded,
+		// so a wedged bring-up delays shutdown rather than preventing it.
+		select {
+		case <-hosted:
+		case <-time.After(5 * time.Second):
+			log.Println("devtunnel: bring-up did not finish stopping in time")
+		}
 		tunnel.StopRelay()
 		sshd.StopAll()
 		log.Println("Server gracefully stopped.")

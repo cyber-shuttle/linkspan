@@ -30,6 +30,9 @@ goreleaser release --snapshot --clean  # Local snapshot build
 
 Reach `--socket` in-cluster (no tunnel/TCP port): `srun --jobid=<id> --overlap curl --unix-socket /tmp/linkspan.sock http://localhost/api/v1/metrics`
 
+The socket is chmodded to 0600 after bind: `bind()` applies the umask, and under a umask of 002 it would
+otherwise be group-writable in a shared directory — in front of an API that hands out shells.
+
 ## Architecture
 
 ```
@@ -61,8 +64,10 @@ how they are passed.
 ## REST API (`/api/v1/`)
 
 - `GET /health` — liveness, `{"status":"ok"}`
-- `GET /metrics` — cgroup-v2 memory/CPU + per-GPU `nvidia-smi`; each source omits its field when absent,
-  and the nvidia-smi probe is bounded so a wedged driver cannot hold the handler open
+- `GET /metrics` — cgroup-v2 memory/CPU + per-GPU `nvidia-smi`; each source omits its field when absent.
+  The *read* gives up on a slow nvidia-smi after 3s — the probe itself cannot be made to give up, since a
+  process wedged in a driver call ignores SIGKILL — and only one probe may be outstanding, so a sick GPU
+  cannot pile one up per poll
 - `GET /vscode/sessions` — list SSH servers and supervisor state
 - `POST /vscode/sessions` — start an SSH server for one authorized key
 
