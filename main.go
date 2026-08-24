@@ -24,11 +24,11 @@ import (
 	"github.com/cyber-shuttle/linkspan/utils"
 )
 
-// version is set via ldflags at build time. Both consumers parse `--version`
-// output as a bare X.Y.Z[.commit] on stdout, so it must stay the only line.
+// Set via ldflags. Both consumers parse `--version` as a bare X.Y.Z[.commit],
+// so it must stay the only line on stdout.
 var version = "dev"
 
-// The client creates the tunnel and owns its lifetime; linkspan only hosts it.
+// The client owns the tunnel's lifetime; linkspan only hosts it.
 const (
 	tunnelRetries        = 3
 	tunnelRetryDelay     = 2 * time.Second
@@ -67,9 +67,9 @@ func main() {
 		log.Fatalf("--port must be between 0 and 65535, got %d", serverPort)
 	}
 	addr := fmt.Sprintf("0.0.0.0:%d", serverPort)
-	srv := &http.Server{Addr: addr, Handler: mux}
+	srv := &http.Server{Handler: mux} // Addr is unused: we hand Serve our own listener
 
-	// Bind before starting the tunnel so the port is open when the relay connects.
+	// Bind before the tunnel starts, so the port is open when the relay connects.
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("failed to listen on %s: %v", addr, err)
@@ -123,42 +123,42 @@ func main() {
 			log.Printf("server force-close error: %v", closeErr)
 		}
 	}
-	pm.GlobalProcessManager.KillAll()
+	pm.Global.KillAll()
 	sshd.StopAll()
 	log.Println("Server gracefully stopped.")
 }
 
-// hostTunnel retries the relay bring-up, killing the host process left behind by
-// a failed or timed-out attempt so it cannot leak.
+type hostResult struct {
+	cmdID string
+	err   error
+}
+
 func hostTunnel(ctx context.Context, tunnelID, clusterID, hostToken string) {
 	for attempt := 1; attempt <= tunnelRetries; attempt++ {
 		log.Printf("devtunnel: attempt %d/%d to host tunnel %s", attempt, tunnelRetries, tunnelID)
-		type hosted struct {
-			cmdID string
-			err   error
-		}
-		ch := make(chan hosted, 1)
+
+		ch := make(chan hostResult, 1)
 		go func() {
 			cmdID, err := tunnel.DevTunnelHost(tunnelID, clusterID, hostToken)
-			ch <- hosted{cmdID, err}
+			ch <- hostResult{cmdID, err}
 		}()
 
-		attemptCtx, cancel := context.WithTimeout(ctx, tunnelAttemptTimeout)
 		select {
 		case h := <-ch:
-			cancel()
 			if h.err == nil {
 				log.Printf("devtunnel: successfully hosting %s", tunnelID)
 				return
 			}
 			log.Printf("devtunnel: attempt %d failed: %v", attempt, h.err)
 			if h.cmdID != "" {
-				_ = pm.GlobalProcessManager.Kill(h.cmdID)
+				_ = pm.Global.Kill(h.cmdID)
 			}
-		case <-attemptCtx.Done():
-			cancel()
+		case <-time.After(tunnelAttemptTimeout):
 			log.Printf("devtunnel: attempt %d timed out after %s", attempt, tunnelAttemptTimeout)
+		case <-ctx.Done():
+			return // shutting down: the retry loop must not outlive the server
 		}
+
 		if attempt < tunnelRetries {
 			time.Sleep(tunnelRetryDelay)
 		}
@@ -166,7 +166,6 @@ func hostTunnel(ctx context.Context, tunnelID, clusterID, hostToken string) {
 	log.Fatalf("devtunnel: failed to host tunnel %s after %d attempts", tunnelID, tunnelRetries)
 }
 
-// listenUnix serves srv on a unix socket in a background goroutine.
 func listenUnix(srv *http.Server, path string) error {
 	os.Remove(path) // clear a stale socket; bind fails if the path exists
 	ln, err := net.Listen("unix", path)
@@ -181,8 +180,6 @@ func listenUnix(srv *http.Server, path string) error {
 	return nil
 }
 
-// --- Live job metrics (GET /api/v1/metrics) -------------------------------------------------------------------------
-
 type gpuMetric struct {
 	Index       int `json:"index"`
 	UtilPct     int `json:"utilPct"`
@@ -190,32 +187,38 @@ type gpuMetric struct {
 	MemTotalMiB int `json:"memTotalMiB"`
 }
 
-// liveMetrics mirrors the csbridge MetricSample live fields. Each source is read independently and omitted (omitempty)
-// when unavailable, so the client sees an absent field (undefined) rather than a misleading zero.
+// Mirrors the csbridge MetricSample live fields. Every source is read
+// independently and omitted when unavailable, so the client sees undefined
+// rather than a misleading zero.
 type liveMetrics struct {
 	MemBytes     *int64      `json:"memBytes,omitempty"`
 	CPUUsageUsec *int64      `json:"cpuUsageUsec,omitempty"`
 	GPUs         []gpuMetric `json:"gpus,omitempty"`
 }
 
-// metricsHandler reports the running job's live resource use: cgroup-v2 memory + cpu and per-GPU nvidia-smi. Every
-// source degrades independently — a missing cgroup file or absent nvidia-smi (CPU node) just omits that field; it
-// never fails the request. Replaces the srun-driven bash probe csbridge used to run over SSH.
 func metricsHandler(w http.ResponseWriter, r *http.Request) {
 	m := liveMetrics{GPUs: readGPUMetrics()}
 	if cg, err := jobCgroupDir(); err == nil {
-		if b, err := readInt64File(filepath.Join(cg, "memory.current")); err == nil {
-			m.MemBytes = &b
-		}
-		if u, err := readCPUUsageUsec(filepath.Join(cg, "cpu.stat")); err == nil {
-			m.CPUUsageUsec = &u
-		}
+		m.MemBytes = readCgroup(filepath.Join(cg, "memory.current"), parseInt64)
+		m.CPUUsageUsec = readCgroup(filepath.Join(cg, "cpu.stat"), parseCPUUsageUsec)
 	}
 	utils.RespondJSON(w, http.StatusOK, m)
 }
 
-// jobCgroupDir resolves this process's cgroup-v2 directory stripped to the job level (dropping any /step_* leaf), so
-// memory/cpu reflect the whole allocation rather than one step. Mirrors `sed 's|^0::||; s|/step_.*||' /proc/self/cgroup`.
+func readCgroup[T any](path string, parse func(string) (T, error)) *T {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	v, err := parse(string(b))
+	if err != nil {
+		return nil
+	}
+	return &v
+}
+
+// Strips the /step_* leaf so metrics cover the whole allocation, not one step:
+// `sed 's|^0::||; s|/step_.*||' /proc/self/cgroup`.
 func jobCgroupDir() (string, error) {
 	b, err := os.ReadFile("/proc/self/cgroup")
 	if err != nil {
@@ -224,7 +227,6 @@ func jobCgroupDir() (string, error) {
 	return "/sys/fs/cgroup" + jobCgroupSuffix(string(b)), nil
 }
 
-// jobCgroupSuffix is the pure path-munging half of jobCgroupDir (unit-tested).
 func jobCgroupSuffix(procCgroup string) string {
 	lines := strings.Split(strings.TrimSpace(procCgroup), "\n")
 	p := strings.TrimPrefix(strings.TrimSpace(lines[len(lines)-1]), "0::")
@@ -234,33 +236,18 @@ func jobCgroupSuffix(procCgroup string) string {
 	return p
 }
 
-func readInt64File(path string) (int64, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return 0, err
-	}
-	return strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
-}
+func parseInt64(s string) (int64, error) { return strconv.ParseInt(strings.TrimSpace(s), 10, 64) }
 
-func readCPUUsageUsec(path string) (int64, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return 0, err
-	}
-	return parseCPUUsageUsec(string(b))
-}
-
-// parseCPUUsageUsec pulls the cumulative `usage_usec` line out of a cgroup cpu.stat body.
 func parseCPUUsageUsec(cpuStat string) (int64, error) {
 	for ln := range strings.SplitSeq(cpuStat, "\n") {
 		if v, ok := strings.CutPrefix(ln, "usage_usec "); ok {
-			return strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+			return parseInt64(v)
 		}
 	}
 	return 0, fmt.Errorf("usage_usec not found in cpu.stat")
 }
 
-// readGPUMetrics returns per-GPU stats via nvidia-smi, or nil if it's absent or errors (CPU nodes have no driver).
+// nil when nvidia-smi is absent or errors: a CPU node has no driver.
 func readGPUMetrics() []gpuMetric {
 	out, err := exec.Command("nvidia-smi",
 		"--query-gpu=index,utilization.gpu,memory.used,memory.total",
@@ -271,26 +258,12 @@ func readGPUMetrics() []gpuMetric {
 	return parseGPUMetrics(string(out))
 }
 
-// parseGPUMetrics parses `index, util, memUsed, memTotal` CSV rows; malformed rows are skipped.
 func parseGPUMetrics(out string) []gpuMetric {
 	var gpus []gpuMetric
 	for ln := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
-		f := strings.Split(ln, ",")
-		if len(f) != 4 {
-			continue
-		}
-		var n [4]int
-		ok := true
-		for i := range f {
-			v, err := strconv.Atoi(strings.TrimSpace(f[i]))
-			if err != nil {
-				ok = false
-				break
-			}
-			n[i] = v
-		}
-		if ok {
-			gpus = append(gpus, gpuMetric{Index: n[0], UtilPct: n[1], MemUsedMiB: n[2], MemTotalMiB: n[3]})
+		var g gpuMetric
+		if _, err := fmt.Sscanf(ln, "%d, %d, %d, %d", &g.Index, &g.UtilPct, &g.MemUsedMiB, &g.MemTotalMiB); err == nil {
+			gpus = append(gpus, g)
 		}
 	}
 	return gpus

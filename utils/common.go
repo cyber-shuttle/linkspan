@@ -7,9 +7,7 @@ import (
 	"net/http"
 )
 
-// RespondJSON writes a JSON response with the given status code.
-// Use this exported helper from other packages: `utils.RespondJSON`.
-func RespondJSON(w http.ResponseWriter, status int, v interface{}) {
+func RespondJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if v == nil {
@@ -18,16 +16,15 @@ func RespondJSON(w http.ResponseWriter, status int, v interface{}) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// GetAvailablePort finds and returns an available TCP port.
-// It works by binding to port 0, which lets the OS assign an available port,
-// then closes the listener and returns the assigned port.
-func GetAvailablePort() (int, error) {
+func RespondError(w http.ResponseWriter, status int, msg string) {
+	RespondJSON(w, status, map[string]string{"error": msg})
+}
+
+func AvailablePort() (int, error) {
 	listener, err := net.Listen("tcp", ":0")
 	if err != nil {
 		return 0, fmt.Errorf("failed to find available port: %w", err)
 	}
 	defer listener.Close()
-
-	addr := listener.Addr().(*net.TCPAddr)
-	return addr.Port, nil
+	return listener.Addr().(*net.TCPAddr).Port, nil
 }

@@ -19,8 +19,6 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-// TestSSHServerLifecycle starts a real supervised server, checks it reports
-// running, then stops it and confirms it is deregistered.
 func TestSSHServerLifecycle(t *testing.T) {
 	s := Start("test-session", "127.0.0.1:0", "dummy-key")
 	if s == nil {
@@ -39,19 +37,18 @@ func TestSSHServerLifecycle(t *testing.T) {
 	}
 }
 
-// TestPanicIsolation verifies the recover wrappers contain panics rather than
-// propagating them (which would crash the agent). Reaching the end means none escaped.
+// Reaching the end means no panic escaped.
 func TestPanicIsolation(t *testing.T) {
 	started := make(chan struct{})
 	safeGo("test", func() { close(started); panic("boom") })
 	<-started
 	time.Sleep(20 * time.Millisecond) // let the panic unwind and recover
 
-	recoverChannelHandler("test", func(*ssh.Server, *gossh.ServerConn, gossh.NewChannel, ssh.Context) {
+	guardChannel("test", func(*ssh.Server, *gossh.ServerConn, gossh.NewChannel, ssh.Context) {
 		panic("boom")
 	})(nil, nil, nil, nil)
 
-	rh := recoverRequestHandler("test", func(ssh.Context, *ssh.Server, *gossh.Request) (bool, []byte) {
+	rh := guardRequest("test", func(ssh.Context, *ssh.Server, *gossh.Request) (bool, []byte) {
 		panic("boom")
 	})
 	if ok, payload := rh(nil, nil, nil); ok || payload != nil {
@@ -59,23 +56,17 @@ func TestPanicIsolation(t *testing.T) {
 	}
 }
 
-// TestSessionHandlerPanicIsolation verifies recoverSessionHandler contains a panic
-// raised inside a session/subsystem handler body. gliderlabs/ssh runs the user
-// Handler and SubsystemHandlers on a child goroutine (session.go dispatches them
-// via `go func(){ handler(sess); ... }()`), which the channel-level recover cannot
-// reach — so the recover must wrap the handler itself. An escaped panic here would
-// crash the whole linkspan process.
+// gliderlabs dispatches these on a child goroutine that a channel-level recover
+// cannot reach, so an escaped panic here would crash linkspan.
 func TestSessionHandlerPanicIsolation(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
-			t.Fatalf("panic escaped recoverSessionHandler (would crash linkspan): %v", r)
+			t.Fatalf("panic escaped guardSession (would crash linkspan): %v", r)
 		}
 	}()
-	recoverSessionHandler("test", func(ssh.Session) { panic("boom") })(nil)
+	guardSession("test", func(ssh.Session) { panic("boom") })(nil)
 }
 
-// TestSupervisorBoundedRetries: a listener that fails immediately is retried
-// exactly maxConsecutiveFailures times, then marked failed and left registered.
 func TestSupervisorBoundedRetries(t *testing.T) {
 	tuning(t, 5, time.Millisecond, time.Hour)
 	s, build, builds := failingServer(t, "bounded")
@@ -90,9 +81,7 @@ func TestSupervisorBoundedRetries(t *testing.T) {
 	}
 }
 
-// TestSupervisorHealthyRunResetsCounter: a run ≥ healthyRunThreshold resets the
-// rapid-failure counter. Attempt 5 reports a long run, so failure is deferred to
-// attempt 9 instead of 5.
+// Attempt 5 reports a long run, so failure defers to attempt 9 instead of 5.
 func TestSupervisorHealthyRunResetsCounter(t *testing.T) {
 	tuning(t, 5, time.Millisecond, time.Hour)
 
@@ -125,8 +114,6 @@ func TestSupervisorHealthyRunResetsCounter(t *testing.T) {
 	}
 }
 
-// TestSupervisorStopHonored: the stop signal breaks the restart loop and
-// deregisters the session even mid-backoff.
 func TestSupervisorStopHonored(t *testing.T) {
 	tuning(t, 1000, 5*time.Millisecond, time.Hour) // would loop ~forever without a stop
 	s, build, _ := failingServer(t, "stoppable")
@@ -150,16 +137,9 @@ func TestSupervisorStopHonored(t *testing.T) {
 	}
 }
 
-// TestNewServerWiring confirms the SERVER START options install every expected
-// handler and callback — a guard against an option being dropped or mis-wired.
+// sftp and streamlocal have no cs-bridge caller to notice they went missing.
 func TestNewServerWiring(t *testing.T) {
-	srv := newServer(":0",
-		onConnect(handleSession),
-		withAuth("key"),
-		withSubsystem("sftp", handleSFTP),
-		withForwarding(),
-		withKeepAlive(time.Second),
-	)
+	srv := newServer(":0", "key")
 
 	if srv.Handler == nil || srv.PublicKeyHandler == nil || srv.PasswordHandler != nil ||
 		srv.ConnCallback == nil || srv.LocalPortForwardingCallback == nil || srv.ReversePortForwardingCallback == nil {
@@ -180,9 +160,7 @@ func TestNewServerWiring(t *testing.T) {
 	}
 }
 
-// TestDirectStreamLocalForwarding round-trips bytes through a direct-streamlocal
-// channel to a unix-socket echo server — the path VS Code's
-// remoteServerListenOnSocket mode depends on.
+// The path VS Code's remoteServerListenOnSocket mode depends on.
 func TestDirectStreamLocalForwarding(t *testing.T) {
 	dir, err := os.MkdirTemp("", "sl") // not t.TempDir: macOS caps socket paths at 104 chars
 	if err != nil {
@@ -202,7 +180,7 @@ func TestDirectStreamLocalForwarding(t *testing.T) {
 	}()
 
 	signer, authorizedKey := testKeyPair(t)
-	srv := newServer("127.0.0.1:0", withAuth(authorizedKey), withForwarding())
+	srv := newServer("127.0.0.1:0", authorizedKey)
 	tl, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -235,9 +213,6 @@ func TestDirectStreamLocalForwarding(t *testing.T) {
 	}
 }
 
-// TestRunHostCommandWiresStdio runs a real command through the shared host-command
-// wiring (used by both the exec and shell-stdin paths) and confirms its stdout is
-// written back to the session. Protects the de-duplicated stdio wiring.
 func TestRunHostCommandWiresStdio(t *testing.T) {
 	c := &captureSession{}
 	runHostCommand(c, exec.Command("sh", "-c", "echo hello"))
@@ -246,11 +221,7 @@ func TestRunHostCommandWiresStdio(t *testing.T) {
 	}
 }
 
-// --- helpers ---
-
-// captureSession is a minimal ssh.Session that feeds no stdin (immediate EOF) and
-// captures everything written to it. Stderr() returns nil to exercise the fallback
-// that routes stderr to the session's main stream.
+// Stderr() returns nil to exercise the fallback onto the session's main stream.
 type captureSession struct {
 	ssh.Session
 	mu  sync.Mutex
@@ -270,8 +241,6 @@ func (c *captureSession) String() string {
 	return c.out.String()
 }
 
-// failingServer registers a session whose build factory always yields a listener
-// that fails immediately (invalid port), and returns a counter of build calls.
 func failingServer(t *testing.T, id string) (*SSHServer, func() *ssh.Server, *int) {
 	t.Helper()
 	s := &SSHServer{state: stateRunning, sessionID: id, addr: "x", stopCh: make(chan struct{})}
@@ -287,7 +256,6 @@ func failingServer(t *testing.T, id string) (*SSHServer, func() *ssh.Server, *in
 	return s, func() *ssh.Server { *n++; return &ssh.Server{Addr: "127.0.0.1:999999"} }, n
 }
 
-// tuning shrinks the supervisor timings for fast tests and restores them after.
 func tuning(t *testing.T, maxFail int, backoff, healthy time.Duration) {
 	t.Helper()
 	mf, mn, mx, th := maxConsecutiveFailures, minRestartBackoff, maxRestartBackoff, healthyRunThreshold
@@ -309,7 +277,6 @@ func waitFor(t *testing.T, cond func() bool) bool {
 	return false
 }
 
-// testKeyPair returns a signer and its authorized_keys line.
 func testKeyPair(t *testing.T) (gossh.Signer, string) {
 	t.Helper()
 	_, private, err := ed25519.GenerateKey(rand.Reader)
@@ -323,8 +290,7 @@ func testKeyPair(t *testing.T) (gossh.Signer, string) {
 	return signer, string(gossh.MarshalAuthorizedKey(signer.PublicKey()))
 }
 
-// Test-only lookups over the live registry, so production keeps only what the
-// two surviving routes need.
+// Test-only registry lookups: production needs only what the two routes use.
 func statusOf(id string) (*SessionStatus, bool) {
 	for _, s := range Statuses() {
 		if s.ID == id {
