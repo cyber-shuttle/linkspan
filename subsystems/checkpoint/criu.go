@@ -278,6 +278,15 @@ func (c *criuCheckpointer) restore(ctx context.Context, workloadID, checkpointID
 	}
 
 	imagesDir := imagesDirPath(checkpointDir)
+
+	// A previous restore of this same checkpoint left its pidfile behind, and
+	// awaitPidFile returns on the first successful read — without this, a
+	// retried restore can adopt the earlier attempt's pid.
+	pidFile := filepath.Join(checkpointDir, "restore.pid")
+	if err := os.Remove(pidFile); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to clear stale pidfile %s: %w", pidFile, err)
+	}
+
 	args := buildRestoreArgs(imagesDir, checkpointDir, "restore.log", "restore.pid", c.AdditionalCriuOpts)
 	log.Printf("[Checkpoint] executing: %s %s", c.CriuPath, strings.Join(args, " "))
 
@@ -298,7 +307,7 @@ func (c *criuCheckpointer) restore(ctx context.Context, workloadID, checkpointID
 		return nil, fmt.Errorf("criu restore failed for %s/%s (exit code %d): %w: %s", workloadID, checkpointID, exitCode, runErr, strings.TrimSpace(stderr.String()))
 	}
 
-	restoredPid, err := awaitPidFile(filepath.Join(checkpointDir, "restore.pid"))
+	restoredPid, err := awaitPidFile(pidFile)
 	if err != nil {
 		return nil, fmt.Errorf("criu restore of %s/%s reported success but its pidfile could not be read (%w); the restored process may be running unsupervised and must be found and cleaned up manually", workloadID, checkpointID, err)
 	}
