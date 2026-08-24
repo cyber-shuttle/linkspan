@@ -1,43 +1,40 @@
 // Package metrics reports the running job's live resource use: cgroup-v2 memory
 // and cpu, plus per-GPU nvidia-smi. Every source degrades on its own, so a
-// missing cgroup file or a CPU node with no driver omits a field instead of
-// failing the request.
+// missing cgroup file or a CPU node with no driver omits a field rather than
+// failing the read.
 package metrics
 
 import (
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
-
-	"github.com/cyber-shuttle/linkspan/utils"
 )
 
-type gpuMetric struct {
+type GPU struct {
 	Index       int `json:"index"`
 	UtilPct     int `json:"utilPct"`
 	MemUsedMiB  int `json:"memUsedMiB"`
 	MemTotalMiB int `json:"memTotalMiB"`
 }
 
-// Mirrors the csbridge MetricSample live fields. Every source is read
+// Snapshot mirrors the csbridge MetricSample live fields. Every source is read
 // independently and omitted when unavailable, so the client sees undefined
 // rather than a misleading zero.
-type liveMetrics struct {
-	MemBytes     *int64      `json:"memBytes,omitempty"`
-	CPUUsageUsec *int64      `json:"cpuUsageUsec,omitempty"`
-	GPUs         []gpuMetric `json:"gpus,omitempty"`
+type Snapshot struct {
+	MemBytes     *int64 `json:"memBytes,omitempty"`
+	CPUUsageUsec *int64 `json:"cpuUsageUsec,omitempty"`
+	GPUs         []GPU  `json:"gpus,omitempty"`
 }
 
-func Handler(w http.ResponseWriter, r *http.Request) {
-	m := liveMetrics{GPUs: readGPUMetrics()}
+func Read() Snapshot {
+	m := Snapshot{GPUs: readGPUMetrics()}
 	if cg, err := jobCgroupDir(); err == nil {
 		m.MemBytes = readCgroup(cg+"/memory.current", parseInt64)
 		m.CPUUsageUsec = readCgroup(cg+"/cpu.stat", parseCPUUsageUsec)
 	}
-	utils.RespondJSON(w, http.StatusOK, m)
+	return m
 }
 
 func readCgroup[T any](path string, parse func(string) (T, error)) *T {
@@ -83,7 +80,7 @@ func parseCPUUsageUsec(cpuStat string) (int64, error) {
 }
 
 // nil when nvidia-smi is absent or errors: a CPU node has no driver.
-func readGPUMetrics() []gpuMetric {
+func readGPUMetrics() []GPU {
 	out, err := exec.Command("nvidia-smi",
 		"--query-gpu=index,utilization.gpu,memory.used,memory.total",
 		"--format=csv,noheader,nounits").Output()
@@ -93,10 +90,10 @@ func readGPUMetrics() []gpuMetric {
 	return parseGPUMetrics(string(out))
 }
 
-func parseGPUMetrics(out string) []gpuMetric {
-	var gpus []gpuMetric
+func parseGPUMetrics(out string) []GPU {
+	var gpus []GPU
 	for ln := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
-		var g gpuMetric
+		var g GPU
 		if _, err := fmt.Sscanf(ln, "%d, %d, %d, %d", &g.Index, &g.UtilPct, &g.MemUsedMiB, &g.MemTotalMiB); err == nil {
 			gpus = append(gpus, g)
 		}

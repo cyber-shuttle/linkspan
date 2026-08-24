@@ -71,8 +71,8 @@ Four endpoints, all under `/api/v1/`.
 | POST | `/vscode/sessions` | Start an SSH server authorized for one public key |
 
 `POST /vscode/sessions` takes `{"authorized_key": "<ssh public key>"}` and answers
-`{"id": "s-<port>", "bind_port": <port>}`. The server binds loopback only; it reaches clients through the
-tunnel, never the node's network.
+`{"id": "s-<port>", "bind_port": <port>}`. The port is bound before the response is written, so it is
+already accepting. It is loopback only: it reaches clients through the tunnel, never the node's network.
 
 ## Architecture
 
@@ -80,15 +80,13 @@ tunnel, never the node's network.
 linkspan
 ├── main.go                    # CLI flags, startup, shutdown
 ├── internal/
-│   ├── httpapi/               # /api/v1 route table + unix socket listener
+│   ├── httpapi/               # every route, handler and listener
 │   ├── workflow/              # YAML workflow: load and run shell.exec steps in order
 │   └── process/               # Process manager for background CLI processes
-├── subsystems/
-│   ├── metrics/               # cgroup-v2 + nvidia-smi job metrics
-│   ├── sshd/                  # Supervised SSH server (gliderlabs/ssh) with PTY support
-│   ├── tunnel/                # devtunnel CLI download + relay hosting
-│   └── vscode/                # REST surface for /vscode/sessions; drives sshd
-└── utils/                     # Shared helpers (port finding, JSON responses)
+└── subsystems/
+    ├── metrics/               # cgroup-v2 + nvidia-smi job metrics
+    ├── sshd/                  # Supervised SSH server (gliderlabs/ssh) with PTY support
+    └── tunnel/                # devtunnel CLI download + relay hosting
 ```
 
 ## Building Releases

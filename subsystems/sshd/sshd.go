@@ -24,8 +24,21 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-func Start(sessionID, addr string, authorized ssh.PublicKey) *SSHServer {
-	return supervise(sessionID, addr, func() *ssh.Server { return newServer(addr, authorized) })
+// Start binds before it returns, so the caller gets the port that is actually
+// held and a bind failure is reported now rather than surfacing later as a
+// session that never accepted anything. Loopback only: the port reaches clients
+// through the tunnel, never the node's network.
+func Start(authorized ssh.PublicKey) (id string, port int, err error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", 0, err
+	}
+	addr := ln.Addr().String()
+	port = ln.Addr().(*net.TCPAddr).Port
+	// The id embeds the port because the client reads it back out of the id.
+	id = fmt.Sprintf("s-%d", port)
+	supervise(id, addr, ln, func() *ssh.Server { return newServer(addr, authorized) })
+	return id, port, nil
 }
 
 // Built per (re)start: ForwardedTCPHandler holds per-server state. sftp and
@@ -270,7 +283,7 @@ type SSHServer struct {
 	stopped   bool
 }
 
-func supervise(sessionID, addr string, build func() *ssh.Server) *SSHServer {
+func supervise(sessionID, addr string, first net.Listener, build func() *ssh.Server) *SSHServer {
 	s := &SSHServer{state: stateRunning, addr: addr, sessionID: sessionID, stopCh: make(chan struct{})}
 
 	activeServersMu.Lock()
@@ -278,12 +291,17 @@ func supervise(sessionID, addr string, build func() *ssh.Server) *SSHServer {
 	activeServersMu.Unlock()
 
 	log.Printf("[ssh] starting supervised ssh server on %s (session=%s)", addr, sessionID)
-	safeGo("ssh supervisor "+sessionID, func() { s.run(build) })
+	safeGo("ssh supervisor "+sessionID, func() { s.run(build, first) })
 	return s
 }
 
-func (s *SSHServer) run(build func() *ssh.Server) {
+func (s *SSHServer) run(build func() *ssh.Server, first net.Listener) {
 	backoff, consecutive := minRestartBackoff, 0
+	defer func() {
+		if first != nil { // stopped before it was ever served
+			_ = first.Close()
+		}
+	}()
 
 	for {
 		s.mu.Lock()
@@ -296,8 +314,15 @@ func (s *SSHServer) run(build func() *ssh.Server) {
 		s.current, s.state = srv, stateRunning
 		s.mu.Unlock()
 
+		ln, err := first, error(nil)
+		first = nil
+		if ln == nil { // every restart rebinds; Serve closed the last listener
+			ln, err = net.Listen("tcp", s.addr)
+		}
 		start := nowFunc()
-		err := srv.ListenAndServe()
+		if err == nil {
+			err = srv.Serve(ln)
+		}
 		ranFor := nowFunc().Sub(start)
 
 		s.mu.Lock()
