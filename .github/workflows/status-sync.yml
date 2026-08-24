@@ -1,6 +1,8 @@
-name: Sync PR status to project
+name: Sync issue and PR status to project
 
 on:
+  issues:
+    types: [closed, reopened]
   pull_request:
     types: [opened, reopened, closed, ready_for_review, converted_to_draft]
 
@@ -13,7 +15,6 @@ jobs:
         with:
           github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
           script: |
-            const pr = context.payload.pull_request;
             const projectId = "PVT_kwDOBa9-UM4ApBgm";
             const statusFieldId = "PVTSSF_lADOBa9-UM4ApBgmzgggAKY";
             const statusOptions = {
@@ -25,23 +26,28 @@ jobs:
               "Done": "21877bf4",
             };
 
+            const pr = context.payload.pull_request;
+            const subject = pr ?? context.payload.issue;
+            const kind = pr ? "pullRequest" : "issue";
+
+            // A closed-but-unmerged PR keeps whatever status it had; everything
+            // else maps to one column.
             let targetStatus;
-            if (pr.merged) {
-              targetStatus = "Done";
-            } else if (pr.state === "closed") {
-              return;
-            } else if (pr.draft) {
-              targetStatus = "In Progress";
+            if (pr) {
+              if (pr.merged) targetStatus = "Done";
+              else if (pr.state === "closed") return;
+              else if (pr.draft) targetStatus = "In Progress";
+              else targetStatus = "In Review";
             } else {
-              targetStatus = "In Review";
+              targetStatus = subject.state === "closed" ? "Done" : "Backlog";
             }
 
-            // Ask the pullrequest for its own project items. Scanning the project
+            // Ask the subject for its own project items. Scanning the project
             // needs paging: it holds more items than one page returns, so
             // items(first: 100) silently skipped everything past the first page.
             const query = `query($owner: String!, $repo: String!, $number: Int!) {
               repository(owner: $owner, name: $repo) {
-                pullRequest(number: $number) {
+                ${kind}(number: $number) {
                   projectItems(first: 20) { nodes { id project { id } } }
                 }
               }
@@ -49,12 +55,12 @@ jobs:
             const result = await github.graphql(query, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              number: pr.number,
+              number: subject.number,
             });
-            const items = result.repository.pullRequest.projectItems.nodes;
+            const items = result.repository[kind].projectItems.nodes;
             const item = items.find(n => n.project.id === projectId);
             if (!item) {
-              console.log(`PR #${pr.number} is on ${items.length} project(s), none of them ${projectId}; skipping`);
+              console.log(`${kind} #${subject.number} is on ${items.length} project(s), none of them ${projectId}; skipping`);
               return;
             }
 
@@ -72,4 +78,4 @@ jobs:
               fieldId: statusFieldId,
               optionId: statusOptions[targetStatus],
             });
-            console.log("Updated PR #" + pr.number + " to " + targetStatus);
+            console.log(`Updated ${kind} #${subject.number} to ${targetStatus}`);
