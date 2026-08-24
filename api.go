@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/cyber-shuttle/linkspan/internal/utils"
+	"github.com/cyber-shuttle/linkspan/internal/workflow"
 	"github.com/cyber-shuttle/linkspan/subsystems/checkpoint"
 	"github.com/cyber-shuttle/linkspan/subsystems/fork"
 	"github.com/cyber-shuttle/linkspan/subsystems/jupyter"
@@ -79,6 +80,9 @@ func RegisterRoutes(api *mux.Router) {
 
 	// Health and workflow status
 	api.HandleFunc("/health", handleHealth).Methods("GET")
+
+	// Workflow execution progress; reports idle when no --workflow was given.
+	api.HandleFunc("/status", workflow.StatusHandler).Methods("GET")
 
 	// Live resource metrics for the running job (cgroup mem/cpu + nvidia-smi).
 	api.HandleFunc("/metrics", metricsHandler).Methods("GET")

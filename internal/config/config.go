@@ -34,6 +34,7 @@ type LinkspanConfig struct {
 	Date    string `yaml:"date"`
 	Version string `yaml:"version"`
 
+	WorkflowPath             string `yaml:"workflow_path"`
 	ForkCommand              string `yaml:"fork_command"`
 	ShutdownOnForkCompletion bool   `yaml:"shutdown_on_fork_completion"`
 	CheckpointForkAfterDelay int64  `yaml:"checkpoint_fork_after_delay"`
@@ -74,6 +75,7 @@ func NewDefaultLinkspanConfig() *LinkspanConfig {
 		TunnelRetries:            3,
 		TunnelRetryDelay:         2 * time.Second,
 		TunnelAttemptTimeout:     10 * time.Second,
+		WorkflowPath:             "",
 		ForkCommand:              "",
 		ShutdownOnForkCompletion: false,
 		CheckpointForkAfterDelay: 0,

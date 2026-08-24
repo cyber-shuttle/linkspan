@@ -117,6 +117,7 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	tunnelAttemptTimeout := flag.Duration("tunnel-attempt-timeout", 10*time.Second, "timeout per tunnel setup attempt")
 	serverPortFlag := flag.Int("port", 8080, "port for the HTTP server to listen on")
 	serverHostFlag := flag.String("host", "0.0.0.0", "host/IP for the HTTP server to bind to")
+	workflowPath := flag.String("workflow", "", "YAML workflow to run once the server is up; \"-\" reads it from stdin")
 	forkCommand := flag.String("fork-command", "", "command to execute as a fork process")
 	shutdownOnForkCompletionFlag := flag.String("shutdown-on-fork-completion", "false", "gracefully shutdown when fork process completes (true/false)")
 	socketPath := flag.String("socket", "", "also listen on this unix socket path (in-cluster access via `srun --jobid`)")
@@ -222,6 +223,7 @@ func ProcessCommandArguments(c *config.LinkspanConfig) error {
 	c.TunnelAttemptTimeout = *tunnelAttemptTimeout
 	c.ServerPort = *serverPortFlag
 	c.ServerHost = *serverHostFlag
+	c.WorkflowPath = *workflowPath
 	c.ForkCommand = *forkCommand
 	c.ShutdownOnForkCompletion = shutdownOnForkCompletion
 	c.RestoreCheckpointID = resolveRenamedFlag(restoreCheckpoint, restoreCheckpointID, "restore-checkpoint", "restore-checkpoint-id")

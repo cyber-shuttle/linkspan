@@ -16,6 +16,7 @@ import (
 	"github.com/cyber-shuttle/linkspan/internal/controller"
 	"github.com/cyber-shuttle/linkspan/internal/logstream"
 	ops "github.com/cyber-shuttle/linkspan/internal/operations"
+	"github.com/cyber-shuttle/linkspan/internal/workflow"
 	"github.com/cyber-shuttle/linkspan/subsystems/checkpoint"
 	"github.com/cyber-shuttle/linkspan/subsystems/vfs"
 	"github.com/gorilla/mux"
@@ -192,6 +193,15 @@ func main() {
 		serverErr <- err
 	}()
 
+	// The workflow starts only once the server is listening: its actions drive
+	// linkspan's own subsystems, and a tunnel or vscode step expects the bound
+	// port to already be real.
+	if c.WorkflowPath != "" {
+		if err := startWorkflow(ctx, c); err != nil {
+			log.Fatalf("failed to load workflow %s: %v", c.WorkflowPath, err)
+		}
+	}
+
 	select {
 	case <-ctx.Done():
 		log.Println("Shutdown signal received...")
@@ -280,4 +290,48 @@ func armWalltimeGuard(ctx context.Context, c *config.LinkspanConfig, svc *checkp
 	}
 	log.Printf("walltime checkpointing armed for Slurm job %s: workload %s will be checkpointed %s before the allocation ends, or on %s",
 		checkpoint.SlurmJobID(), workloadID, c.CheckpointBeforeWalltime, sig)
+}
+
+/*
+startWorkflow loads the workflow and runs it in the background.
+
+A failing step is logged rather than fatal, and the HTTP server keeps serving:
+the workflow is one way to drive linkspan, not the reason the process exists —
+an operator still needs /status to see what failed, and the tunnel to reach it.
+
+ctx is the shutdown context, which Engine.Run checks between steps, so a signal
+interrupts a workflow without waiting for the current step.
+*/
+func startWorkflow(ctx context.Context, c *config.LinkspanConfig) error {
+	var (
+		wf  *workflow.WorkflowConfig
+		err error
+	)
+	if c.WorkflowPath == "-" {
+		wf, err = workflow.LoadReader(os.Stdin)
+	} else {
+		wf, err = workflow.LoadFile(c.WorkflowPath)
+	}
+	if err != nil {
+		return err
+	}
+
+	// Seed the variables a workflow cannot discover for itself, so steps can
+	// interpolate this allocation's identity with {{.WorkloadID}} and friends.
+	engine := workflow.NewEngine(workflow.DefaultRegistry(), map[string]any{
+		"WorkloadID":     c.WorkloadID,
+		"ServerHost":     c.ServerHost,
+		"ServerPort":     c.ServerPort,
+		"CheckpointRoot": c.CheckpointRoot,
+		"SlurmJobID":     checkpoint.SlurmJobID(),
+	})
+	workflow.GlobalEngine = engine
+
+	log.Printf("running workflow %q (%d steps) from %s", wf.Name, len(wf.Steps), c.WorkflowPath)
+	go func() {
+		if err := engine.Run(ctx, wf); err != nil {
+			log.Printf("workflow %q failed: %v", wf.Name, err)
+		}
+	}()
+	return nil
 }
