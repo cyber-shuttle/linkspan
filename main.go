@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/cyber-shuttle/linkspan/internal/httpapi"
-	pm "github.com/cyber-shuttle/linkspan/internal/process"
 	"github.com/cyber-shuttle/linkspan/internal/workflow"
 	"github.com/cyber-shuttle/linkspan/subsystems/sshd"
 	"github.com/cyber-shuttle/linkspan/subsystems/tunnel"
@@ -107,7 +106,7 @@ func run() int {
 	// devtunnel relay running or SSH sessions accepting.
 	defer func() {
 		abort(nil) // stop the tunnel retry loop before killing what it started
-		pm.Global.KillAll()
+		tunnel.StopRelay()
 		sshd.StopAll()
 		log.Println("Server gracefully stopped.")
 	}()

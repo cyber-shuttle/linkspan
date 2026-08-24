@@ -84,8 +84,7 @@ linkspan
 ├── main.go                    # CLI flags, startup, shutdown
 ├── internal/
 │   ├── httpapi/               # every route, handler and listener
-│   ├── workflow/              # YAML workflow: load and run shell.exec steps in order
-│   └── process/               # Process manager for background CLI processes
+│   └── workflow/              # YAML workflow: load and run shell.exec steps in order
 └── subsystems/
     ├── metrics/               # cgroup-v2 + nvidia-smi job metrics
     ├── sshd/                  # Supervised SSH server (gliderlabs/ssh) with PTY support
