@@ -5,7 +5,6 @@ package sshd
 
 import (
 	"cmp"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -322,13 +321,6 @@ func (s *SSHServer) signalStop() *ssh.Server {
 		close(s.stopCh)
 	}
 	return s.current
-}
-
-func (s *SSHServer) Stop(ctx context.Context) error {
-	if srv := s.signalStop(); srv != nil {
-		return srv.Shutdown(ctx)
-	}
-	return nil
 }
 
 func (s *SSHServer) Close() error {

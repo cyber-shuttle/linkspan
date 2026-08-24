@@ -12,6 +12,8 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
+const maxRequestBytes = 64 << 10
+
 type SessionRequest struct {
 	AuthorizedKey string `json:"authorized_key"` // the private half never leaves the caller
 }
@@ -27,11 +29,12 @@ func ListSessions(w http.ResponseWriter, r *http.Request) {
 
 func CreateSession(w http.ResponseWriter, r *http.Request) {
 	var req SessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// An ssh public key is well under a kilobyte; the cap stops a large body
+	// from being read into memory. net/http closes the body itself.
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes)).Decode(&req); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	_ = r.Body.Close()
 
 	if _, _, _, _, err := gossh.ParseAuthorizedKey([]byte(req.AuthorizedKey)); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "authorized_key is missing or invalid")

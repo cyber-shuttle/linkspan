@@ -55,8 +55,9 @@ steps:
 | `--version` | | Print the version and exit |
 
 `--version` prints a bare `X.Y.Z[.commit]` as its only line of stdout, and `--help` names
-`-tunnel-host-token`. Both consumers parse those two outputs to decide whether to install or replace the
-binary, so neither may change shape.
+`-tunnel-host-token`. Both consumers run `--version` to decide whether to install or replace the binary —
+cs-bridge is broken by a second line, cs-control tolerates one — and cs-control greps `--help` for
+`-tunnel-host-token` and refuses to submit a job without it. Neither output may change shape.
 
 ## REST API
 
