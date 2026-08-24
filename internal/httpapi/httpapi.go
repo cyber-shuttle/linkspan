@@ -80,6 +80,13 @@ func ListenUnix(srv *http.Server, path string) error {
 	if err != nil {
 		return err
 	}
+	// bind() applies the umask, so under umask 002 this lands group-writable in a
+	// shared directory -- and every route behind it is unauthenticated. Only the
+	// job's own user reaches it via `srun --overlap`.
+	if err := os.Chmod(path, 0o600); err != nil {
+		ln.Close()
+		return err
+	}
 	go func() {
 		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Printf("unix socket server error: %v", err)

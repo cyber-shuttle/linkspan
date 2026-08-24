@@ -105,3 +105,27 @@ func TestCreateSessionRejectsAnUnusableKey(t *testing.T) {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }
+
+// Every route behind the socket is unauthenticated and POST /vscode/sessions
+// hands out a shell, and cs-bridge puts the socket in a shared directory.
+func TestListenUnixSocketIsNotGroupOrWorldAccessible(t *testing.T) {
+	dir, err := os.MkdirTemp("", "sock") // not t.TempDir: macOS caps socket paths at 104 chars
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "linkspan.sock")
+	srv := &http.Server{Handler: Mux()}
+	if err := ListenUnix(srv, sock); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+
+	info, err := os.Stat(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		t.Fatalf("socket mode %v; group and other must have no access", perm)
+	}
+}

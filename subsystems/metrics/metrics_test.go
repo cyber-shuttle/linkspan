@@ -76,4 +76,15 @@ func TestReadOutlastsAHungNvidiaSmi(t *testing.T) {
 	case <-time.After(gpuProbeTimeout + 5*time.Second):
 		t.Fatal("Read never returned with nvidia-smi hung")
 	}
+
+	// The stuck probe is still running. cs-bridge polls every 5s, so a second
+	// read must not start another one -- and must not wait for the first.
+	second := time.Now()
+	Read(context.Background())
+	if elapsed := time.Since(second); elapsed > time.Second {
+		t.Fatalf("a second read took %s while a probe was stuck; it should skip", elapsed)
+	}
+	if !gpuProbing.Load() {
+		t.Fatal("the stuck probe is no longer marked outstanding, so a second one could start")
+	}
 }

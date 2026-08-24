@@ -11,13 +11,20 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
-// nvidia-smi blocks indefinitely on an unhealthy GPU -- which is exactly the
-// state the metrics are wanted for -- so the probe is bounded. cs-bridge polls
-// every 5s, so a stuck probe must not outlive its own poll.
+// nvidia-smi blocks indefinitely on an unhealthy GPU, which is exactly the state
+// the metrics are wanted for. Killing it is not enough: a process wedged in an
+// uninterruptible driver call ignores SIGKILL until the call returns, and Wait
+// blocks on it regardless of the context. So the read gives up on the probe
+// rather than the probe giving up, and only one may ever be outstanding --
+// cs-bridge polls every 5s, which would otherwise pile up a stuck process per
+// poll for as long as the GPU stays sick.
 const gpuProbeTimeout = 3 * time.Second
+
+var gpuProbing atomic.Bool
 
 type GPU struct {
 	Index       int `json:"index"`
@@ -86,18 +93,32 @@ func parseCPUUsageUsec(cpuStat string) (int64, error) {
 	return 0, fmt.Errorf("usage_usec not found in cpu.stat")
 }
 
-// nil when nvidia-smi is absent, errors, or outruns gpuProbeTimeout: a CPU node
-// has no driver, and a wedged one must not hold the handler open.
+// nil when nvidia-smi is absent, errors, outruns gpuProbeTimeout, or when an
+// earlier probe is still stuck: a CPU node has no driver, and a sick one must
+// not hold the handler open or accumulate processes.
 func readGPUMetrics(ctx context.Context) []GPU {
-	ctx, cancel := context.WithTimeout(ctx, gpuProbeTimeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "nvidia-smi",
-		"--query-gpu=index,utilization.gpu,memory.used,memory.total",
-		"--format=csv,noheader,nounits").Output()
-	if err != nil {
+	if !gpuProbing.CompareAndSwap(false, true) {
 		return nil
 	}
-	return parseGPUMetrics(string(out))
+	probed := make(chan []GPU, 1)
+	go func() {
+		defer gpuProbing.Store(false)
+		out, err := exec.CommandContext(ctx, "nvidia-smi",
+			"--query-gpu=index,utilization.gpu,memory.used,memory.total",
+			"--format=csv,noheader,nounits").Output()
+		if err != nil {
+			probed <- nil
+			return
+		}
+		probed <- parseGPUMetrics(string(out))
+	}()
+
+	select {
+	case gpus := <-probed:
+		return gpus
+	case <-time.After(gpuProbeTimeout):
+		return nil // still running; gpuProbing stays set until it finally exits
+	}
 }
 
 func parseGPUMetrics(out string) []GPU {
