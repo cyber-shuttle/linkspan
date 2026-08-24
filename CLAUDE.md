@@ -36,7 +36,7 @@ Reach `--socket` in-cluster (no tunnel/TCP port): `srun --jobid=<id> --overlap c
 main.go                         # CLI flags, HTTP router (net/http ServeMux), tunnel bring-up, job metrics
 internal/
   workflow/                     # YAML workflow: load, then run shell.exec steps in order
-  process/                      # ManagedProcess tracking, GlobalProcessManager singleton
+  process/                      # background process tracking, process.Global singleton
 subsystems/
   sshd/                         # Supervised SSH server (gliderlabs/ssh) with PTY support
   tunnel/                       # devtunnel CLI download + relay hosting
@@ -72,7 +72,8 @@ but leaves the HTTP server running.
 
 ## Key Patterns
 
-- **GlobalProcessManager** singleton tracks long-running processes (the devtunnel host CLI)
+- **process.Global** singleton tracks long-running processes (the devtunnel host CLI); its output
+  buffers are mutex-guarded because callers read them while the process is still writing
 - The client owns the tunnel: it creates it, registers its ports, and mints a host-scoped token. Linkspan
   hosts the relay and never creates, forwards, refreshes or deletes a tunnel.
 - The SSH server accepts exactly one public key, supplied at create time, and binds loopback only

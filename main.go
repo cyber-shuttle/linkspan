@@ -67,7 +67,7 @@ func main() {
 		log.Fatalf("--port must be between 0 and 65535, got %d", serverPort)
 	}
 	addr := fmt.Sprintf("0.0.0.0:%d", serverPort)
-	srv := &http.Server{Addr: addr, Handler: mux}
+	srv := &http.Server{Handler: mux} // Addr is unused: we hand Serve our own listener
 
 	// Bind before starting the tunnel so the port is open when the relay connects.
 	listener, err := net.Listen("tcp", addr)
@@ -123,42 +123,44 @@ func main() {
 			log.Printf("server force-close error: %v", closeErr)
 		}
 	}
-	pm.GlobalProcessManager.KillAll()
+	pm.Global.KillAll()
 	sshd.StopAll()
 	log.Println("Server gracefully stopped.")
 }
 
-// hostTunnel retries the relay bring-up, killing the host process left behind by
-// a failed or timed-out attempt so it cannot leak.
+type hostResult struct {
+	cmdID string
+	err   error
+}
+
+// hostTunnel retries the relay bring-up, killing the host process a failed or
+// timed-out attempt leaves behind so it cannot leak.
 func hostTunnel(ctx context.Context, tunnelID, clusterID, hostToken string) {
 	for attempt := 1; attempt <= tunnelRetries; attempt++ {
 		log.Printf("devtunnel: attempt %d/%d to host tunnel %s", attempt, tunnelRetries, tunnelID)
-		type hosted struct {
-			cmdID string
-			err   error
-		}
-		ch := make(chan hosted, 1)
+
+		ch := make(chan hostResult, 1)
 		go func() {
 			cmdID, err := tunnel.DevTunnelHost(tunnelID, clusterID, hostToken)
-			ch <- hosted{cmdID, err}
+			ch <- hostResult{cmdID, err}
 		}()
 
-		attemptCtx, cancel := context.WithTimeout(ctx, tunnelAttemptTimeout)
 		select {
 		case h := <-ch:
-			cancel()
 			if h.err == nil {
 				log.Printf("devtunnel: successfully hosting %s", tunnelID)
 				return
 			}
 			log.Printf("devtunnel: attempt %d failed: %v", attempt, h.err)
 			if h.cmdID != "" {
-				_ = pm.GlobalProcessManager.Kill(h.cmdID)
+				_ = pm.Global.Kill(h.cmdID)
 			}
-		case <-attemptCtx.Done():
-			cancel()
+		case <-time.After(tunnelAttemptTimeout):
 			log.Printf("devtunnel: attempt %d timed out after %s", attempt, tunnelAttemptTimeout)
+		case <-ctx.Done():
+			return // shutting down: the retry loop must not outlive the server
 		}
+
 		if attempt < tunnelRetries {
 			time.Sleep(tunnelRetryDelay)
 		}
@@ -204,14 +206,24 @@ type liveMetrics struct {
 func metricsHandler(w http.ResponseWriter, r *http.Request) {
 	m := liveMetrics{GPUs: readGPUMetrics()}
 	if cg, err := jobCgroupDir(); err == nil {
-		if b, err := readInt64File(filepath.Join(cg, "memory.current")); err == nil {
-			m.MemBytes = &b
-		}
-		if u, err := readCPUUsageUsec(filepath.Join(cg, "cpu.stat")); err == nil {
-			m.CPUUsageUsec = &u
-		}
+		m.MemBytes = readCgroup(filepath.Join(cg, "memory.current"), parseInt64)
+		m.CPUUsageUsec = readCgroup(filepath.Join(cg, "cpu.stat"), parseCPUUsageUsec)
 	}
 	utils.RespondJSON(w, http.StatusOK, m)
+}
+
+// readCgroup applies parse to a cgroup file, reporting nil if either step fails —
+// which is what omits the field rather than reporting a zero.
+func readCgroup[T any](path string, parse func(string) (T, error)) *T {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	v, err := parse(string(b))
+	if err != nil {
+		return nil
+	}
+	return &v
 }
 
 // jobCgroupDir resolves this process's cgroup-v2 directory stripped to the job level (dropping any /step_* leaf), so
@@ -234,27 +246,13 @@ func jobCgroupSuffix(procCgroup string) string {
 	return p
 }
 
-func readInt64File(path string) (int64, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return 0, err
-	}
-	return strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
-}
-
-func readCPUUsageUsec(path string) (int64, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return 0, err
-	}
-	return parseCPUUsageUsec(string(b))
-}
+func parseInt64(s string) (int64, error) { return strconv.ParseInt(strings.TrimSpace(s), 10, 64) }
 
 // parseCPUUsageUsec pulls the cumulative `usage_usec` line out of a cgroup cpu.stat body.
 func parseCPUUsageUsec(cpuStat string) (int64, error) {
 	for ln := range strings.SplitSeq(cpuStat, "\n") {
 		if v, ok := strings.CutPrefix(ln, "usage_usec "); ok {
-			return strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+			return parseInt64(v)
 		}
 	}
 	return 0, fmt.Errorf("usage_usec not found in cpu.stat")
@@ -271,26 +269,13 @@ func readGPUMetrics() []gpuMetric {
 	return parseGPUMetrics(string(out))
 }
 
-// parseGPUMetrics parses `index, util, memUsed, memTotal` CSV rows; malformed rows are skipped.
+// parseGPUMetrics parses `index, util, memUsed, memTotal` CSV rows; rows that do not scan (blank, [N/A]) are skipped.
 func parseGPUMetrics(out string) []gpuMetric {
 	var gpus []gpuMetric
 	for ln := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
-		f := strings.Split(ln, ",")
-		if len(f) != 4 {
-			continue
-		}
-		var n [4]int
-		ok := true
-		for i := range f {
-			v, err := strconv.Atoi(strings.TrimSpace(f[i]))
-			if err != nil {
-				ok = false
-				break
-			}
-			n[i] = v
-		}
-		if ok {
-			gpus = append(gpus, gpuMetric{Index: n[0], UtilPct: n[1], MemUsedMiB: n[2], MemTotalMiB: n[3]})
+		var g gpuMetric
+		if _, err := fmt.Sscanf(ln, "%d, %d, %d, %d", &g.Index, &g.UtilPct, &g.MemUsedMiB, &g.MemTotalMiB); err == nil {
+			gpus = append(gpus, g)
 		}
 	}
 	return gpus

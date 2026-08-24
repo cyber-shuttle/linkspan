@@ -16,115 +16,83 @@ import (
 	pm "github.com/cyber-shuttle/linkspan/internal/process"
 )
 
-// devtunnelDownloadURLs maps GOOS/GOARCH pairs to the Azure blob storage URLs
-// for the latest devtunnel CLI binary for each supported platform.
-var devtunnelDownloadURLs = map[string]string{
-	"linux/amd64":  "https://tunnelsassetsprod.blob.core.windows.net/cli/linux-x64-devtunnel",
-	"linux/arm64":  "https://tunnelsassetsprod.blob.core.windows.net/cli/linux-arm64-devtunnel",
-	"darwin/amd64": "https://tunnelsassetsprod.blob.core.windows.net/cli/osx-x64-devtunnel",
-	"darwin/arm64": "https://tunnelsassetsprod.blob.core.windows.net/cli/osx-arm64-devtunnel",
+var devtunnelAsset = map[string]string{
+	"linux/amd64":  "linux-x64",
+	"linux/arm64":  "linux-arm64",
+	"darwin/amd64": "osx-x64",
+	"darwin/arm64": "osx-arm64",
 }
 
 const (
+	devtunnelURL     = "https://tunnelsassetsprod.blob.core.windows.net/cli/%s-devtunnel"
 	hostReadyMarker  = "Ready to accept connections"
 	hostReadyTimeout = 30 * time.Second
 	hostReadyPoll    = 500 * time.Millisecond
 )
 
-// binaryDownloadMu prevents concurrent downloads of the same binary.
-var binaryDownloadMu sync.Mutex
+var downloadMu sync.Mutex
 
-// devtunnelBinPath returns the absolute path to the managed devtunnel binary,
-// downloading it on first use.  The binary is stored at
-// ~/.linkspan/bin/devtunnel (or devtunnel.exe on Windows).
-func devtunnelBinPath() (string, error) {
+// devtunnelBin returns ~/.linkspan/bin/devtunnel, downloading it on first use.
+func devtunnelBin() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("devtunnel cli: resolve home dir: %w", err)
 	}
+	path := filepath.Join(home, ".linkspan", "bin", "devtunnel")
 
-	binName := "devtunnel"
-
-	binDir := filepath.Join(home, ".linkspan", "bin")
-	binPath := filepath.Join(binDir, binName)
-
-	// Fast path: binary already present.
-	if _, err := os.Stat(binPath); err == nil {
-		return binPath, nil
+	downloadMu.Lock()
+	defer downloadMu.Unlock()
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
 	}
 
-	// Slow path: download under a mutex to avoid concurrent downloads.
-	binaryDownloadMu.Lock()
-	defer binaryDownloadMu.Unlock()
-
-	// Re-check after acquiring the lock in case another goroutine finished first.
-	if _, err := os.Stat(binPath); err == nil {
-		return binPath, nil
-	}
-
-	key := runtime.GOOS + "/" + runtime.GOARCH
-	downloadURL, ok := devtunnelDownloadURLs[key]
+	platform := runtime.GOOS + "/" + runtime.GOARCH
+	asset, ok := devtunnelAsset[platform]
 	if !ok {
-		return "", fmt.Errorf("devtunnel cli: no binary available for platform %s", key)
+		return "", fmt.Errorf("devtunnel cli: no binary for platform %s", platform)
 	}
+	url := fmt.Sprintf(devtunnelURL, asset)
 
-	log.Printf("devtunnel cli: downloading binary from %s -> %s", downloadURL, binPath)
-
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		return "", fmt.Errorf("devtunnel cli: create bin dir %s: %w", binDir, err)
+	log.Printf("devtunnel cli: downloading %s -> %s", url, path)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fmt.Errorf("devtunnel cli: create bin dir: %w", err)
 	}
-
-	if err := downloadFile(binPath, downloadURL); err != nil {
-		return "", fmt.Errorf("devtunnel cli: download binary: %w", err)
+	if err := download(path, url); err != nil {
+		return "", fmt.Errorf("devtunnel cli: %w", err)
 	}
-
-	if err := os.Chmod(binPath, 0o755); err != nil {
-		return "", fmt.Errorf("devtunnel cli: chmod binary: %w", err)
+	if err := os.Chmod(path, 0o755); err != nil {
+		return "", fmt.Errorf("devtunnel cli: chmod: %w", err)
 	}
-
-	log.Printf("devtunnel cli: binary ready at %s", binPath)
-	return binPath, nil
+	return path, nil
 }
 
-// downloadFile fetches src (following redirects) and writes the response body to
-// dst, replacing any existing file.
-func downloadFile(dst, src string) error {
-	//nolint:noctx // simple download, no cancellation required
-	resp, err := http.Get(src) //nolint:gosec // URL is from a static map
+// download writes src to dst through a temp file, so an interrupted transfer
+// never leaves a partial binary where the next run would execute it.
+func download(dst, src string) error {
+	//nolint:noctx // one-shot download, nothing to cancel it from
+	resp, err := http.Get(src) //nolint:gosec // src is built from a static map
 	if err != nil {
 		return fmt.Errorf("GET %s: %w", src, err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("GET %s: unexpected status %s", src, resp.Status)
 	}
 
 	f, err := os.CreateTemp(filepath.Dir(dst), ".devtunnel-download-*")
 	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
+		return err
 	}
-	tmpPath := f.Name()
-	defer func() {
-		f.Close()
-		// Clean up temp file on any error path.
-		if _, statErr := os.Stat(tmpPath); statErr == nil {
-			_ = os.Remove(tmpPath)
-		}
-	}()
+	defer os.Remove(f.Name()) // no-op once the rename below succeeds
 
 	if _, err := io.Copy(f, resp.Body); err != nil {
+		f.Close()
 		return fmt.Errorf("write download: %w", err)
 	}
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("close temp file: %w", err)
+		return err
 	}
-
-	// Atomic rename so we never leave a partial binary at the destination.
-	if err := os.Rename(tmpPath, dst); err != nil {
-		return fmt.Errorf("rename %s -> %s: %w", tmpPath, dst, err)
-	}
-	return nil
+	return os.Rename(f.Name(), dst)
 }
 
 // DevTunnelHost runs the relay for a tunnel the client owns and registers ports
@@ -136,32 +104,32 @@ func DevTunnelHost(tunnelID, clusterID, hostToken string) (string, error) {
 	if clusterID != "" {
 		qualified = tunnelID + "." + clusterID
 	}
-	binPath, err := devtunnelBinPath()
+	bin, err := devtunnelBin()
 	if err != nil {
 		return "", fmt.Errorf("devtunnel host %q: %w", qualified, err)
 	}
-	log.Printf("devtunnel host: running %s host %s --access-token [redacted]", binPath, qualified)
+
+	log.Printf("devtunnel host: running %s host %s --access-token [redacted]", bin, qualified)
 	//nolint:gosec // the binary path is one we downloaded to a path we chose
-	cmdID, err := pm.GlobalProcessManager.Start(exec.Command(binPath, "host", qualified, "--access-token", hostToken))
+	id, err := pm.Global.Start(exec.Command(bin, "host", qualified, "--access-token", hostToken))
 	if err != nil {
 		return "", fmt.Errorf("devtunnel host %q: start: %w", qualified, err)
 	}
 
-	deadline := time.Now().Add(hostReadyTimeout)
-	for time.Now().Before(deadline) {
+	for deadline := time.Now().Add(hostReadyTimeout); time.Now().Before(deadline); {
 		time.Sleep(hostReadyPoll)
-		stdout, stderr, _ := pm.GlobalProcessManager.GetOutput(cmdID)
-		if strings.Contains(stdout, hostReadyMarker) {
+		stdout, stderr, _ := pm.Global.Output(id)
+		switch {
+		case strings.Contains(stdout, hostReadyMarker):
 			log.Printf("devtunnel host: tunnel %q ready at https://%s.devtunnels.ms", qualified, qualified)
-			return cmdID, nil
-		}
+			return id, nil
 		// The CLI warns about things that do not stop it hosting; anything else
 		// on stderr means it gave up, and waiting out the deadline adds nothing.
-		if stderr != "" && !strings.Contains(stderr, "Warning") {
+		case stderr != "" && !strings.Contains(stderr, "Warning"):
 			return "", fmt.Errorf("devtunnel host %q: %s", qualified, stderr)
 		}
 	}
-	stdout, stderr, _ := pm.GlobalProcessManager.GetOutput(cmdID)
+	stdout, stderr, _ := pm.Global.Output(id)
 	return "", fmt.Errorf("devtunnel host %q: no ready signal within %s (stdout=%q stderr=%q)",
 		qualified, hostReadyTimeout, stdout, stderr)
 }

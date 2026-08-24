@@ -23,35 +23,33 @@ type SessionResponse struct {
 }
 
 func ListSessions(w http.ResponseWriter, r *http.Request) {
-	sessions := sshd.Statuses()
-	utils.RespondJSON(w, http.StatusOK, sessions)
+	utils.RespondJSON(w, http.StatusOK, sshd.Statuses())
 }
 
 func CreateSession(w http.ResponseWriter, r *http.Request) {
-	sessionReq := SessionRequest{}
-	if err := json.NewDecoder(r.Body).Decode(&sessionReq); err != nil {
-		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+	var req SessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
 	_ = r.Body.Close()
 
-	if _, _, _, _, err := gossh.ParseAuthorizedKey([]byte(sessionReq.AuthorizedKey)); err != nil {
-		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "authorized_key is missing or invalid"})
+	if _, _, _, _, err := gossh.ParseAuthorizedKey([]byte(req.AuthorizedKey)); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "authorized_key is missing or invalid")
 		return
 	}
 
-	availablePort, err := utils.GetAvailablePort()
+	port, err := utils.AvailablePort()
 	if err != nil {
-		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		utils.RespondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	// The port is the identity: it is unique while the server is up, and it is
-	// what the client reads back out of the id to reach the sshd.
-	sessionID := fmt.Sprintf("s-%d", availablePort)
+	// what the client reads back out of the id. Loopback only -- the port
+	// reaches clients through the tunnel, never the node's network.
+	id := fmt.Sprintf("s-%d", port)
+	sshd.Start(id, fmt.Sprintf("127.0.0.1:%d", port), req.AuthorizedKey)
 
-	// Loopback only: the port reaches clients through the tunnel, never the node's network.
-	sshd.Start(sessionID, fmt.Sprintf("127.0.0.1:%d", availablePort), sessionReq.AuthorizedKey)
-
-	utils.RespondJSON(w, http.StatusCreated, SessionResponse{ID: sessionID, BindPort: int32(availablePort)})
+	utils.RespondJSON(w, http.StatusCreated, SessionResponse{ID: id, BindPort: int32(port)})
 }

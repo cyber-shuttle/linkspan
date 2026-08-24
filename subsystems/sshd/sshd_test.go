@@ -47,11 +47,11 @@ func TestPanicIsolation(t *testing.T) {
 	<-started
 	time.Sleep(20 * time.Millisecond) // let the panic unwind and recover
 
-	recoverChannelHandler("test", func(*ssh.Server, *gossh.ServerConn, gossh.NewChannel, ssh.Context) {
+	guardChannel("test", func(*ssh.Server, *gossh.ServerConn, gossh.NewChannel, ssh.Context) {
 		panic("boom")
 	})(nil, nil, nil, nil)
 
-	rh := recoverRequestHandler("test", func(ssh.Context, *ssh.Server, *gossh.Request) (bool, []byte) {
+	rh := guardRequest("test", func(ssh.Context, *ssh.Server, *gossh.Request) (bool, []byte) {
 		panic("boom")
 	})
 	if ok, payload := rh(nil, nil, nil); ok || payload != nil {
@@ -59,7 +59,7 @@ func TestPanicIsolation(t *testing.T) {
 	}
 }
 
-// TestSessionHandlerPanicIsolation verifies recoverSessionHandler contains a panic
+// TestSessionHandlerPanicIsolation verifies guardSession contains a panic
 // raised inside a session/subsystem handler body. gliderlabs/ssh runs the user
 // Handler and SubsystemHandlers on a child goroutine (session.go dispatches them
 // via `go func(){ handler(sess); ... }()`), which the channel-level recover cannot
@@ -68,10 +68,10 @@ func TestPanicIsolation(t *testing.T) {
 func TestSessionHandlerPanicIsolation(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
-			t.Fatalf("panic escaped recoverSessionHandler (would crash linkspan): %v", r)
+			t.Fatalf("panic escaped guardSession (would crash linkspan): %v", r)
 		}
 	}()
-	recoverSessionHandler("test", func(ssh.Session) { panic("boom") })(nil)
+	guardSession("test", func(ssh.Session) { panic("boom") })(nil)
 }
 
 // TestSupervisorBoundedRetries: a listener that fails immediately is retried
@@ -150,16 +150,11 @@ func TestSupervisorStopHonored(t *testing.T) {
 	}
 }
 
-// TestNewServerWiring confirms the SERVER START options install every expected
-// handler and callback — a guard against an option being dropped or mis-wired.
+// TestNewServerWiring confirms newServer installs every expected handler and
+// callback — a guard against one being dropped from the literal. The sftp and
+// streamlocal entries in particular have no cs-bridge caller to notice.
 func TestNewServerWiring(t *testing.T) {
-	srv := newServer(":0",
-		onConnect(handleSession),
-		withAuth("key"),
-		withSubsystem("sftp", handleSFTP),
-		withForwarding(),
-		withKeepAlive(time.Second),
-	)
+	srv := newServer(":0", "key")
 
 	if srv.Handler == nil || srv.PublicKeyHandler == nil || srv.PasswordHandler != nil ||
 		srv.ConnCallback == nil || srv.LocalPortForwardingCallback == nil || srv.ReversePortForwardingCallback == nil {
@@ -202,7 +197,7 @@ func TestDirectStreamLocalForwarding(t *testing.T) {
 	}()
 
 	signer, authorizedKey := testKeyPair(t)
-	srv := newServer("127.0.0.1:0", withAuth(authorizedKey), withForwarding())
+	srv := newServer("127.0.0.1:0", authorizedKey)
 	tl, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

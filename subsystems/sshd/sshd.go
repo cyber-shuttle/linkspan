@@ -1,23 +1,24 @@
-// Package sshd is linkspan's embedded SSH server, organized as two blocks —
-// SERVER START and CLIENT CONNECT — over shared building blocks. Resilience
-// invariant: every handler boundary is panic-isolated and the supervisor
-// restarts the listener after a fatal exit, so one bad connection can never
-// take linkspan down.
+// Package sshd is linkspan's embedded SSH server. Resilience invariant: every
+// handler boundary is panic-isolated and the supervisor restarts the listener
+// after a fatal exit, so one bad connection can never take linkspan down.
 //
 // It knows nothing about its callers: subsystems/vscode is the REST surface
 // that drives it for VS Code Remote-SSH, and it is the only caller today.
 package sshd
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
 	"runtime/debug"
+	"slices"
 	"sync"
 	"time"
 
@@ -27,171 +28,111 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-// ═══════════════════════════ SERVER START ═══════════════════════════
+// --- server ---
 
-// Start starts a supervised, auto-restarting SSH server for a
-// session and registers it for later shutdown.
-func Start(sessionID, addr string, publicKey string) *SSHServer {
-	return supervise(sessionID, addr, func() *ssh.Server {
-		return newServer(addr,
-			onConnect(handleSession),
-			withAuth(publicKey),
-			withSubsystem("sftp", handleSFTP),
-			withForwarding(),
-			withKeepAlive(30*time.Second),
-		)
-	})
+// Start runs a supervised, auto-restarting SSH server for a session and
+// registers it for later shutdown.
+func Start(sessionID, addr, publicKey string) *SSHServer {
+	return supervise(sessionID, addr, func() *ssh.Server { return newServer(addr, publicKey) })
 }
 
-type serverOption func(*ssh.Server)
-
-// newServer runs per (re)start, so each restart gets fresh per-server state.
-func newServer(addr string, opts ...serverOption) *ssh.Server {
-	srv := &ssh.Server{
-		Addr: addr,
+// newServer runs per (re)start, because ForwardedTCPHandler holds per-server
+// state that must not outlive the listener it belongs to.
+//
+// The sftp subsystem and direct-streamlocal handler are load-bearing for VS
+// Code Remote-SSH -- its bootstrap fallback uses SFTP and
+// remote.SSH.remoteServerListenOnSocket uses streamlocal. Neither shows up in a
+// cs-bridge grep, because the client is VS Code, not cs-bridge.
+func newServer(addr, publicKey string) *ssh.Server {
+	fwd := &ssh.ForwardedTCPHandler{}
+	return &ssh.Server{
+		Addr:                          addr,
+		Handler:                       guardSession("session", handleSession),
+		PublicKeyHandler:              authorizer(publicKey), // PasswordHandler stays nil: this key is the only way in
+		ConnCallback:                  keepAlive(30 * time.Second),
+		LocalPortForwardingCallback:   allowForward("local port forwarding"),
+		ReversePortForwardingCallback: allowForward("reverse port forwarding"),
 		ChannelHandlers: map[string]ssh.ChannelHandler{
-			"session": recoverChannelHandler("session", ssh.DefaultSessionHandler),
+			"session":                        guardChannel("session", ssh.DefaultSessionHandler),
+			"direct-tcpip":                   guardChannel("direct-tcpip", ssh.DirectTCPIPHandler),
+			"direct-streamlocal@openssh.com": guardChannel("direct-streamlocal", directStreamLocal),
 		},
-		RequestHandlers:   map[string]ssh.RequestHandler{},
-		SubsystemHandlers: map[string]ssh.SubsystemHandler{},
-	}
-	for _, opt := range opts {
-		opt(srv)
-	}
-	return srv
-}
-
-func onConnect(h func(ssh.Session)) serverOption {
-	return func(srv *ssh.Server) { srv.Handler = recoverSessionHandler("session", h) }
-}
-
-// PasswordHandler stays nil, so the caller's public key is the only way in.
-func withAuth(publicKey string) serverOption {
-	return func(srv *ssh.Server) { srv.PublicKeyHandler = newPublicKeyHandler(publicKey) }
-}
-
-func withSubsystem(name string, h func(ssh.Session)) serverOption {
-	return func(srv *ssh.Server) { srv.SubsystemHandlers[name] = recoverSessionHandler(name, h) }
-}
-
-// withForwarding allows client local (direct-tcpip), unix-socket
-// (direct-streamlocal), and reverse (tcpip-forward) port forwards.
-// ForwardedTCPHandler holds per-server state, so it is per build.
-func withForwarding() serverOption {
-	return func(srv *ssh.Server) {
-		fwd := &ssh.ForwardedTCPHandler{}
-		srv.ChannelHandlers["direct-tcpip"] = recoverChannelHandler("direct-tcpip", ssh.DirectTCPIPHandler)
-		srv.ChannelHandlers["direct-streamlocal@openssh.com"] = recoverChannelHandler("direct-streamlocal", directStreamLocalHandler)
-		srv.LocalPortForwardingCallback = func(ctx ssh.Context, dhost string, dport uint32) bool {
-			log.Printf("local port forwarding requested: host=%s port=%d", dhost, dport)
-			return true
-		}
-		srv.ReversePortForwardingCallback = func(ctx ssh.Context, bindHost string, bindPort uint32) bool {
-			log.Printf("reverse port forwarding requested: host=%s port=%d", bindHost, bindPort)
-			return true
-		}
-		srv.RequestHandlers["tcpip-forward"] = recoverRequestHandler("tcpip-forward", fwd.HandleSSHRequest)
-		srv.RequestHandlers["cancel-tcpip-forward"] = recoverRequestHandler("cancel-tcpip-forward", fwd.HandleSSHRequest)
+		RequestHandlers: map[string]ssh.RequestHandler{
+			"tcpip-forward":        guardRequest("tcpip-forward", fwd.HandleSSHRequest),
+			"cancel-tcpip-forward": guardRequest("cancel-tcpip-forward", fwd.HandleSSHRequest),
+		},
+		SubsystemHandlers: map[string]ssh.SubsystemHandler{
+			"sftp": guardSession("sftp", handleSFTP),
+		},
 	}
 }
 
-// streamLocalChannelData is the direct-streamlocal@openssh.com open payload (OpenSSH PROTOCOL).
-type streamLocalChannelData struct {
-	SocketPath string
-	Reserved0  string
-	Reserved1  uint32
-}
-
-// directStreamLocalHandler bridges a channel to a local unix socket — OpenSSH's
-// AllowStreamLocalForwarding; VS Code's remoteServerListenOnSocket needs it.
-func directStreamLocalHandler(srv *ssh.Server, conn *gossh.ServerConn, newChan gossh.NewChannel, ctx ssh.Context) {
-	var d streamLocalChannelData
-	if err := gossh.Unmarshal(newChan.ExtraData(), &d); err != nil {
-		newChan.Reject(gossh.ConnectionFailed, err.Error())
-		return
-	}
-	log.Printf("streamlocal forwarding requested: path=%s", d.SocketPath)
-	dconn, err := net.Dial("unix", d.SocketPath)
+// authorizer accepts one key; a key that fails to parse refuses every connection.
+func authorizer(publicKey string) ssh.PublicKeyHandler {
+	authorized, _, _, _, err := gossh.ParseAuthorizedKey([]byte(publicKey))
 	if err != nil {
-		newChan.Reject(gossh.ConnectionFailed, err.Error())
-		return
+		log.Printf("[ssh] unusable authorized key, refusing every connection: %v", err)
 	}
-	ch, reqs, err := newChan.Accept()
-	if err != nil {
-		dconn.Close()
-		return
+	return func(_ ssh.Context, key ssh.PublicKey) bool {
+		return authorized != nil && ssh.KeysEqual(key, authorized)
 	}
-	go gossh.DiscardRequests(reqs)
-	safeGo("streamlocal copy", func() { defer ch.Close(); defer dconn.Close(); _, _ = io.Copy(dconn, ch) })
-	safeGo("streamlocal copy", func() { defer ch.Close(); defer dconn.Close(); _, _ = io.Copy(ch, dconn) })
 }
 
-// withKeepAlive keeps a quiet session alive at the TCP layer; IdleTimeout and
+func allowForward(kind string) func(ssh.Context, string, uint32) bool {
+	return func(_ ssh.Context, host string, port uint32) bool {
+		log.Printf("%s requested: host=%s port=%d", kind, host, port)
+		return true
+	}
+}
+
+// keepAlive holds a quiet session open at the TCP layer; IdleTimeout and
 // MaxTimeout deliberately stay unset (0).
-func withKeepAlive(period time.Duration) serverOption {
-	return func(srv *ssh.Server) {
-		srv.ConnCallback = func(ctx ssh.Context, conn net.Conn) net.Conn {
-			if tc, ok := conn.(*net.TCPConn); ok {
-				_ = tc.SetKeepAlive(true)
-				_ = tc.SetKeepAlivePeriod(period)
-			}
-			return conn
+func keepAlive(period time.Duration) func(ssh.Context, net.Conn) net.Conn {
+	return func(_ ssh.Context, conn net.Conn) net.Conn {
+		if tc, ok := conn.(*net.TCPConn); ok {
+			_ = tc.SetKeepAlive(true)
+			_ = tc.SetKeepAlivePeriod(period)
 		}
+		return conn
 	}
 }
 
-// newPublicKeyHandler accepts only the given key; a key that fails to parse
-// rejects every connection.
-func newPublicKeyHandler(publicKey string) ssh.PublicKeyHandler {
-	authorizedKey, _, _, _, err := gossh.ParseAuthorizedKey([]byte(publicKey))
-	if err != nil {
-		log.Printf("failed to parse authorized public key: %v", err)
-	}
-	return func(ctx ssh.Context, key ssh.PublicKey) bool {
-		return authorizedKey != nil && ssh.KeysEqual(key, authorizedKey)
-	}
-}
-
-// ═══════════════════════════ CLIENT CONNECT ═══════════════════════════
+// --- client connect ---
 
 func handleSession(s ssh.Session) {
 	user, remote := peer(s)
 	log.Printf("client connected: user=%s remote=%s", user, remote)
 	defer log.Printf("client disconnected: user=%s remote=%s", user, remote)
 
-	switch {
-	case len(s.Command()) > 0:
-		runExec(s)
-	case hasPTY(s):
+	switch _, _, isPTY := s.Pty(); {
+	case len(s.Command()) > 0: // raw command via sh -c, like OpenSSH
+		log.Printf("exec request: user=%s remote=%s cmd=%q", user, remote, s.RawCommand())
+		runHostCommand(s, exec.Command("sh", "-c", s.RawCommand()))
+	case isPTY:
 		runPTYShell(s)
 	default:
-		runShellStdin(s)
+		runHostCommand(s, exec.Command(shellPath(), "-s"))
 	}
 }
 
-func hasPTY(s ssh.Session) bool { _, _, ok := s.Pty(); return ok }
-
 func peer(s ssh.Session) (user, remote string) {
-	user = s.User()
 	if r := s.RemoteAddr(); r != nil {
 		remote = r.String()
 	}
-	return user, remote
+	return s.User(), remote
 }
 
-// runExec runs the client's raw command via sh -c, like OpenSSH.
-func runExec(s ssh.Session) {
-	user, remote := peer(s)
-	rawCmd := s.RawCommand()
-	log.Printf("exec request: user=%s remote=%s cmd=%q", user, remote, rawCmd)
-	runHostCommand(s, exec.Command("sh", "-c", rawCmd))
+func runHostCommand(s ssh.Session, cmd *exec.Cmd) {
+	cmd.Env, cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Environ(), s, s, s
+	if w := s.Stderr(); w != nil { // a separate stderr stream is used when present
+		cmd.Stderr = w
+	}
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(s, "command error: %v\n", err)
+	}
 }
 
-func runShellStdin(s ssh.Session) {
-	runHostCommand(s, exec.Command(shellPath(), "-s"))
-}
-
-// runPTYShell bridges the session to a PTY-backed shell. The copy/resize
+// runPTYShell bridges the session to a PTY-backed shell. The copy and resize
 // goroutines are panic-isolated so a copy fault cannot crash the agent.
 func runPTYShell(s ssh.Session) {
 	ptyReq, winCh, _ := s.Pty()
@@ -203,15 +144,18 @@ func runPTYShell(s ssh.Session) {
 	}
 	defer f.Close()
 
-	if ptyReq.Window.Width > 0 && ptyReq.Window.Height > 0 {
-		pty.Setsize(f, &pty.Winsize{Cols: uint16(ptyReq.Window.Width), Rows: uint16(ptyReq.Window.Height)})
+	resize := func(w, h int) {
+		if w > 0 && h > 0 {
+			_ = pty.Setsize(f, &pty.Winsize{Cols: uint16(w), Rows: uint16(h)})
+		}
 	}
+	resize(ptyReq.Window.Width, ptyReq.Window.Height)
 
 	safeGo("pty->client copy", func() { _, _ = io.Copy(s, f) })
 	safeGo("client->pty copy", func() { _, _ = io.Copy(f, s) })
 	safeGo("pty window-change", func() {
 		for win := range winCh {
-			_ = pty.Setsize(f, &pty.Winsize{Cols: uint16(win.Width), Rows: uint16(win.Height)})
+			resize(win.Width, win.Height)
 		}
 	})
 
@@ -229,67 +173,81 @@ func handleSFTP(s ssh.Session) {
 	}
 }
 
-func runHostCommand(s ssh.Session, cmd *exec.Cmd) {
-	cmd.Env = os.Environ()
-	cmd.Stdin = s
-	cmd.Stdout = s
-	cmd.Stderr = s
-	if w := s.Stderr(); w != nil { // a separate stderr stream is used when present
-		cmd.Stderr = w
-	}
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(s, "command error: %v\n", err)
-	}
+// streamLocalChannelData is the direct-streamlocal@openssh.com open payload
+// (OpenSSH PROTOCOL).
+type streamLocalChannelData struct {
+	SocketPath string
+	Reserved0  string
+	Reserved1  uint32
 }
 
-func shellPath() string {
-	if shell := os.Getenv("SHELL"); shell != "" {
-		return shell
+// directStreamLocal bridges a channel to a local unix socket -- OpenSSH's
+// AllowStreamLocalForwarding.
+func directStreamLocal(_ *ssh.Server, _ *gossh.ServerConn, newChan gossh.NewChannel, _ ssh.Context) {
+	var d streamLocalChannelData
+	if err := gossh.Unmarshal(newChan.ExtraData(), &d); err != nil {
+		newChan.Reject(gossh.ConnectionFailed, err.Error())
+		return
 	}
-	return "/bin/sh"
+	log.Printf("streamlocal forwarding requested: path=%s", d.SocketPath)
+	dconn, err := net.Dial("unix", d.SocketPath)
+	if err != nil {
+		newChan.Reject(gossh.ConnectionFailed, err.Error())
+		return
+	}
+	ch, reqs, err := newChan.Accept()
+	if err != nil {
+		dconn.Close()
+		return
+	}
+	go gossh.DiscardRequests(reqs)
+	pipe := func(dst io.Writer, src io.Reader) {
+		safeGo("streamlocal copy", func() { defer ch.Close(); defer dconn.Close(); _, _ = io.Copy(dst, src) })
+	}
+	pipe(dconn, ch)
+	pipe(ch, dconn)
 }
 
-// ─────────────────────────── panic isolation ───────────────────────────
+func shellPath() string { return cmp.Or(os.Getenv("SHELL"), "/bin/sh") }
 
-// logPanic recovers and logs a panic; use as: defer logPanic(name).
+// --- panic isolation ---
+
 func logPanic(name string) {
 	if r := recover(); r != nil {
 		log.Printf("[ssh] recovered panic in %s: %v\n%s", name, r, debug.Stack())
 	}
 }
 
-func safeGo(name string, fn func()) {
-	go func() { defer logPanic(name); fn() }()
-}
+func safeGo(name string, fn func()) { go func() { defer logPanic(name); fn() }() }
 
-func recoverChannelHandler(name string, h ssh.ChannelHandler) ssh.ChannelHandler {
+func guardChannel(name string, h ssh.ChannelHandler) ssh.ChannelHandler {
 	return func(srv *ssh.Server, c *gossh.ServerConn, nc gossh.NewChannel, ctx ssh.Context) {
 		defer logPanic("channel " + name)
 		h(srv, c, nc, ctx)
 	}
 }
 
-func recoverRequestHandler(name string, h ssh.RequestHandler) ssh.RequestHandler {
+// guardRequest rejects the request on panic: the zero return is (false, nil).
+func guardRequest(name string, h ssh.RequestHandler) ssh.RequestHandler {
 	return func(ctx ssh.Context, srv *ssh.Server, req *gossh.Request) (bool, []byte) {
-		defer logPanic("request " + name) // on panic the zero return (false, nil) rejects the request
+		defer logPanic("request " + name)
 		return h(ctx, srv, req)
 	}
 }
 
-// recoverSessionHandler panic-isolates an ssh.Handler / ssh.SubsystemHandler.
-// gliderlabs runs these on a freshly spawned goroutine (`go func(){ handler(sess);
-// sess.Exit(0) }()`), which a channel-level recover cannot reach — so the recover
-// must wrap the handler itself, on the goroutine where it actually runs.
-func recoverSessionHandler(name string, h func(ssh.Session)) func(ssh.Session) {
+// guardSession wraps the handler itself rather than its channel: gliderlabs
+// dispatches Handler and SubsystemHandlers on a freshly spawned goroutine,
+// which a channel-level recover cannot reach.
+func guardSession(name string, h func(ssh.Session)) func(ssh.Session) {
 	return func(s ssh.Session) {
 		defer logPanic("handler " + name)
 		h(s)
 	}
 }
 
-// ─────────────────────────── supervisor ───────────────────────────
+// --- supervisor ---
 
-// Supervisor tuning (vars so tests can shrink them).
+// Tuning, as vars so tests can shrink them.
 var (
 	maxConsecutiveFailures = 5
 	minRestartBackoff      = 1 * time.Second
@@ -312,7 +270,6 @@ type SSHServer struct {
 	addr      string
 	sessionID string
 	stopCh    chan struct{}
-	stopOnce  sync.Once
 	stopped   bool
 }
 
@@ -388,11 +345,12 @@ func (s *SSHServer) run(build func() *ssh.Server) {
 
 func (s *SSHServer) signalStop() *ssh.Server {
 	s.mu.Lock()
-	s.stopped = true
-	srv := s.current
-	s.mu.Unlock()
-	s.stopOnce.Do(func() { close(s.stopCh) })
-	return srv
+	defer s.mu.Unlock()
+	if !s.stopped {
+		s.stopped = true
+		close(s.stopCh)
+	}
+	return s.current
 }
 
 // Stop gracefully shuts down the SSH server and its supervisor.
@@ -411,35 +369,28 @@ func (s *SSHServer) Close() error {
 	return nil
 }
 
-// ─────────────────────────── registry ───────────────────────────
+// --- registry ---
 
-// activeServers tracks supervised servers by session ID; a failed server stays
-// registered so its status is queryable until the session is deleted.
+// A failed server stays registered so its status is queryable.
 var (
 	activeServers   = make(map[string]*SSHServer)
 	activeServersMu sync.Mutex
 )
 
-// deleteServer atomically removes and returns the server for a session ID.
 func deleteServer(sessionID string) (*SSHServer, bool) {
 	activeServersMu.Lock()
 	defer activeServersMu.Unlock()
 	server, exists := activeServers[sessionID]
-	if exists {
-		delete(activeServers, sessionID)
-	}
+	delete(activeServers, sessionID)
 	return server, exists
 }
 
-// snapshotServers copies the registry so callers can iterate without the lock.
+// snapshotServers copies the registry so callers can iterate without holding
+// its lock -- nothing may take a server's own lock while activeServersMu is held.
 func snapshotServers() []*SSHServer {
 	activeServersMu.Lock()
 	defer activeServersMu.Unlock()
-	servers := make([]*SSHServer, 0, len(activeServers))
-	for _, server := range activeServers {
-		servers = append(servers, server)
-	}
-	return servers
+	return slices.Collect(maps.Values(activeServers))
 }
 
 // StopAll stops every registered SSH server.
@@ -451,31 +402,20 @@ func StopAll() {
 	}
 }
 
-// ─────────────────────────── status ───────────────────────────
-
 type SessionStatus struct {
 	ID    string `json:"id"`
 	State string `json:"state"`
 	Addr  string `json:"addr,omitempty"`
 }
 
-// status snapshots what a session listing shows.
-func (s *SSHServer) status() *SessionStatus {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return &SessionStatus{
-		ID:    s.sessionID,
-		State: s.state,
-		Addr:  s.addr,
-	}
-}
-
 // Statuses reports the state of every registered SSH server.
 func Statuses() []*SessionStatus {
 	servers := snapshotServers()
 	statuses := make([]*SessionStatus, 0, len(servers))
-	for _, server := range servers {
-		statuses = append(statuses, server.status())
+	for _, s := range servers {
+		s.mu.Lock()
+		statuses = append(statuses, &SessionStatus{ID: s.sessionID, State: s.state, Addr: s.addr})
+		s.mu.Unlock()
 	}
 	return statuses
 }
