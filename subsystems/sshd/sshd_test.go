@@ -314,9 +314,9 @@ func (c *captureSession) String() string {
 	return c.out.String()
 }
 
-func failingServer(t *testing.T, id string) (*SSHServer, func() *ssh.Server, *int) {
+func failingServer(t *testing.T, id string) (*supervisor, func() *ssh.Server, *int) {
 	t.Helper()
-	s := &SSHServer{state: stateRunning, sessionID: id, addr: "x", stopCh: make(chan struct{})}
+	s := &supervisor{state: stateRunning, sessionID: id, addr: "x", stopCh: make(chan struct{})}
 	activeServersMu.Lock()
 	activeServers[id] = s
 	activeServersMu.Unlock()
@@ -379,4 +379,29 @@ func stopByID(id string) error {
 		return fmt.Errorf("no ssh server found for session %s", id)
 	}
 	return server.Close()
+}
+
+// Stopping right after Start races the supervisor's path into Serve. Whichever
+// side wins, nothing may be left accepting on the port.
+func TestStopRightAfterStartLeavesNothingAccepting(t *testing.T) {
+	for range 20 {
+		_, key := testKeyPair(t)
+		id, port, err := Start(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := stopByID(id); err != nil {
+			t.Fatalf("stop: %v", err)
+		}
+		if !waitFor(t, func() bool {
+			c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 200*time.Millisecond)
+			if err != nil {
+				return true
+			}
+			_ = c.Close()
+			return false
+		}) {
+			t.Fatalf("still accepting on port %d after stop", port)
+		}
+	}
 }
