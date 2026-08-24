@@ -52,11 +52,23 @@ func main() {
 	// Support users passing `--tunnel-api=devtunnels` by trimming leading '='
 	apiTunnelType := strings.TrimLeft(c.TunnelApi, "=")
 
-	ctx, stop := signal.NotifyContext(context.Background(),
-		os.Interrupt,    // Ctrl+C
-		syscall.SIGTERM, // termination (reliable on Linux/macOS)
-	)
+	// The walltime guard takes ownership of SIGTERM when it is armed: a
+	// last-chance checkpoint has to run *because* of that signal, and a
+	// context cancelled by it would abort the very dump it asked for.
+	// Ctrl+C still shuts down immediately either way.
+	walltimeArmed := c.CheckpointBeforeWalltime > 0 && c.CRIUPath != "" && c.CheckpointRoot != ""
+	shutdownSignals := []os.Signal{os.Interrupt, syscall.SIGTERM}
+	if walltimeArmed {
+		shutdownSignals = []os.Signal{os.Interrupt}
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), shutdownSignals...)
 	defer stop()
+
+	// guardCtx deliberately does not descend from ctx, so the guard outlives
+	// the shutdown signal long enough to finish writing a checkpoint.
+	guardCtx, cancelGuard := context.WithCancel(context.Background())
+	defer cancelGuard()
 
 	restoreRequested := c.RestoreCheckpointID != ""
 	if restoreRequested && c.ForkCommand != "" {
@@ -140,6 +152,8 @@ func main() {
 		svc.SetDefaultWorkloadID(result.WorkloadID)
 		log.Printf("Restore completed successfully (workload=%s process_id=%s pid=%d)", result.WorkloadID, result.ProcessID, result.Pid)
 
+		armWalltimeGuard(guardCtx, c, svc, result.WorkloadID, result.ProcessID, walltimeArmed)
+
 		if c.CheckpointForkAfterDelay > 0 {
 			log.Printf("waiting %d seconds before re-checkpointing restored process %s", c.CheckpointForkAfterDelay, result.ProcessID)
 			target := checkpoint.TargetFromProcessID(result.ProcessID)
@@ -157,6 +171,8 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to start fork process: %v", err)
 		}
+
+		armWalltimeGuard(guardCtx, c, svc, c.WorkloadID, internalProcessId, walltimeArmed)
 
 		if c.CheckpointForkAfterDelay > 0 && c.CRIUPath != "" {
 			log.Printf("waiting %d seconds before checkpointing fork process %s", c.CheckpointForkAfterDelay, internalProcessId)
@@ -218,4 +234,49 @@ func listenUnix(srv *http.Server, path string) (net.Listener, error) {
 		}
 	}()
 	return ln, nil
+}
+
+/*
+armWalltimeGuard turns on automatic checkpointing before the Slurm allocation
+expires, for whichever application this allocation is running — one just
+started, or one just restored from an earlier allocation.
+
+Linkspan never submits the next allocation itself: it writes the checkpoint and
+logs the id, and an external script hands that id to the next sbatch.
+*/
+func armWalltimeGuard(ctx context.Context, c *config.LinkspanConfig, svc *checkpoint.CheckpointService, workloadID, processID string, armed bool) {
+	if !armed {
+		return
+	}
+	if !checkpoint.InSlurm() {
+		log.Printf("--checkpoint-before-walltime is set but SLURM_JOB_ID is unset; walltime checkpointing only applies inside a Slurm allocation")
+		return
+	}
+
+	sig, err := checkpoint.ParseSignal(c.CheckpointSignal)
+	if err != nil {
+		log.Printf("walltime checkpointing disabled: %v", err)
+		return
+	}
+
+	guard := checkpoint.NewWalltimeGuard(
+		svc,
+		checkpoint.TargetFromProcessID(processID),
+		checkpoint.CreateOptions{WorkloadID: workloadID},
+		checkpoint.NewSlurmDeadlineProvider(),
+		checkpoint.WalltimeOptions{
+			Margin:             c.CheckpointBeforeWalltime,
+			PreWalltimeSignals: []os.Signal{sig},
+			// The allocation is ending anyway, so release it as soon as the
+			// checkpoint is durable rather than idling until walltime.
+			ShutdownAfterCheckpoint: true,
+		},
+	)
+
+	if err := guard.Start(ctx); err != nil {
+		log.Printf("failed to arm walltime checkpointing for process %s: %v", processID, err)
+		return
+	}
+	log.Printf("walltime checkpointing armed for Slurm job %s: workload %s will be checkpointed %s before the allocation ends, or on %s",
+		checkpoint.SlurmJobID(), workloadID, c.CheckpointBeforeWalltime, sig)
 }
