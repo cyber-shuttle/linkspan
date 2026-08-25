@@ -45,14 +45,12 @@ func run() int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	// A fatal background failure unwinds the same way a signal does.
 	ctx, abort := context.WithCancelCause(ctx)
 	defer abort(nil)
 
 	// Loopback only: every route is unauthenticated and POST /vscode/sessions
 	// starts an sshd for a caller-supplied key, so the wildcard would offer a
-	// shell as the job owner to anything that could route to the node. Consumers
-	// arrive through the relay, which dials localhost, or through --socket.
+	// shell as the job owner to anything that could route to the node.
 	addr := fmt.Sprintf("127.0.0.1:%d", *serverPort)
 	srv := &http.Server{Handler: httpapi.Mux(), ReadHeaderTimeout: 10 * time.Second}
 

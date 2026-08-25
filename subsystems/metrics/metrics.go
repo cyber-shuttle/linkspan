@@ -1,6 +1,5 @@
 // Package metrics reports the running job's live resource use: cgroup-v2 memory
-// and cpu, plus per-GPU nvidia-smi. Each source omits its own field rather than
-// failing the read.
+// and cpu, plus per-GPU nvidia-smi.
 package metrics
 
 import (
@@ -15,8 +14,7 @@ import (
 )
 
 // nvidia-smi wedges on a sick GPU -- the state metrics are wanted for -- and a
-// process stuck in the driver ignores SIGKILL, so the read gives up on the probe
-// rather than the probe giving up.
+// stuck process ignores SIGKILL, so the read abandons the probe instead of waiting.
 const gpuProbeTimeout = 3 * time.Second
 
 // One probe at a time: cs-bridge polls every 5s, so a wedged one would otherwise

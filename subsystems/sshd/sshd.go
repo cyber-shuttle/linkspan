@@ -42,7 +42,8 @@ func Start(authorized ssh.PublicKey) (id string, port int, err error) {
 	return id, port, nil
 }
 
-// Built per (re)start: ForwardedTCPHandler holds per-server state.
+// Built per (re)start: ForwardedTCPHandler holds per-server state. IdleTimeout
+// and MaxTimeout deliberately stay unset.
 func newServer(authorized ssh.PublicKey) *ssh.Server {
 	fwd := &ssh.ForwardedTCPHandler{}
 	return &ssh.Server{
@@ -79,7 +80,6 @@ func allowForward(kind string) func(ssh.Context, string, uint32) bool {
 	}
 }
 
-// IdleTimeout and MaxTimeout deliberately stay unset.
 func keepAlive(period time.Duration) func(ssh.Context, net.Conn) net.Conn {
 	return func(_ ssh.Context, conn net.Conn) net.Conn {
 		if tc, ok := conn.(*net.TCPConn); ok {

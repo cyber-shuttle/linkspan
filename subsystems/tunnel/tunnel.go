@@ -39,8 +39,7 @@ var (
 	relay   *process
 )
 
-// StopRelay kills the hosted relay, if any. Without it the devtunnel child
-// outlives linkspan -- a child is not killed when its parent exits.
+// StopRelay kills the hosted relay: a child is not killed when its parent exits.
 func StopRelay() {
 	relayMu.Lock()
 	r := relay
@@ -93,7 +92,6 @@ func (p *process) kill() {
 	_ = p.cmd.Process.Kill()
 }
 
-// stdout and stderr are collected together and never told apart.
 func start(cmd *exec.Cmd) (*process, error) {
 	p := &process{cmd: cmd, done: make(chan struct{})}
 	cmd.Stdout, cmd.Stderr = p, p

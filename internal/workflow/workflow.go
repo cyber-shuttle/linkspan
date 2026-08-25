@@ -70,8 +70,7 @@ func shellExec(ctx context.Context, command string) error {
 	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
 	// *os.File, so exec hands the descriptors over instead of copying through a
 	// pipe: a step that daemonises leaves a grandchild holding them, and Wait
-	// blocks on a pipe until every holder closes it. Output is also logged as it
-	// happens, so a step killed by walltime or OOM still leaves its output behind.
+	// blocks on a pipe until every holder closes it.
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("shell.exec %q: %w", command, err)

@@ -27,7 +27,6 @@ func TestSSHServerLifecycle(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = stopByID(id) })
 
-	// The caller is never handed a port that nothing listens on.
 	if id != fmt.Sprintf("s-%d", port) {
 		t.Fatalf("id %q does not name port %d", id, port)
 	}
