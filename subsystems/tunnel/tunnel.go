@@ -33,15 +33,13 @@ const (
 	hostReadyPoll    = 500 * time.Millisecond
 )
 
-// linkspan hosts exactly one tunnel, so there is exactly one relay. It is
-// package state because main has to stop it on the way out.
+// linkspan hosts exactly one tunnel; main stops it on the way out.
 var (
 	relayMu sync.Mutex
 	relay   *process
 )
 
-// StopRelay kills the hosted relay, if any. Without it the devtunnel process
-// outlives linkspan: a child is not killed when its parent exits.
+// StopRelay kills the hosted relay: a child is not killed when its parent exits.
 func StopRelay() {
 	relayMu.Lock()
 	r := relay
@@ -50,10 +48,9 @@ func StopRelay() {
 	r.kill()
 }
 
-// process is the running devtunnel CLI. Its output is read while waiting for
-// the ready marker, so the buffer is guarded, and capped: after that wait
-// nothing reads it again and the relay runs for the life of the allocation
-// inside a memory-capped cgroup.
+// process is the running devtunnel CLI. The ready-wait reads output while the
+// child is still writing it, hence the lock; nothing reads it afterwards and the
+// relay outlives the wait inside a memory-capped cgroup, hence the cap.
 type process struct {
 	cmd  *exec.Cmd
 	done chan struct{}
@@ -95,8 +92,6 @@ func (p *process) kill() {
 	_ = p.cmd.Process.Kill()
 }
 
-// start runs cmd with its stdout and stderr collected together; the marker and
-// any failure both arrive there, and the two were never told apart.
 func start(cmd *exec.Cmd) (*process, error) {
 	p := &process{cmd: cmd, done: make(chan struct{})}
 	cmd.Stdout, cmd.Stderr = p, p
@@ -135,9 +130,7 @@ func devtunnelBin(ctx context.Context) (string, error) {
 	return path, nil
 }
 
-// Via a temp file, so an interrupted transfer never leaves a partial binary
-// where the next run would execute it. Bounded and cancellable: this is the one
-// place linkspan blocks on the network.
+// Via a temp file, so an interrupted transfer leaves no partial binary behind.
 func download(ctx context.Context, dst, src string) error {
 	ctx, cancel := context.WithTimeout(ctx, downloadTimeout)
 	defer cancel()
@@ -164,8 +157,8 @@ func download(ctx context.Context, dst, src string) error {
 		f.Close()
 		return fmt.Errorf("write download: %w", err)
 	}
-	// Executable before it is published, not after: a crash in between would
-	// leave a devtunnel that every later run finds and cannot run.
+	// Executable before the rename publishes it: a crash in between would leave a
+	// devtunnel that every later run finds and cannot run.
 	if err := f.Chmod(0o755); err != nil {
 		f.Close()
 		return err
@@ -207,10 +200,7 @@ func Host(ctx context.Context, tunnelID, clusterID, hostToken string) error {
 	return fmt.Errorf("failed to host tunnel %s after %d attempts", tunnelID, retries)
 }
 
-// The host token authorizes hosting and nothing else: linkspan never creates,
-// forwards or deletes a tunnel, so no ports are passed -- the relay forwards
-// whatever the client already registered.
-//
+// The host token authorizes hosting and nothing else, so no ports are passed.
 // Every return after the relay starts carries it, so the caller can kill it.
 func hostOnce(ctx context.Context, tunnelID, clusterID, hostToken string) (*process, error) {
 	qualified := tunnelID
@@ -239,10 +229,8 @@ func hostOnce(ctx context.Context, tunnelID, clusterID, hostToken string) (*proc
 			log.Printf("devtunnel host: tunnel %q ready at https://%s.devtunnels.ms", qualified, qualified)
 			return p, nil
 		}
-		// The CLI exiting without the marker is the failure signal. Reading it
-		// off stderr instead was wrong twice over: the CLI writes lines there
-		// that do not stop it hosting, and a single one containing "Warning"
-		// made every later line -- including a real error -- look benign.
+		// Exiting without the marker is the failure signal; stderr is not, since
+		// the CLI writes lines there and keeps hosting.
 		if p.exited() {
 			return p, fmt.Errorf("devtunnel host %q: exited before signalling ready (output=%q)", qualified, p.String())
 		}

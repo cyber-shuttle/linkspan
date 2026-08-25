@@ -61,9 +61,8 @@ func TestMuxRoutesTheConsumerContract(t *testing.T) {
 	}
 }
 
-// cs-bridge parses {"id":"s-<port>","bind_port":<port>} and strips the "s-" to
-// get the port (linkspanSupport.ts). Renaming either field, changing the id
-// shape, or answering anything but 201 breaks it on the next release.
+// cs-bridge parses {"id":"s-<port>","bind_port":<port>} in linkspanSupport.ts;
+// renaming a field, reshaping the id, or not answering 201 breaks it.
 func TestCreateSessionResponseShape(t *testing.T) {
 	t.Cleanup(sshd.StopAll)
 
@@ -107,8 +106,7 @@ func TestCreateSessionRejectsAnUnusableKey(t *testing.T) {
 	}
 }
 
-// Every route behind the socket is unauthenticated and POST /vscode/sessions
-// hands out a shell, and cs-bridge puts the socket in a shared directory.
+// Unauthenticated routes behind a socket cs-bridge puts in a shared directory.
 func TestListenUnixSocketIsNotGroupOrWorldAccessible(t *testing.T) {
 	dir, err := os.MkdirTemp("", "sock") // not t.TempDir: macOS caps socket paths at 104 chars
 	if err != nil {
@@ -178,7 +176,6 @@ func TestContractResponseBodies(t *testing.T) {
 	}
 }
 
-// startTestSession creates one through the real route and returns its id/port.
 func startTestSession(t *testing.T) (string, int32, error) {
 	t.Helper()
 	_, private, err := ed25519.GenerateKey(rand.Reader)

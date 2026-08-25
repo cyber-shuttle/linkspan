@@ -23,11 +23,10 @@ import (
 // so it must stay the only line on stdout.
 var version = "dev"
 
-// main is a wrapper so every defer in run runs before the process exits.
-// log.Fatalf would skip them and orphan the devtunnel relay.
+// A wrapper so every defer in run executes: log.Fatalf would skip them and
+// orphan the devtunnel relay.
 func main() { os.Exit(run()) }
 
-// run returns the process exit status.
 func run() int {
 	versionFlag := flag.Bool("version", false, "print version information and exit")
 	tunnelEnable := flag.Bool("tunnel-enable", false, "enable tunnel startup")
@@ -46,19 +45,13 @@ func run() int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	// A fatal background failure unwinds through the same path as a signal, so
-	// shutdown happens once and in one place.
 	ctx, abort := context.WithCancelCause(ctx)
 	defer abort(nil)
 
-	// Loopback only. Every route is unauthenticated and POST /vscode/sessions
-	// starts an sshd for a caller-supplied key, so binding the wildcard offered
-	// a shell as the job owner to anything that could route to the node. Both
-	// consumers reach linkspan through the devtunnel relay (a child process
-	// here, which dials localhost) or through --socket.
+	// Loopback only: every route is unauthenticated and POST /vscode/sessions
+	// starts an sshd for a caller-supplied key, so the wildcard would offer a
+	// shell as the job owner to anything that could route to the node.
 	addr := fmt.Sprintf("127.0.0.1:%d", *serverPort)
-	// Addr is unused: we hand Serve our own listener. ReadHeaderTimeout bounds a
-	// client that opens a connection and never finishes its headers.
 	srv := &http.Server{Handler: httpapi.Mux(), ReadHeaderTimeout: 10 * time.Second}
 
 	// Bind before the tunnel starts, so the port is open when the relay connects.
@@ -91,13 +84,13 @@ func run() int {
 	}
 
 	hosted := make(chan struct{})
-	close(hosted) // no tunnel: nothing to wait for on the way out
-	if *tunnelEnable {
-		if *tunnelID == "" || *tunnelCluster == "" || *tunnelHostToken == "" {
-			log.Printf("devtunnel: --tunnel-enable needs --tunnel-id, --tunnel-cluster and --tunnel-host-token")
-			return 1
-		}
-		hosted = make(chan struct{})
+	switch {
+	case !*tunnelEnable:
+		close(hosted)
+	case *tunnelID == "" || *tunnelCluster == "" || *tunnelHostToken == "":
+		log.Printf("devtunnel: --tunnel-enable needs --tunnel-id, --tunnel-cluster and --tunnel-host-token")
+		return 1
+	default:
 		go func() {
 			defer close(hosted)
 			if err := tunnel.Host(ctx, *tunnelID, *tunnelCluster, *tunnelHostToken); err != nil {
@@ -106,14 +99,12 @@ func run() int {
 		}()
 	}
 
-	// Runs on every exit path below: a dead HTTP server must not leave the
-	// devtunnel relay running or SSH sessions accepting.
+	// A dead HTTP server must not leave the relay running or sessions accepting.
 	defer func() {
 		abort(nil) // stop the tunnel retry loop before killing what it started
-		// A relay that has not reported ready yet is known only to Host, which
-		// kills it on its own failure path. Exiting without letting that finish
-		// orphans the devtunnel child -- it is not killed when we exit. Bounded,
-		// so a wedged bring-up delays shutdown rather than preventing it.
+		// A relay that has not reported ready is known only to Host, which kills
+		// it on its own failure path; exiting first orphans it. Bounded, so a
+		// wedged bring-up delays shutdown rather than preventing it.
 		select {
 		case <-hosted:
 		case <-time.After(5 * time.Second):

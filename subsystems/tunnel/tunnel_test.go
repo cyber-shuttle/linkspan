@@ -29,8 +29,7 @@ func TestDownloadWritesTheWholeBody(t *testing.T) {
 	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
 		t.Fatalf("expected only the binary, got %d entries", len(entries))
 	}
-	// Executable the moment it appears: the rename publishes it, so anything
-	// that happens after the rename may never happen at all.
+	// The rename publishes it, so anything after the rename may never happen.
 	info, err := os.Stat(dst)
 	if err != nil {
 		t.Fatal(err)
@@ -73,8 +72,7 @@ func TestDownloadHonoursContext(t *testing.T) {
 	}
 }
 
-// The ready-wait reads the output while the child is still writing it, so an
-// unguarded buffer races. Under -race this is what catches that.
+// Under -race, this catches an unguarded buffer.
 func TestOutputIsReadableWhileTheProcessRuns(t *testing.T) {
 	p, err := start(exec.Command("sh", "-c", "echo first; sleep 0.3; echo second"))
 	if err != nil {
@@ -111,8 +109,6 @@ func TestExitedAndKill(t *testing.T) {
 	(*process)(nil).kill() // a relay that was never started
 }
 
-// The relay runs for the whole allocation inside a memory-capped cgroup, and
-// nothing reads its output after the ready-wait.
 func TestOutputIsCapped(t *testing.T) {
 	p := &process{done: make(chan struct{})}
 	for range 4 {

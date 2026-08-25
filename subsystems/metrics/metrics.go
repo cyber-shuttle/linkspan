@@ -1,7 +1,5 @@
 // Package metrics reports the running job's live resource use: cgroup-v2 memory
-// and cpu, plus per-GPU nvidia-smi. Every source degrades on its own, so a
-// missing cgroup file or a CPU node with no driver omits a field rather than
-// failing the read.
+// and cpu, plus per-GPU nvidia-smi.
 package metrics
 
 import (
@@ -15,16 +13,13 @@ import (
 	"time"
 )
 
-// nvidia-smi blocks indefinitely on an unhealthy GPU, which is exactly the state
-// the metrics are wanted for. Killing it is not enough: a process wedged in an
-// uninterruptible driver call ignores SIGKILL until the call returns, and Wait
-// blocks on it regardless of the context. So the read gives up on the probe
-// rather than the probe giving up, and only one may ever be outstanding --
-// cs-bridge polls every 5s, which would otherwise pile up a stuck process per
-// poll for as long as the GPU stays sick.
+// nvidia-smi wedges on a sick GPU -- the state metrics are wanted for -- and a
+// stuck process ignores SIGKILL, so the read abandons the probe instead of waiting.
 const gpuProbeTimeout = 3 * time.Second
 
-var gpuProbing atomic.Bool
+// One probe at a time: cs-bridge polls every 5s, so a wedged one would otherwise
+// accumulate a stuck process per poll.
+var gpuProbeInFlight atomic.Bool
 
 type GPU struct {
 	Index       int `json:"index"`
@@ -33,9 +28,8 @@ type GPU struct {
 	MemTotalMiB int `json:"memTotalMiB"`
 }
 
-// Snapshot mirrors the csbridge MetricSample live fields. Every source is read
-// independently and omitted when unavailable, so the client sees undefined
-// rather than a misleading zero.
+// Snapshot mirrors the csbridge MetricSample live fields. Absent sources are
+// omitted, so the client sees undefined rather than a misleading zero.
 type Snapshot struct {
 	MemBytes     *int64 `json:"memBytes,omitempty"`
 	CPUUsageUsec *int64 `json:"cpuUsageUsec,omitempty"`
@@ -63,8 +57,7 @@ func readCgroup(path string, parse func(string) (int64, error)) *int64 {
 	return &v
 }
 
-// Strips the /step_* leaf so metrics cover the whole allocation, not one step:
-// `sed 's|^0::||; s|/step_.*||' /proc/self/cgroup`.
+// Strips the /step_* leaf so metrics cover the whole allocation, not one step.
 func jobCgroupDir() (string, error) {
 	b, err := os.ReadFile("/proc/self/cgroup")
 	if err != nil {
@@ -93,16 +86,13 @@ func parseCPUUsageUsec(cpuStat string) (int64, error) {
 	return 0, fmt.Errorf("usage_usec not found in cpu.stat")
 }
 
-// nil when nvidia-smi is absent, errors, outruns gpuProbeTimeout, or when an
-// earlier probe is still stuck: a CPU node has no driver, and a sick one must
-// not hold the handler open or accumulate processes.
 func readGPUMetrics(ctx context.Context) []GPU {
-	if !gpuProbing.CompareAndSwap(false, true) {
+	if !gpuProbeInFlight.CompareAndSwap(false, true) {
 		return nil
 	}
 	probed := make(chan []GPU, 1)
 	go func() {
-		defer gpuProbing.Store(false)
+		defer gpuProbeInFlight.Store(false)
 		out, err := exec.CommandContext(ctx, "nvidia-smi",
 			"--query-gpu=index,utilization.gpu,memory.used,memory.total",
 			"--format=csv,noheader,nounits").Output()
@@ -117,7 +107,7 @@ func readGPUMetrics(ctx context.Context) []GPU {
 	case gpus := <-probed:
 		return gpus
 	case <-time.After(gpuProbeTimeout):
-		return nil // still running; gpuProbing stays set until it finally exits
+		return nil // still running; the flag stays set until it exits
 	}
 }
 

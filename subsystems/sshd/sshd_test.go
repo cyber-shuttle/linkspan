@@ -27,8 +27,6 @@ func TestSSHServerLifecycle(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = stopByID(id) })
 
-	// Start binds before returning, so the port is already accepting and the id
-	// names it -- the caller is never handed a port that nothing listens on.
 	if id != fmt.Sprintf("s-%d", port) {
 		t.Fatalf("id %q does not name port %d", id, port)
 	}
@@ -68,8 +66,7 @@ func TestPanicIsolation(t *testing.T) {
 	}
 }
 
-// gliderlabs dispatches these on a child goroutine that a channel-level recover
-// cannot reach, so an escaped panic here would crash linkspan.
+// gliderlabs dispatches these on a goroutine a channel-level recover cannot reach.
 func TestSessionHandlerPanicIsolation(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -237,8 +234,7 @@ func TestRunHostCommandWiresStdio(t *testing.T) {
 	}
 }
 
-// gliderlabs sends 0 for any session whose handler just returns, so a failing
-// command would look successful to the client unless we send the real status.
+// Without reportExit gliderlabs sends 0 and a failure looks like success.
 func TestRunHostCommandReportsExitStatus(t *testing.T) {
 	c := &captureSession{}
 	runHostCommand(c, exec.Command("sh", "-c", "exit 42"))
@@ -250,8 +246,7 @@ func TestRunHostCommandReportsExitStatus(t *testing.T) {
 	}
 }
 
-// A client that keeps its own stdin open never sends EOF. The command has still
-// finished, so the session must end anyway.
+// A client that keeps stdin open never sends EOF; the command has still finished.
 func TestRunHostCommandReturnsWhileStdinIsStillOpen(t *testing.T) {
 	c := &blockingStdinSession{release: make(chan struct{})}
 	defer close(c.release)
@@ -384,8 +379,7 @@ func stopByID(id string) error {
 	return server.Close()
 }
 
-// Stopping right after Start races the supervisor's path into Serve. Whichever
-// side wins, nothing may be left accepting on the port.
+// Races the supervisor's path into Serve; either way nothing may be left accepting.
 func TestStopRightAfterStartLeavesNothingAccepting(t *testing.T) {
 	for range 20 {
 		_, key := testKeyPair(t)
@@ -409,8 +403,7 @@ func TestStopRightAfterStartLeavesNothingAccepting(t *testing.T) {
 	}
 }
 
-// The sshd's one security property: it accepts the key the session was created
-// with, and no other. Replacing authorizer's body with `return true` must fail.
+// Replacing authorizer's body with `return true` must fail this test.
 func TestServerRejectsAKeyItWasNotCreatedWith(t *testing.T) {
 	authorizedSigner, authorized := testKeyPair(t)
 	strangerSigner, _ := testKeyPair(t)

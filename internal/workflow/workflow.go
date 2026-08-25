@@ -11,8 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// shell.exec is the only action. Its command is split on whitespace and run
-// without a shell, so nothing is expanded.
+// The only action; its command is split on whitespace and run without a shell.
 const actionShellExec = "shell.exec"
 
 type Config struct {
@@ -38,11 +37,9 @@ func LoadFile(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// Cancelling ctx kills the running step -- exec.CommandContext sends SIGKILL --
-// and stops the workflow.
 func Run(ctx context.Context, wf *Config) error {
-	// Reject the whole document first: a typo in the last step should not be
-	// found only after the earlier ones have already changed the node.
+	// Reject the whole document first: a typo in the last step should not surface
+	// only after the earlier ones have already changed the node.
 	for i, step := range wf.Steps {
 		if step.Action != actionShellExec {
 			return fmt.Errorf("workflow step %d: unknown action %q", i+1, step.Action)
@@ -71,13 +68,9 @@ func shellExec(ctx context.Context, command string) error {
 	log.Printf("shell.exec: %s", command)
 
 	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
-	// Straight to our own stdout and stderr, which are *os.File, so exec hands
-	// the descriptors to the child rather than copying through a pipe. A step
-	// that daemonises -- cs-control's `setsid --fork python -m jupyter_server`
-	// does -- keeps those descriptors, and Wait blocks on a pipe until every
-	// holder closes it, which for a server it never does. It also means the
-	// step's output is logged as it happens instead of after it ends, so a step
-	// killed by a walltime or OOM still leaves its output behind.
+	// *os.File, so exec hands the descriptors over instead of copying through a
+	// pipe: a step that daemonises leaves a grandchild holding them, and Wait
+	// blocks on a pipe until every holder closes it.
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("shell.exec %q: %w", command, err)
