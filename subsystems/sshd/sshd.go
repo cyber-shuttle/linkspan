@@ -1,6 +1,6 @@
-// Package sshd is linkspan's embedded SSH server. Every handler boundary is
-// panic-isolated and the supervisor restarts the listener, so one bad
-// connection cannot take linkspan down.
+// Package sshd is linkspan's embedded SSH server: every handler boundary is
+// panic-isolated and a supervisor restarts the listener, so one bad connection
+// cannot take linkspan down.
 package sshd
 
 import (
@@ -24,10 +24,12 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-// Start binds before it returns, so the caller gets the port that is actually
-// held and a bind failure is reported now rather than surfacing later as a
-// session that never accepted anything. Loopback only: the port reaches clients
-// through the tunnel, never the node's network.
+const (
+	exitNeverRan  = 127
+	exitSignalled = 255 // we do not send SSH exit-signal
+)
+
+// Start binds before returning, so the caller gets a port that is already held.
 func Start(authorized ssh.PublicKey) (id string, port int, err error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -35,14 +37,12 @@ func Start(authorized ssh.PublicKey) (id string, port int, err error) {
 	}
 	addr := ln.Addr().String()
 	port = ln.Addr().(*net.TCPAddr).Port
-	// The id embeds the port because the client reads it back out of the id.
-	id = fmt.Sprintf("s-%d", port)
+	id = fmt.Sprintf("s-%d", port) // cs-bridge strips the "s-" to recover the port
 	supervise(id, addr, ln, func() *ssh.Server { return newServer(authorized) })
 	return id, port, nil
 }
 
-// Built per (re)start: ForwardedTCPHandler holds per-server state. sftp and
-// streamlocal look unused because the client is VS Code, not cs-bridge.
+// Built per (re)start: ForwardedTCPHandler holds per-server state.
 func newServer(authorized ssh.PublicKey) *ssh.Server {
 	fwd := &ssh.ForwardedTCPHandler{}
 	return &ssh.Server{
@@ -79,7 +79,7 @@ func allowForward(kind string) func(ssh.Context, string, uint32) bool {
 	}
 }
 
-// IdleTimeout and MaxTimeout deliberately stay unset (0).
+// IdleTimeout and MaxTimeout deliberately stay unset.
 func keepAlive(period time.Duration) func(ssh.Context, net.Conn) net.Conn {
 	return func(_ ssh.Context, conn net.Conn) net.Conn {
 		if tc, ok := conn.(*net.TCPConn); ok {
@@ -96,19 +96,11 @@ func handleSession(s ssh.Session) {
 	defer log.Printf("client disconnected: user=%s remote=%s", user, remote)
 
 	_, winCh, isPTY := s.Pty()
-	if isPTY && len(s.Command()) > 0 {
-		// A pty was allocated but a command was given, so runPTYShell -- the only
-		// reader of window-change -- never runs. gliderlabs delivers those with an
-		// unbuffered-in-effect send (cap 1, pre-filled), so an unread resize wedges
-		// this session's request loop.
-		safeGo("drain window-change", func() {
-			for range winCh {
-			}
-		})
-	}
-
 	switch {
-	case len(s.Command()) > 0: // raw command via sh -c, like OpenSSH
+	case len(s.Command()) > 0:
+		if isPTY {
+			drainWindowChanges(winCh)
+		}
 		log.Printf("exec request: user=%s remote=%s cmd=%q", user, remote, s.RawCommand())
 		runHostCommand(s, exec.CommandContext(s.Context(), "sh", "-c", s.RawCommand()))
 	case isPTY:
@@ -118,32 +110,38 @@ func handleSession(s ssh.Session) {
 	}
 }
 
+// runPTYShell is the only reader of window-change, and gliderlabs sends those
+// with a blocking send on a cap-1 channel, so an unread resize wedges the session.
+func drainWindowChanges(winCh <-chan ssh.Window) {
+	safeGo("drain window-change", func() {
+		for range winCh {
+		}
+	})
+}
+
 func runHostCommand(s ssh.Session, cmd *exec.Cmd) {
 	stderr := s.Stderr()
 	cmd.Env, cmd.Stdout, cmd.Stderr = os.Environ(), s, stderr
 
-	// Not cmd.Stdin = s. Wait would then block on an stdin copy that only ends
-	// when the client closes its own stdin, so a command that had already
-	// finished would hang the session. Wait closes this pipe when the process
-	// exits, which ends the copy instead.
+	// Not cmd.Stdin = s. Wait would then block on a copy that only ends when the
+	// client closes its own stdin, hanging a command that had already finished.
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		fmt.Fprintf(stderr, "command error: %v\n", err)
-		_ = s.Exit(127)
+		_ = s.Exit(exitNeverRan)
 		return
 	}
 	safeGo("session stdin copy", func() { defer stdin.Close(); _, _ = io.Copy(stdin, s) })
 
 	err = cmd.Run()
 	if err != nil && !errors.As(err, new(*exec.ExitError)) {
-		fmt.Fprintf(stderr, "command error: %v\n", err) // it never ran
+		fmt.Fprintf(stderr, "command error: %v\n", err)
 	}
 	reportExit(s, err)
 }
 
-// reportExit gives the client the command's own status. gliderlabs sends 0 for
-// any session whose handler simply returns, so every failure -- including a
-// shell that never started -- would otherwise look like success.
+// gliderlabs sends 0 for any session whose handler simply returns, so without
+// this every failure -- including a shell that never started -- looks like success.
 func reportExit(s ssh.Session, err error) {
 	var exit *exec.ExitError
 	switch {
@@ -151,12 +149,12 @@ func reportExit(s ssh.Session, err error) {
 		_ = s.Exit(0)
 	case errors.As(err, &exit):
 		code := exit.ExitCode()
-		if code < 0 { // killed by a signal; we do not send SSH exit-signal
-			code = 255
+		if code < 0 {
+			code = exitSignalled
 		}
 		_ = s.Exit(code)
 	default:
-		_ = s.Exit(127) // it never ran
+		_ = s.Exit(exitNeverRan)
 	}
 }
 
@@ -164,14 +162,12 @@ func runPTYShell(s ssh.Session) {
 	ptyReq, winCh, _ := s.Pty()
 	cmd := exec.CommandContext(s.Context(), shellPath())
 	if ptyReq.Term != "" {
-		// The client's terminal type. Without it the shell inherits the batch
-		// job's environment, which has no TERM, and curses programs misbehave.
+		// The batch job's environment has no TERM, and curses programs misbehave.
 		cmd.Env = append(os.Environ(), "TERM="+ptyReq.Term)
 	}
 	f, err := pty.Start(cmd)
 	if err != nil {
-		// A PTY session carries a single stream, so this goes to s rather than
-		// s.Stderr() -- which is also what sshd does when a pty is allocated.
+		// A PTY session carries a single stream, so this goes to s, not s.Stderr().
 		fmt.Fprintf(s, "failed to start pty shell: %v\n", err)
 		reportExit(s, err)
 		return
@@ -186,12 +182,9 @@ func runPTYShell(s ssh.Session) {
 	resize(ptyReq.Window.Width, ptyReq.Window.Height)
 
 	drained := make(chan struct{})
-	// The reader stops when the shell exits (the master reports EOF) or when the
-	// session goes away (the write to the client fails). Either way the pty is
-	// done with, and closing it is what stops a shell whose session ended --
-	// s.Context() belongs to the connection, so it would keep one alive until
-	// the whole connection dropped. Not the writer: stdin reaching EOF only
-	// means the client sent no more input, which is not the session closing.
+	// Closing the master is what stops a shell whose session ended: s.Context()
+	// belongs to the connection, so it would outlive the session. Not on the
+	// writer -- stdin at EOF only means no more input, not a closed session.
 	safeGo("pty->client copy", func() { defer close(drained); _, _ = io.Copy(s, f); _ = f.Close() })
 	safeGo("client->pty copy", func() { _, _ = io.Copy(f, s) })
 	safeGo("pty window-change", func() {
@@ -202,8 +195,7 @@ func runPTYShell(s ssh.Session) {
 
 	err = cmd.Wait()
 	// Let the reader finish before the deferred Close pulls the master out from
-	// under it, or the shell's last output is dropped. Bounded, because a
-	// wedged read must not hold the handler.
+	// under it, or the shell's last output is dropped.
 	select {
 	case <-drained:
 	case <-time.After(2 * time.Second):
@@ -288,12 +280,11 @@ func guardSession(name string, h func(ssh.Session)) func(ssh.Session) {
 	}
 }
 
-// Vars so tests can shrink them.
 var (
 	maxConsecutiveFailures = 5
 	minRestartBackoff      = 1 * time.Second
 	maxRestartBackoff      = 30 * time.Second
-	healthyRunThreshold    = 60 * time.Second // a run this long resets the failure count
+	healthyRunThreshold    = 60 * time.Second
 	nowFunc                = time.Now
 )
 
@@ -306,7 +297,7 @@ const (
 
 type supervisor struct {
 	mu        sync.Mutex
-	current   *ssh.Server // rebuilt on each restart
+	current   *ssh.Server
 	state     string
 	addr      string
 	sessionID string
@@ -350,11 +341,9 @@ func (s *supervisor) run(build func() *ssh.Server, first net.Listener) {
 		if ln == nil { // every restart rebinds; Serve closed the last listener
 			ln, err = net.Listen("tcp", s.addr)
 		}
-		// Publish the listener before serving. A stop between here and Serve
-		// would otherwise leave no trace: gliderlabs' trackListener resets the
-		// server's doneChan when it has no listeners yet, so Close is erased and
-		// Serve accepts forever on a listener nothing shuts. signalStop closes
-		// whatever is published, so either order ends the same way.
+		// Publish the listener before serving. gliderlabs' trackListener resets the
+		// server's doneChan while it has no listeners, so a Close in between would
+		// be erased and Serve would accept forever on a listener nothing shuts.
 		s.mu.Lock()
 		if s.stopped {
 			s.state = stateStopped
@@ -422,10 +411,10 @@ func (s *supervisor) signalStop() *ssh.Server {
 	return s.current
 }
 
-// signalStop may already have closed the listener, and gliderlabs closes it
-// again on its way out. A listener that is already shut is what was asked for.
 func (s *supervisor) Close() error {
 	if srv := s.signalStop(); srv != nil {
+		// signalStop already closed the listener and gliderlabs closes it again on
+		// its way out; an already-shut listener is what was asked for.
 		if err := srv.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			return err
 		}
@@ -439,10 +428,8 @@ var (
 	activeServersMu sync.Mutex
 )
 
-// deregister removes this supervisor's entry, and only its own. The id is
-// s-<port>, so a later session can be handed the same port and therefore the
-// same id; deleting by id alone would take that live session out of the
-// registry when this one finally exited.
+// Removes this supervisor's entry, and only its own: ids repeat when a later
+// session is handed the same port, so deleting by id alone could evict a live one.
 func (s *supervisor) deregister() {
 	activeServersMu.Lock()
 	defer activeServersMu.Unlock()

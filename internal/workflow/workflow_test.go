@@ -31,9 +31,8 @@ func script(t *testing.T, body string) string {
 	return path
 }
 
-// cs-control's provisioning ends in `setsid --fork python -m jupyter_server`:
-// the step returns at once but leaves a grandchild holding the stdout it
-// inherited. Capturing through a pipe makes Wait block until that server exits.
+// cs-control's provisioning ends in `setsid --fork python -m jupyter_server`,
+// which leaves a grandchild holding the inherited stdout.
 func TestAStepThatForksDoesNotBlockTheWorkflow(t *testing.T) {
 	wf := load(t, "name: d\nsteps:\n  - action: shell.exec\n    name: fork\n    params:\n      command: \"/bin/sh "+script(t, "/bin/sleep 3 &")+"\"\n")
 
@@ -45,8 +44,7 @@ func TestAStepThatForksDoesNotBlockTheWorkflow(t *testing.T) {
 			t.Fatalf("step failed: %v", err)
 		}
 	case <-time.After(1500 * time.Millisecond):
-		// The child sleeps 3s. Capturing through a pipe would make Run wait for
-		// it; handing over the descriptor returns as soon as the step exits.
+		// The child sleeps 3s; a pipe would make Run wait for it.
 		t.Fatal("Run blocked on a step that forked a long-lived child")
 	}
 }

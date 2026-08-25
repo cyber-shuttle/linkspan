@@ -53,12 +53,11 @@ func TestParseGPUMetrics(t *testing.T) {
 	}
 }
 
-// A wedged nvidia-smi must not hold the read open; the driver hanging is the
-// state the metrics are wanted for.
+// A hanging driver is the state metrics are wanted for.
 func TestReadOutlastsAHungNvidiaSmi(t *testing.T) {
 	dir := t.TempDir()
-	// /bin/sleep by absolute path: PATH is about to become the fake's dir alone,
-	// so a bare `sleep` would exit 127 and the probe would never hang.
+	// Absolute path: PATH becomes the fake's dir alone, so a bare `sleep` would
+	// exit 127 and the probe would never hang.
 	fake := []byte("#!/bin/sh\nexec /bin/sleep 60\n")
 	if err := os.WriteFile(filepath.Join(dir, "nvidia-smi"), fake, 0o755); err != nil {
 		t.Fatal(err)
@@ -77,14 +76,13 @@ func TestReadOutlastsAHungNvidiaSmi(t *testing.T) {
 		t.Fatal("Read never returned with nvidia-smi hung")
 	}
 
-	// The stuck probe is still running. cs-bridge polls every 5s, so a second
-	// read must not start another one -- and must not wait for the first.
+	// A second read must not start another probe, nor wait for the stuck one.
 	second := time.Now()
 	Read(context.Background())
 	if elapsed := time.Since(second); elapsed > time.Second {
 		t.Fatalf("a second read took %s while a probe was stuck; it should skip", elapsed)
 	}
-	if !gpuProbing.Load() {
+	if !gpuProbeInFlight.Load() {
 		t.Fatal("the stuck probe is no longer marked outstanding, so a second one could start")
 	}
 }

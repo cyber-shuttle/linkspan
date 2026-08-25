@@ -1,7 +1,6 @@
 // Package httpapi is linkspan's HTTP surface: the route table and the handlers
 // behind it. It is the only package that serves HTTP -- the subsystems report
-// data and know nothing about requests. main owns the http.Server and the TCP
-// listener; ListenUnix here adds the optional unix socket.
+// data and know nothing about requests.
 package httpapi
 
 import (
@@ -16,8 +15,7 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-// An ssh public key is well under a kilobyte. The cap stops a large body on a
-// tunnel-reachable endpoint from being read into memory.
+// An ssh public key is well under a kilobyte.
 const maxRequestBytes = 64 << 10
 
 // cs-bridge calls these exact paths; renaming one is an API break.
@@ -43,7 +41,7 @@ func listSessions(w http.ResponseWriter, _ *http.Request) {
 }
 
 type sessionRequest struct {
-	AuthorizedKey string `json:"authorized_key"` // the private half never leaves the caller
+	AuthorizedKey string `json:"authorized_key"`
 }
 
 type sessionResponse struct {
@@ -53,7 +51,6 @@ type sessionResponse struct {
 
 func createSession(w http.ResponseWriter, r *http.Request) {
 	var req sessionRequest
-	// net/http closes the body itself.
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
@@ -72,8 +69,7 @@ func createSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, sessionResponse{ID: id, BindPort: int32(port)})
 }
 
-// ListenUnix serves srv on a unix socket in the background, reachable in-cluster
-// via `srun --jobid` with no TCP port.
+// ListenUnix serves srv on a unix socket, reached in-cluster via `srun --jobid`.
 func ListenUnix(srv *http.Server, path string) error {
 	os.Remove(path) // a stale socket from a prior run blocks the bind
 	ln, err := net.Listen("unix", path)
@@ -81,8 +77,7 @@ func ListenUnix(srv *http.Server, path string) error {
 		return err
 	}
 	// bind() applies the umask, so under umask 002 this lands group-writable in a
-	// shared directory -- and every route behind it is unauthenticated. Only the
-	// job's own user reaches it via `srun --overlap`.
+	// shared directory -- and every route behind it is unauthenticated.
 	if err := os.Chmod(path, 0o600); err != nil {
 		ln.Close()
 		return err

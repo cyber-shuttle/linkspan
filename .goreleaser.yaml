@@ -19,7 +19,7 @@ builds:
 
 archives:
   - formats: [tar.gz]
-    # this name template makes the OS and Arch compatible with the results of `uname`.
+    # cs-bridge and cs-control fetch linkspan_Linux_x86_64.tar.gz by this exact name.
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_

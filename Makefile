@@ -12,10 +12,8 @@ PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
 all: $(foreach p,$(PLATFORMS),$(BIN)/linkspan-$(subst /,-,$(p)))
 
-# FORCE, so the recipe runs every time. With no prerequisites make treats an
-# existing bin/linkspan-* as up to date, which shipped a binary built at an
-# older tag and skipped the version gate below with it. go build's own cache
-# makes an unchanged rebuild cheap.
+# FORCE, so the recipe runs every time: make would otherwise treat an existing
+# bin/linkspan-* as up to date and ship it, stale tag and skipped gate and all.
 $(BIN)/linkspan-%: FORCE
 	$(eval GOOS   := $(word 1,$(subst -, ,$*)))
 	$(eval GOARCH := $(word 2,$(subst -, ,$*)))
