@@ -96,7 +96,7 @@ path; those are the only two background failures that are fatal.
   killed when its parent exits
 - The client owns the tunnel: it creates it, registers its ports, and mints a host-scoped token. Linkspan
   hosts the relay and never creates, forwards, refreshes or deletes a tunnel.
-- **internal/httpapi is the only package that serves HTTP.** Subsystems report data — `metrics.Read(ctx)`
+- **internal/httpapi owns every route and handler.** Subsystems report data — `metrics.Read(ctx)`
   returns a Snapshot, `sshd.Start` returns an id and port — and know nothing about requests or JSON
 - **The HTTP API binds loopback only, and has no authentication.** `POST /vscode/sessions` starts an sshd
   for a caller-supplied key, so reaching it is equivalent to a shell as the job owner. Both consumers get

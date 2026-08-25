@@ -1,6 +1,6 @@
-// Package sshd is linkspan's embedded SSH server: every handler boundary is
-// panic-isolated and a supervisor restarts the listener, so one bad connection
-// cannot take linkspan down.
+// Package sshd is linkspan's embedded SSH server: every session, channel and
+// request handler is panic-isolated and a supervisor restarts the listener, so a
+// panicking handler cannot take linkspan down.
 package sshd
 
 import (
@@ -110,8 +110,8 @@ func handleSession(s ssh.Session) {
 	}
 }
 
-// runPTYShell is the only reader of window-change, and gliderlabs sends those
-// with a blocking send on a cap-1 channel, so an unread resize wedges the session.
+// runPTYShell is the usual reader of window-change; on the exec path it never
+// runs, and gliderlabs' blocking send on a cap-1 channel would wedge the session.
 func drainWindowChanges(winCh <-chan ssh.Window) {
 	safeGo("drain window-change", func() {
 		for range winCh {

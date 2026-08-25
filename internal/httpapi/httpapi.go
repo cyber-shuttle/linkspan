@@ -1,6 +1,5 @@
 // Package httpapi is linkspan's HTTP surface: the route table and the handlers
-// behind it. It is the only package that serves HTTP -- the subsystems report
-// data and know nothing about requests.
+// behind it. The subsystems report data and know nothing about requests.
 package httpapi
 
 import (
