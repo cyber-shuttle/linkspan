@@ -1,12 +1,11 @@
 # Linkspan
 
-Linkspan is a lightweight agent that runs inside a compute-node allocation. It hosts the dev tunnel its
-client created, runs the workflow the client handed it, and serves an SSH server for VS Code Remote-SSH.
+Linkspan is a lightweight helper binary that runs as the host process in cybershuttle-submitted job context.
+It provides secure APIs to run shell scripts, pull CPU/GPU usage metrics, start/stop subprocesses (e.g., sshd), tunnel host-local TCP/UNIX servers for public access, and run workflows of them.
 
-It has two consumers, and its surface is exactly what they use:
-
-- **cs-bridge** launches it for VS Code and calls its HTTP API.
-- **cs-control** launches it for Jupyter and drives it entirely through `--workflow`.
+In Cybershuttle, linkspan is used in several ways:
+- **cs-bridge** submits linkspan as a time-bound HPC job, starts a job-local SSH daemon, and securely tunnels it, which lets VSCode securely access HPC jobs.
+- **cs-jupyter** submits linkspan as a time-bound HPC job, runs a `--workflow` to install-and-start a Jupyter API server, and securely tunnels it to the caller.
 
 ## Quick Start
 
@@ -15,14 +14,17 @@ go build -o linkspan .
 ./linkspan --port 8080
 ```
 
-## Running in an allocation
+## Running linkspan behind a NAT
 
-The client creates the dev tunnel, registers its ports and mints a host-scoped token; linkspan hosts the
-relay and never creates, forwards or deletes a tunnel of its own.
+Linkspan can securely tunnel any local TCP/UNIX servers running alongside it.
+For added security, tunnel creation/teardown lifecycle is kept external to linkspan.
+Linkspan simply forwards traffic over host-scoped tokens, and the tunnel-host is required to be given in API calls.
 
 ```bash
-linkspan --port "$CS_CONTROL_PORT" --tunnel-enable \
-  --tunnel-id "$CS_TUNNEL_ID" --tunnel-cluster "$CS_TUNNEL_CLUSTER" \
+linkspan --port "$PORT" \
+  --tunnel-enable \
+  --tunnel-id "$CS_TUNNEL_ID" \
+  --tunnel-cluster "$CS_TUNNEL_CLUSTER" \
   --tunnel-host-token "$CS_TUNNEL_HOST_TOKEN" \
   --workflow /path/to/workflow.yaml
 ```
