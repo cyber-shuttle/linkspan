@@ -24,11 +24,17 @@ Both also run `--version`.
   trailing lines; cs-bridge does not, and a second line makes it reinstall linkspan on every launch.
 - `--help` must contain the literal `-tunnel-host-token` — one dash, as Go's flag package prints it.
   cs-control greps for exactly that (`--help 2>&1 | grep -q -- '-tunnel-host-token'`) and refuses to submit
-  a job without it, so the flag cannot be renamed or removed. Flags are written `--name` everywhere else,
-  which is how they are passed; only the printed spelling is matched.
+  a job without it, so the flag cannot be renamed or removed. Only the printed spelling is matched: Go
+  accepts either form, and the consumers pass both (`--tunnel-enable` from cs-control, `-tunnel-enable`
+  from cs-bridge).
 - The goreleaser archive name (`linkspan_Linux_${arch}.tar.gz`) and the `linkspan` member inside it — both
   consumers curl and untar them by those exact names.
-- The session id shape `s-<port>` — cs-bridge strips the prefix to recover the port.
+- The session id shape `s-<port>` and the `addr` in a session status — cs-bridge takes the port from the
+  last `:`-separated field of `addr`, and falls back to stripping the `s-` prefix off the id.
+- The response bodies, which cs-bridge validates instead of the status code: `/health` is an object with
+  `status: "ok"`, `/vscode/sessions` is an array, `/metrics` is a non-array object, and a created session
+  carries `id` and `bind_port`. A wrong shape reads as a dead host, because the tunnel edge answers 200 with
+  an HTML page once hosting stops.
 - The `sftp` subsystem and the `direct-streamlocal@openssh.com` handler have no cs-bridge caller and look
   dead. They are not: VS Code Remote-SSH's bootstrap fallback uses SFTP, and
   `remote.SSH.remoteServerListenOnSocket` uses streamlocal. The client is VS Code, not cs-bridge.

@@ -1,24 +1,53 @@
 # Linkspan
 
-Linkspan is a lightweight helper binary that runs as the host process in cybershuttle-submitted job context.
-It provides secure APIs to run shell scripts, pull CPU/GPU usage metrics, start/stop subprocesses (e.g., sshd), tunnel host-local TCP/UNIX servers for public access, and run workflows of them.
+Linkspan is a small Go binary that runs as the main process of an HPC batch job. It gives a client outside
+the cluster a way to reach that job: it hosts a tunnel the client created, runs a YAML workflow to set the
+job up, and serves a small HTTP API for job metrics and on-demand SSH servers.
 
-In Cybershuttle, linkspan is used in several ways:
-- **cs-bridge** submits linkspan as a time-bound HPC job, starts a job-local SSH daemon, and securely tunnels it, which lets VSCode securely access HPC jobs.
-- **cs-jupyter** submits linkspan as a time-bound HPC job, runs a `--workflow` to install-and-start a Jupyter API server, and securely tunnels it to the caller.
+## Why
 
-## Quick Start
+Compute nodes sit behind a login node and a firewall, so nothing outside the cluster can open a connection
+to a running job. Linkspan dials out instead of listening: it runs inside the job and hosts a tunnel the
+client created before submitting, so the client reaches the job through that tunnel rather than through an
+inbound port.
+
+It is a CyberShuttle component, used two ways:
+
+- **cs-bridge** (VS Code extension) submits Linkspan as a time-bound job, asks it over the tunnel to start a
+  job-local SSH server for the user's public key, and points VS Code Remote-SSH at it.
+- **cs-control** (Jupyter runtimes) submits Linkspan with a `--workflow` that builds a Python environment and
+  starts a Jupyter server, then reaches that server through the same tunnel.
+
+## Install
+
+Download the release build for the target platform:
+
+```bash
+curl -fsSL https://github.com/cyber-shuttle/linkspan/releases/latest/download/linkspan_Linux_x86_64.tar.gz |
+  tar -xz linkspan
+```
+
+Archives are published for Linux and macOS on `x86_64` and `arm64`. To build from source instead (Go 1.24+):
 
 ```bash
 go build -o linkspan .
-./linkspan --port 8080
 ```
 
-## Running linkspan behind a NAT
+## Quick start
 
-Linkspan can securely tunnel any local TCP/UNIX servers running alongside it.
-For added security, tunnel creation/teardown lifecycle is kept external to linkspan.
-Linkspan simply forwards traffic over host-scoped tokens, and the tunnel-host is required to be given in API calls.
+```bash
+./linkspan --port 8080
+curl http://127.0.0.1:8080/api/v1/health
+```
+
+That serves the HTTP API on loopback and does nothing else — no tunnel, no workflow.
+
+## Running behind a firewall
+
+Linkspan hosts a tunnel; it never creates one. The client creates the tunnel, registers its ports and mints
+a host-scoped token before submitting the job, and Linkspan runs the relay for the tunnel it is named. Keeping
+the lifecycle outside the job means the job cannot create, extend or delete a tunnel, and the token it carries
+authorizes hosting and nothing else.
 
 ```bash
 linkspan --port "$PORT" \
@@ -29,10 +58,17 @@ linkspan --port "$PORT" \
   --workflow /path/to/workflow.yaml
 ```
 
+The `devtunnel` CLI is downloaded to `~/.linkspan/bin/` on first use. If the relay fails to come up after
+three attempts, Linkspan exits non-zero rather than running on with no way to be reached.
+
 ## Workflows
 
-A workflow is a list of steps run in order, stopping at the first failure. `shell.exec` is the only action:
-its command is split on whitespace and run without a shell, so nothing is expanded.
+A workflow is an ordered list of steps run at startup, alongside the HTTP server. `shell.exec` is the only
+action. Every step is validated before the first one runs, and the run stops at the first failure — which
+shuts Linkspan down with exit status 1, since a job whose setup failed has nothing left to offer.
+
+Each command is split on whitespace and executed directly, without a shell: no globs, no variable expansion,
+no pipes or redirection. Use absolute paths.
 
 ```yaml
 name: cs-runtime
@@ -43,41 +79,51 @@ steps:
       command: "/home/me/.local/bin/uv venv --python 3.12 /home/me/.cybershuttle/jupyter-env"
 ```
 
-## CLI Flags
+A step that daemonizes (`setsid --fork ...`) returns as soon as it has forked, so one step can start a
+long-running server and the next can wait for it to answer.
+
+## CLI flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port` | `8080` | HTTP server port, bound on loopback (`0` = random) |
-| `--socket` | | Also serve on this unix socket path (in-cluster access via `srun --jobid`) |
+| `--port` | `8080` | HTTP server port, bound on loopback (`0` picks a free one) |
+| `--socket` | | Also serve on this unix socket path, for in-cluster access via `srun --jobid` |
 | `--workflow` | | Workflow YAML file path |
 | `--tunnel-enable` | `false` | Host the tunnel named by `--tunnel-id` on startup |
-| `--tunnel-id` | | Id of the client-created dev tunnel to host |
+| `--tunnel-id` | | Id of the client-created tunnel to host |
 | `--tunnel-cluster` | | Cluster id of `--tunnel-id` |
 | `--tunnel-host-token` | | Host-scoped access token for `--tunnel-id` |
 | `--version` | | Print the version and exit |
 
-`--version` prints a bare `X.Y.Z[.commit]` as its only line of stdout, and `--help` lists the flag as
-`-tunnel-host-token` — one dash, which is how Go's flag package prints them. Both consumers run `--version`
-to decide whether to install or replace the binary — cs-bridge is broken by a second line, cs-control
-tolerates one — and cs-control greps `--help` for that exact literal and refuses to submit a job without it.
-Neither output may change shape. Flags are passed as `--name`, as in the examples above.
+The three tunnel values are required whenever `--tunnel-enable` is set. Go's flag package accepts both `-name`
+and `--name`.
 
-## REST API
+## HTTP API
 
-Four endpoints, all under `/api/v1/`. They are served on loopback and on `--socket`, and none of them
-authenticates: `POST /vscode/sessions` starts an SSH server for whatever key it is given, so reaching the
-API is equivalent to a shell as the job's user. Consumers arrive through the dev tunnel or the unix socket.
+**The API has no authentication and binds to loopback only.** `POST /api/v1/vscode/sessions` starts an SSH
+server for whatever public key it is handed, so reaching the API is equivalent to a shell as the job's user.
+Callers are expected to arrive through the client-owned tunnel or through `--socket`, which is created
+mode `0600`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/health` | Liveness; answers `{"status":"ok"}` |
-| GET | `/metrics` | Live cgroup-v2 memory/CPU and per-GPU `nvidia-smi` for the allocation. Each source degrades independently — a missing one omits its field rather than failing the request |
-| GET | `/vscode/sessions` | List the SSH servers and their supervisor state |
-| POST | `/vscode/sessions` | Start an SSH server authorized for one public key |
+| GET | `/api/v1/health` | Liveness; answers `{"status":"ok"}` |
+| GET | `/api/v1/metrics` | Live cgroup-v2 memory/CPU and per-GPU `nvidia-smi` for the allocation. Each source degrades independently — a missing one omits its field rather than failing the request |
+| GET | `/api/v1/vscode/sessions` | List the SSH servers and their supervisor state |
+| POST | `/api/v1/vscode/sessions` | Start an SSH server authorized for one public key |
 
-`POST /vscode/sessions` takes `{"authorized_key": "<ssh public key>"}` and answers
-`{"id": "s-<port>", "bind_port": <port>}`. The port is bound before the response is written, so it is
-already accepting. It is loopback only: it reaches clients through the tunnel, never the node's network.
+`POST /api/v1/vscode/sessions` takes `{"authorized_key": "<ssh public key>"}` and answers
+`{"id": "s-<port>", "bind_port": <port>}`. The port is bound before the response is written, so it is already
+accepting. Each SSH server is loopback-only too: it reaches clients through the tunnel, never through the
+node's network.
+
+## Reaching a job from inside the cluster
+
+With `--socket`, and no tunnel or TCP port involved:
+
+```bash
+srun --jobid=<id> --overlap curl --unix-socket /tmp/linkspan.sock http://localhost/api/v1/metrics
+```
 
 ## Architecture
 
@@ -89,16 +135,32 @@ linkspan
 │   └── workflow/              # YAML workflow: load and run shell.exec steps in order
 └── subsystems/
     ├── metrics/               # cgroup-v2 + nvidia-smi job metrics
-    ├── sshd/                  # Supervised SSH server (gliderlabs/ssh) with PTY support
+    ├── sshd/                  # supervised SSH server (gliderlabs/ssh) with PTY support
     └── tunnel/                # devtunnel CLI download + relay hosting
 ```
 
-## Building Releases
+## Development
 
 ```bash
-goreleaser release --snapshot --clean    # Local snapshot build
-goreleaser release --clean               # Tagged release (requires GITHUB_TOKEN)
+go build ./...
+go test ./...
+go vet ./...
 ```
 
-Both consumers download `linkspan_Linux_${arch}.tar.gz` from `releases/latest` and extract a member named
-`linkspan`, so the archive name template and the binary name inside it are a contract.
+CI runs all three on every pull request. `make` cross-compiles for Linux and macOS on `amd64`/`arm64`, but
+refuses to build unless HEAD is tagged `X.Y.Z` or `X.Y.Z.<commit>`, because the tag is the version it stamps
+in; use `go build` for a dev binary. Releases are published by GitHub Actions when a GitHub release is
+published, and `goreleaser release --snapshot --clean` builds the same archives locally.
+
+## Compatibility
+
+CyberShuttle clients install and drive Linkspan by the following, so they do not change without a coordinated
+release:
+
+- `--version` prints a bare `X.Y.Z[.commit]` as the only line on stdout.
+- The release archive `linkspan_Linux_<arch>.tar.gz` contains a binary named `linkspan`.
+- The four `/api/v1` paths above, their response shapes, and the session id `s-<port>`.
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE).
