@@ -45,7 +45,7 @@ That serves the HTTP API on loopback and does nothing else — no tunnel, no wor
 ## Running behind a firewall
 
 Linkspan hosts a tunnel; it never creates one. The client creates the tunnel, registers its ports and mints
-a host-scoped token before submitting the job, and Linkspan runs the relay for the tunnel it is named. Keeping
+a host-scoped token before submitting the job, and Linkspan runs the relay for the tunnel it is given. Keeping
 the lifecycle outside the job means the job cannot create, extend or delete a tunnel, and the token it carries
 authorizes hosting and nothing else.
 
@@ -149,8 +149,8 @@ go vet ./...
 
 CI runs all three on every pull request. `make` cross-compiles for Linux and macOS on `amd64`/`arm64`, but
 refuses to build unless HEAD is tagged `X.Y.Z` or `X.Y.Z.<commit>`, because the tag is the version it stamps
-in; use `go build` for a dev binary. Releases are published by GitHub Actions when a GitHub release is
-published, and `goreleaser release --snapshot --clean` builds the same archives locally.
+in; use `go build` for a dev binary. GitHub Actions builds and uploads the release archives when a release is
+published on GitHub, and `goreleaser release --snapshot --clean` builds the same archives locally.
 
 ## Compatibility
 
