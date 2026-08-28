@@ -1,8 +1,7 @@
 # Contributing to Linkspan
 
-Thank you for your interest in contributing to Linkspan. This document covers the source layout, how to get a
-development build running, and the contracts a change must not break. Bug reports, features and documentation
-fixes are all welcome.
+This document covers the source layout, how to get a development build running, and the contracts a change
+must not break. Issues and pull requests go through GitHub.
 
 ## Development Setup
 
@@ -11,7 +10,7 @@ fixes are all welcome.
 - [Git](https://git-scm.com/)
 - [Go](https://go.dev/dl/) 1.24+
 
-Nothing else. Linkspan has no code generation step, no C dependencies and no service to run locally.
+Linkspan has no code generation step, no C dependencies and no service to run locally.
 
 ### Getting Started
 
@@ -85,13 +84,12 @@ coordinated release of the clients too:
 - The four `/api/v1` paths, their response shapes, and the session id `s-<port>`.
 
 The `sftp` subsystem and the `direct-streamlocal@openssh.com` channel handler have no caller in the
-CyberShuttle clients, but they are not unused: VS Code Remote-SSH's bootstrap fallback uses SFTP, and its
+CyberShuttle clients. Their client is VS Code: Remote-SSH's bootstrap fallback uses SFTP, and its
 `remote.SSH.remoteServerListenOnSocket` setting uses streamlocal.
 
 ## Pull Requests
 
 - Branch off `main`; `main` takes changes only through pull requests.
 - Keep the build, tests and vet green — CI runs them on every pull request.
-- Add a test for behaviour that a reader could otherwise change by accident, and say in the description what
-  you ran.
+- Cover new behaviour with a test, and state in the description what you ran.
 - Report security issues privately instead of opening a pull request. See [SECURITY.md](SECURITY.md).

@@ -46,10 +46,10 @@ Changing any of these breaks a consumer.
 
 - A failing workflow step exits the process with status 1, after shutting down the HTTP server, the SSH
   sessions and the tunnel relay. An exhausted tunnel bring-up (`--tunnel-enable`, three failed attempts) does
-  the same. These are the only two background failures that are fatal, so any workflow step that can fail is
-  a startup dependency.
-- The HTTP API binds loopback only and has no authentication. `POST /vscode/sessions` starts an sshd for a
-  caller-supplied key, so reaching it is equivalent to a shell as the job owner.
+  the same. These are the only two background failures that are fatal.
+- Access control is at the transport, not in the API: the HTTP listener is loopback-only, `--socket` is
+  created mode `0600`, and remote callers arrive over the client's tunnel. Requests carry no credential of
+  their own, so those three boundaries are the check. `SECURITY.md` states the model.
 - The client owns the tunnel: it creates it, registers its ports and mints a host-scoped token. Linkspan
   hosts the relay, and never creates, forwards, refreshes or deletes a tunnel.
 - `make` refuses to build unless HEAD is tagged `X.Y.Z` or `X.Y.Z.<commit>`; use `go build` for a dev binary.

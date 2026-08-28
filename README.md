@@ -5,23 +5,23 @@
 [![Go](https://img.shields.io/github/go-mod/go-version/cyber-shuttle/linkspan)](go.mod)
 [![LICENSE](https://img.shields.io/github/license/cyber-shuttle/linkspan?color=blue)](LICENSE)
 
-Reach a running HPC job from outside the cluster. Linkspan runs as the main process of a batch job, hosts a
-tunnel the client created, sets the job up from a YAML workflow, and serves an HTTP API for metrics and
-on-demand SSH servers.
+Linkspan runs as the main process of an HPC batch job. It hosts a tunnel the client created, runs a YAML
+workflow to set the job up, and serves an HTTP API for job metrics and SSH servers.
 
-Compute nodes sit behind a login node and a firewall, so nothing outside can open a connection to a running
-job. Linkspan dials out instead of listening.
+Compute nodes sit behind a login node and a firewall, so nothing outside the cluster can open a connection to
+a running job. The tunnel Linkspan hosts is established outbound, from inside the job.
 
 ## Features
 
-- **No inbound ports** — the client creates a tunnel before submitting; Linkspan only hosts the relay.
-- **SSH on demand** — starts a job-local SSH server for a single public key, which is how VS Code
-  Remote-SSH attaches to an allocation.
-- **Allocation metrics** — cgroup-v2 memory and CPU plus per-GPU `nvidia-smi`, scoped to the whole job
-  rather than one step.
-- **YAML workflows** — an ordered list of commands that builds and starts whatever the job is for.
-- **Portless in-cluster access** — an optional unix socket, reachable with `srun --jobid --overlap`.
-- **One static binary** — no runtime dependencies and no root.
+- **Tunnel hosting** — hosts a tunnel the client created before submitting the job. The cluster opens no
+  inbound port.
+- **SSH servers** — starts a job-local SSH server bound to loopback and authorized for one public key. This
+  is what VS Code Remote-SSH attaches over.
+- **Allocation metrics** — cgroup-v2 memory and CPU, and per-GPU `nvidia-smi`, covering the whole job rather
+  than one step.
+- **Workflows** — an ordered list of commands, given in YAML and run at startup.
+- **Unix socket** — an optional second listener, reachable in-cluster with `srun --jobid --overlap`.
+- **Static binary** — no runtime dependencies, and runs as the submitting user.
 
 ## Installation
 
@@ -30,7 +30,7 @@ curl -fsSL https://github.com/cyber-shuttle/linkspan/releases/latest/download/li
   tar -xz linkspan
 ```
 
-Archives are published for Linux and macOS on `x86_64` and `arm64`. Building from source? See
+Archives are published for Linux and macOS on `x86_64` and `arm64`. To build from source, see
 [CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
 
 ## Quick Start
@@ -103,9 +103,11 @@ The three tunnel values are required whenever `--tunnel-enable` is set.
 
 ## HTTP API
 
-**No authentication, loopback only.** `POST /api/v1/vscode/sessions` starts an SSH server for whatever public
-key it is handed, so reaching the API is equivalent to a shell as the job's user. Callers arrive through the
-client-owned tunnel or through `--socket`, which is created mode `0600`. See [SECURITY.md](SECURITY.md).
+Access control sits at the transport rather than in the API. The HTTP listener binds loopback only, so nothing
+off the node can reach it; the optional `--socket` listener is created mode `0600`, so only the job's own user
+can connect; and remote callers arrive over the tunnel the client created and controls. Requests are not
+separately authenticated, which is why those three boundaries are where the checks are. See
+[SECURITY.md](SECURITY.md) for the full model.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -122,17 +124,17 @@ bound on loopback like the API.
 
 - **[cs-bridge](https://github.com/cyber-shuttle/CS-Bridge)** — VS Code extension. Submits Linkspan as a
   time-bound job, has it start an SSH server for the user's key, and points VS Code Remote-SSH at it.
-- **cs-control** — Jupyter runtimes. Submits Linkspan with a `--workflow` that builds a Python environment
-  and starts a Jupyter server.
+- **[cs-control](https://github.com/cyber-shuttle/cs-control)** — Jupyter runtimes. Submits Linkspan with a
+  `--workflow` that builds a Python environment and starts a Jupyter server.
 
 ## Contributing
 
-Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the source layout,
+Issues and pull requests go through GitHub. See [CONTRIBUTING.md](CONTRIBUTING.md) for the source layout,
 development setup, and release process.
 
 ## Security
 
-Report vulnerabilities privately — see [SECURITY.md](SECURITY.md). Please do not open a public issue.
+Report vulnerabilities privately, as described in [SECURITY.md](SECURITY.md), rather than in a public issue.
 
 ## License
 
