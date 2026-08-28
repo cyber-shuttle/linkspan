@@ -5,11 +5,14 @@
 [![Go](https://img.shields.io/github/go-mod/go-version/cyber-shuttle/linkspan)](go.mod)
 [![LICENSE](https://img.shields.io/github/license/cyber-shuttle/linkspan?color=blue)](LICENSE)
 
-Linkspan runs as the main process of an HPC batch job. It hosts a tunnel the client created, runs a YAML
-workflow to set the job up, and serves an HTTP API for job metrics and SSH servers.
+Reach a running HPC job securely from outside the cluster. Linkspan runs as the main process of a batch job,
+hosts a tunnel the client created, sets the job up from a YAML workflow, and serves an HTTP API for job
+metrics and on-demand SSH servers.
 
 Compute nodes sit behind a login node and a firewall, so nothing outside the cluster can open a connection to
-a running job. The tunnel Linkspan hosts is established outbound, from inside the job.
+a running job. The tunnel Linkspan hosts is established outbound, from inside the job. Access to it is the
+client's to control, the traffic it carries is encrypted, and the SSH servers behind it accept one public key
+each.
 
 ## Features
 
