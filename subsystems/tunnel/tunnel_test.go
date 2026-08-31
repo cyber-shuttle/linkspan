@@ -42,7 +42,7 @@ func TestDownloadWritesTheWholeBody(t *testing.T) {
 // A failed transfer must leave nothing where the next run would execute it.
 func TestDownloadLeavesNoPartialBinary(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "nope", http.StatusNotFound)
+		http.Error(w, "not found", http.StatusNotFound)
 	}))
 	defer srv.Close()
 

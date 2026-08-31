@@ -1,4 +1,4 @@
-// Package httpapi is linkspan's HTTP surface: the route table and the handlers
+// Package httpapi is Linkspan's HTTP surface: the route table and the handlers
 // behind it. The subsystems report data and know nothing about requests.
 package httpapi
 

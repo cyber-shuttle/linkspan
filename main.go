@@ -29,7 +29,7 @@ func main() { os.Exit(run()) }
 func run() int {
 	versionFlag := flag.Bool("version", false, "print version information and exit")
 	tunnelEnable := flag.Bool("tunnel-enable", false, "enable tunnel startup")
-	tunnelID := flag.String("tunnel-id", "", "id of the client-created dev tunnel to host; the client owns its lifecycle")
+	tunnelID := flag.String("tunnel-id", "", "id of the client-created Dev Tunnel to host; the client owns its lifecycle")
 	tunnelCluster := flag.String("tunnel-cluster", "", "cluster id of --tunnel-id, needed to resolve it")
 	tunnelHostToken := flag.String("tunnel-host-token", "", "host-scoped access token for --tunnel-id; the client owns the tunnel and its ports, so no Entra bearer is needed")
 	serverPort := flag.Int("port", 8080, "port for the HTTP server to listen on")
@@ -121,7 +121,7 @@ func run() int {
 		}
 	}
 
-	// ponytail: Close, not Shutdown -- no consumer needs a response that straddles
+	// Trade-off: Close, not Shutdown. No consumer needs a response that straddles
 	// exit; revisit if one ever polls across a job's final second.
 	_ = srv.Close()
 	return status
