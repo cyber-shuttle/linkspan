@@ -40,6 +40,9 @@ var (
 )
 
 // StopRelay kills the hosted relay: a child is not killed when its parent exits.
+// ponytail: the relay is registered at Start and bound to ctx; the microsecond
+// between Start and os.Exit is left to Slurm's step-cgroup teardown. Revisit if a
+// relay is ever found alive after linkspan exited.
 func StopRelay() {
 	relayMu.Lock()
 	r := relay
@@ -177,9 +180,6 @@ func Host(ctx context.Context, tunnelID, clusterID, hostToken string) error {
 
 		p, err := hostOnce(ctx, tunnelID, clusterID, hostToken)
 		if err == nil {
-			relayMu.Lock()
-			relay = p
-			relayMu.Unlock()
 			log.Printf("devtunnel: successfully hosting %s", tunnelID)
 			return nil
 		}
@@ -214,10 +214,13 @@ func hostOnce(ctx context.Context, tunnelID, clusterID, hostToken string) (*proc
 
 	log.Printf("devtunnel host: running %s host %s --access-token [redacted]", bin, qualified)
 	//nolint:gosec // the binary path is one we downloaded to a path we chose
-	p, err := start(exec.Command(bin, "host", qualified, "--access-token", hostToken))
+	p, err := start(exec.CommandContext(ctx, bin, "host", qualified, "--access-token", hostToken))
 	if err != nil {
 		return nil, fmt.Errorf("devtunnel host %q: start: %w", qualified, err)
 	}
+	relayMu.Lock()
+	relay = p
+	relayMu.Unlock()
 
 	for deadline := time.Now().Add(hostReadyTimeout); time.Now().Before(deadline); {
 		select {

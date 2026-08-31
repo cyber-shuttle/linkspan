@@ -83,16 +83,12 @@ func run() int {
 		}()
 	}
 
-	hosted := make(chan struct{})
-	switch {
-	case !*tunnelEnable:
-		close(hosted)
-	case *tunnelID == "" || *tunnelCluster == "" || *tunnelHostToken == "":
-		log.Printf("devtunnel: --tunnel-enable needs --tunnel-id, --tunnel-cluster and --tunnel-host-token")
-		return 1
-	default:
+	if *tunnelEnable {
+		if *tunnelID == "" || *tunnelCluster == "" || *tunnelHostToken == "" {
+			log.Printf("devtunnel: --tunnel-enable needs --tunnel-id, --tunnel-cluster and --tunnel-host-token")
+			return 1
+		}
 		go func() {
-			defer close(hosted)
 			if err := tunnel.Host(ctx, *tunnelID, *tunnelCluster, *tunnelHostToken); err != nil {
 				abort(fmt.Errorf("devtunnel: %w", err))
 			}
@@ -102,14 +98,6 @@ func run() int {
 	// A dead HTTP server must not leave the relay running or sessions accepting.
 	defer func() {
 		abort(nil) // stop the tunnel retry loop before killing what it started
-		// A relay that has not reported ready is known only to Host, which kills
-		// it on its own failure path; exiting first orphans it. Bounded, so a
-		// wedged bring-up delays shutdown rather than preventing it.
-		select {
-		case <-hosted:
-		case <-time.After(5 * time.Second):
-			log.Println("devtunnel: bring-up did not finish stopping in time")
-		}
 		tunnel.StopRelay()
 		sshd.StopAll()
 		log.Println("Server gracefully stopped.")
@@ -134,13 +122,8 @@ func run() int {
 		}
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Printf("server shutdown error: %v — forcing close", err)
-		if closeErr := srv.Close(); closeErr != nil {
-			log.Printf("server force-close error: %v", closeErr)
-		}
-	}
+	// ponytail: Close, not Shutdown -- no consumer needs a response that straddles
+	// exit; revisit if one ever polls across a job's final second.
+	_ = srv.Close()
 	return status
 }

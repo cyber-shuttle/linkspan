@@ -41,6 +41,9 @@ Archives are published for Linux and macOS on `x86_64` and `arm64`. To build fro
 ```bash
 ./linkspan --port 8080
 curl http://127.0.0.1:8080/api/v1/health
+curl -X POST http://127.0.0.1:8080/api/v1/vscode/sessions \
+  -H 'Content-Type: application/json' \
+  -d "{\"authorized_key\": \"$(cat ~/.ssh/id_ed25519.pub)\"}"
 ```
 
 That serves the HTTP API on loopback and nothing else — no tunnel, no workflow.
@@ -49,8 +52,7 @@ That serves the HTTP API on loopback and nothing else — no tunnel, no workflow
 
 ### Hosting a tunnel
 
-Linkspan hosts a tunnel; it never creates one. The client creates it, registers its ports and mints a
-host-scoped token before submitting the job, so the token Linkspan carries authorizes hosting and nothing else.
+The client creates the tunnel and mints the host-scoped token before submitting the job; Linkspan only hosts it.
 
 ```bash
 linkspan --port "$PORT" \
@@ -106,11 +108,8 @@ The three tunnel values are required whenever `--tunnel-enable` is set.
 
 ## HTTP API
 
-Access control sits at the transport rather than in the API. The HTTP listener binds loopback only, so nothing
-off the node can reach it; the optional `--socket` listener is created mode `0600`, so only the job's own user
-can connect; and remote callers arrive over the tunnel the client created and controls. Requests are not
-separately authenticated, which is why those three boundaries are where the checks are. See
-[SECURITY.md](SECURITY.md) for the full model.
+Requests carry no credential; access control is at the transport (loopback bind, `0600` socket, client-owned
+tunnel) — see [SECURITY.md](SECURITY.md#security-model).
 
 | Method | Path | Description |
 |--------|------|-------------|

@@ -64,9 +64,15 @@ func TestReadOutlastsAHungNvidiaSmi(t *testing.T) {
 	}
 	t.Setenv("PATH", dir)
 
+	old := gpuProbeTimeout
+	gpuProbeTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { gpuProbeTimeout = old })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel) // the fake outlives the probe; without this it is orphaned
+
 	done := make(chan struct{})
 	start := time.Now()
-	go func() { defer close(done); Read(context.Background()) }()
+	go func() { defer close(done); Read(ctx) }()
 	select {
 	case <-done:
 		if elapsed := time.Since(start); elapsed > gpuProbeTimeout+2*time.Second {
@@ -78,7 +84,7 @@ func TestReadOutlastsAHungNvidiaSmi(t *testing.T) {
 
 	// A second read must not start another probe, nor wait for the stuck one.
 	second := time.Now()
-	Read(context.Background())
+	Read(ctx)
 	if elapsed := time.Since(second); elapsed > time.Second {
 		t.Fatalf("a second read took %s while a probe was stuck; it should skip", elapsed)
 	}
