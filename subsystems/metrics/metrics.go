@@ -15,7 +15,7 @@ import (
 
 // nvidia-smi wedges on a sick GPU -- the state metrics are wanted for -- and a
 // stuck process ignores SIGKILL, so the read abandons the probe instead of waiting.
-const gpuProbeTimeout = 3 * time.Second
+var gpuProbeTimeout = 3 * time.Second
 
 // One probe at a time: cs-bridge polls every 5s, so a wedged one would otherwise
 // accumulate a stuck process per poll.

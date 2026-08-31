@@ -121,3 +121,82 @@ func TestOutputIsCapped(t *testing.T) {
 		t.Fatalf("buffered %d bytes, want it capped at %d", got, outputLimit)
 	}
 }
+
+// A fake devtunnel CLI that never reports ready and heartbeats into the file
+// named by its tunnel id, so a relay left running is visible after the fact.
+func fakeDevtunnel(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	bin := filepath.Join(home, ".linkspan", "bin", "devtunnel")
+	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nwhile :; do echo . >> \"$2\"; sleep 0.02; done\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil { //nolint:gosec // a test fixture we execute ourselves
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		relayMu.Lock()
+		relay, stopped = nil, false
+		relayMu.Unlock()
+	})
+}
+
+func beats(t *testing.T, path string) int {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	return len(b)
+}
+
+// Shutdown landing during bring-up: main os.Exits the moment StopRelay returns,
+// so a relay spawned while StopRelay is in progress is never killed. The start
+// must therefore not happen while relayMu is held.
+func TestBringUpDoesNotSpawnWhileStopRelayHoldsTheLock(t *testing.T) {
+	fakeDevtunnel(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	beat := filepath.Join(t.TempDir(), "beat")
+
+	relayMu.Lock()
+	errc := make(chan error, 1)
+	go func() { _, err := hostOnce(ctx, beat, "", "token"); errc <- err }()
+	time.Sleep(200 * time.Millisecond) // far longer than a fork/exec
+	spawned := beats(t, beat) > 0
+	relayMu.Unlock()
+
+	StopRelay()
+	if spawned {
+		t.Fatal("bring-up spawned a relay while the relay lock was held: StopRelay cannot kill it")
+	}
+	select {
+	case err := <-errc:
+		if err == nil {
+			t.Fatal("expected the bring-up to fail once shutdown had started")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("bring-up never returned after StopRelay")
+	}
+	before := beats(t, beat)
+	time.Sleep(200 * time.Millisecond)
+	if after := beats(t, beat); after != before {
+		t.Fatalf("relay still running after StopRelay: heartbeat grew %d -> %d", before, after)
+	}
+}
+
+func TestBringUpAfterStopRelaySpawnsNothing(t *testing.T) {
+	fakeDevtunnel(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	beat := filepath.Join(t.TempDir(), "beat")
+
+	StopRelay()
+	go func() { _, _ = hostOnce(ctx, beat, "", "token") }()
+	time.Sleep(300 * time.Millisecond)
+	if beats(t, beat) > 0 {
+		t.Fatal("a bring-up that started after StopRelay spawned a relay nothing will kill")
+	}
+}

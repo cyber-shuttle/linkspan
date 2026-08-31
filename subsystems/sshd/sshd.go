@@ -18,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/creack/pty"
 	"github.com/gliderlabs/ssh"
 	"github.com/pkg/sftp"
 	gossh "golang.org/x/crypto/ssh"
@@ -31,6 +30,8 @@ const (
 
 // Start binds before returning, so the caller gets a port that is already held.
 func Start(authorized ssh.PublicKey) (id string, port int, err error) {
+	// ponytail: no TCP keepalive -- the listener is loopback and the peer is the
+	// devtunnel host on this node; revisit if sshd ever binds off-loopback again.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", 0, err
@@ -42,24 +43,17 @@ func Start(authorized ssh.PublicKey) (id string, port int, err error) {
 	return id, port, nil
 }
 
-// Built per (re)start: ForwardedTCPHandler holds per-server state. IdleTimeout
-// and MaxTimeout deliberately stay unset.
+// IdleTimeout and MaxTimeout deliberately stay unset.
 func newServer(authorized ssh.PublicKey) *ssh.Server {
-	fwd := &ssh.ForwardedTCPHandler{}
 	return &ssh.Server{
-		Handler:                       guardSession("session", handleSession),
-		PublicKeyHandler:              authorizer(authorized), // PasswordHandler stays nil: keys only
-		ConnCallback:                  keepAlive(30 * time.Second),
-		LocalPortForwardingCallback:   allowForward("local port forwarding"),
-		ReversePortForwardingCallback: allowForward("reverse port forwarding"),
+		Handler:                     guardSession("session", handleSession),
+		PublicKeyHandler:            authorizer(authorized), // PasswordHandler stays nil: keys only
+		PtyCallback:                 func(ssh.Context, ssh.Pty) bool { return false },
+		LocalPortForwardingCallback: allowForward("local port forwarding"),
 		ChannelHandlers: map[string]ssh.ChannelHandler{
 			"session":                        guardChannel("session", ssh.DefaultSessionHandler),
 			"direct-tcpip":                   guardChannel("direct-tcpip", ssh.DirectTCPIPHandler),
 			"direct-streamlocal@openssh.com": guardChannel("direct-streamlocal", directStreamLocal),
-		},
-		RequestHandlers: map[string]ssh.RequestHandler{
-			"tcpip-forward":        guardRequest("tcpip-forward", fwd.HandleSSHRequest),
-			"cancel-tcpip-forward": guardRequest("cancel-tcpip-forward", fwd.HandleSSHRequest),
 		},
 		SubsystemHandlers: map[string]ssh.SubsystemHandler{
 			"sftp": guardSession("sftp", handleSFTP),
@@ -80,43 +74,17 @@ func allowForward(kind string) func(ssh.Context, string, uint32) bool {
 	}
 }
 
-func keepAlive(period time.Duration) func(ssh.Context, net.Conn) net.Conn {
-	return func(_ ssh.Context, conn net.Conn) net.Conn {
-		if tc, ok := conn.(*net.TCPConn); ok {
-			_ = tc.SetKeepAlive(true)
-			_ = tc.SetKeepAlivePeriod(period)
-		}
-		return conn
-	}
-}
-
 func handleSession(s ssh.Session) {
 	user, remote := s.User(), s.RemoteAddr()
 	log.Printf("client connected: user=%s remote=%s", user, remote)
 	defer log.Printf("client disconnected: user=%s remote=%s", user, remote)
 
-	_, winCh, isPTY := s.Pty()
-	switch {
-	case len(s.Command()) > 0:
-		if isPTY {
-			drainWindowChanges(winCh)
-		}
+	if len(s.Command()) > 0 {
 		log.Printf("exec request: user=%s remote=%s cmd=%q", user, remote, s.RawCommand())
 		runHostCommand(s, exec.CommandContext(s.Context(), "sh", "-c", s.RawCommand()))
-	case isPTY:
-		runPTYShell(s)
-	default:
-		runHostCommand(s, exec.CommandContext(s.Context(), shellPath(), "-s"))
+		return
 	}
-}
-
-// runPTYShell is the usual reader of window-change; on the exec path it never
-// runs, and gliderlabs' blocking send on a cap-1 channel would wedge the session.
-func drainWindowChanges(winCh <-chan ssh.Window) {
-	safeGo("drain window-change", func() {
-		for range winCh {
-		}
-	})
+	runHostCommand(s, exec.CommandContext(s.Context(), shellPath(), "-s"))
 }
 
 func runHostCommand(s ssh.Session, cmd *exec.Cmd) {
@@ -156,51 +124,6 @@ func reportExit(s ssh.Session, err error) {
 	default:
 		_ = s.Exit(exitNeverRan)
 	}
-}
-
-func runPTYShell(s ssh.Session) {
-	ptyReq, winCh, _ := s.Pty()
-	cmd := exec.CommandContext(s.Context(), shellPath())
-	if ptyReq.Term != "" {
-		// The batch job's environment has no TERM, and curses programs misbehave.
-		cmd.Env = append(os.Environ(), "TERM="+ptyReq.Term)
-	}
-	f, err := pty.Start(cmd)
-	if err != nil {
-		// A PTY session carries a single stream, so this goes to s, not s.Stderr().
-		fmt.Fprintf(s, "failed to start pty shell: %v\n", err)
-		reportExit(s, err)
-		return
-	}
-	defer f.Close()
-
-	resize := func(w, h int) {
-		if w > 0 && h > 0 {
-			_ = pty.Setsize(f, &pty.Winsize{Cols: uint16(w), Rows: uint16(h)})
-		}
-	}
-	resize(ptyReq.Window.Width, ptyReq.Window.Height)
-
-	drained := make(chan struct{})
-	// Closing the master is what stops a shell whose session ended: s.Context()
-	// belongs to the connection, so it would outlive the session. Not on the
-	// writer -- stdin at EOF only means no more input, not a closed session.
-	safeGo("pty->client copy", func() { defer close(drained); _, _ = io.Copy(s, f); _ = f.Close() })
-	safeGo("client->pty copy", func() { _, _ = io.Copy(f, s) })
-	safeGo("pty window-change", func() {
-		for win := range winCh {
-			resize(win.Width, win.Height)
-		}
-	})
-
-	err = cmd.Wait()
-	// Let the reader finish before the deferred Close pulls the master out from
-	// under it, or the shell's last output is dropped.
-	select {
-	case <-drained:
-	case <-time.After(2 * time.Second):
-	}
-	reportExit(s, err)
 }
 
 func handleSFTP(s ssh.Session) {
@@ -260,14 +183,6 @@ func guardChannel(name string, h ssh.ChannelHandler) ssh.ChannelHandler {
 	return func(srv *ssh.Server, c *gossh.ServerConn, nc gossh.NewChannel, ctx ssh.Context) {
 		defer logPanic("channel " + name)
 		h(srv, c, nc, ctx)
-	}
-}
-
-// On panic the zero return, (false, nil), rejects the request.
-func guardRequest(name string, h ssh.RequestHandler) ssh.RequestHandler {
-	return func(ctx ssh.Context, srv *ssh.Server, req *gossh.Request) (bool, []byte) {
-		defer logPanic("request " + name)
-		return h(ctx, srv, req)
 	}
 }
 

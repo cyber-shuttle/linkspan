@@ -57,13 +57,6 @@ func TestPanicIsolation(t *testing.T) {
 	guardChannel("test", func(*ssh.Server, *gossh.ServerConn, gossh.NewChannel, ssh.Context) {
 		panic("boom")
 	})(nil, nil, nil, nil)
-
-	rh := guardRequest("test", func(ssh.Context, *ssh.Server, *gossh.Request) (bool, []byte) {
-		panic("boom")
-	})
-	if ok, payload := rh(nil, nil, nil); ok || payload != nil {
-		t.Fatalf("expected (false, nil) on panic, got (%v, %v)", ok, payload)
-	}
 }
 
 // gliderlabs dispatches these on a goroutine a channel-level recover cannot reach.
@@ -152,17 +145,12 @@ func TestNewServerWiring(t *testing.T) {
 	srv := newServer(key)
 
 	if srv.Handler == nil || srv.PublicKeyHandler == nil || srv.PasswordHandler != nil ||
-		srv.ConnCallback == nil || srv.LocalPortForwardingCallback == nil || srv.ReversePortForwardingCallback == nil {
+		srv.LocalPortForwardingCallback == nil {
 		t.Fatal("a server handler/callback was left unwired")
 	}
 	for _, k := range []string{"session", "direct-tcpip", "direct-streamlocal@openssh.com"} {
 		if srv.ChannelHandlers[k] == nil {
 			t.Fatalf("missing channel handler %q", k)
-		}
-	}
-	for _, k := range []string{"tcpip-forward", "cancel-tcpip-forward"} {
-		if srv.RequestHandlers[k] == nil {
-			t.Fatalf("missing request handler %q", k)
 		}
 	}
 	if srv.SubsystemHandlers["sftp"] == nil {
@@ -371,7 +359,6 @@ func statusOf(id string) (*SessionStatus, bool) {
 func stopByID(id string) error {
 	activeServersMu.Lock()
 	server, ok := activeServers[id]
-	delete(activeServers, id)
 	activeServersMu.Unlock()
 	if !ok {
 		return fmt.Errorf("no ssh server found for session %s", id)

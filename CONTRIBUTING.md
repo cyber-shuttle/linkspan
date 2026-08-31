@@ -1,7 +1,8 @@
 # Contributing to Linkspan
 
 This document covers the source layout, how to get a development build running, and the contracts a change
-must not break. Issues and pull requests go through GitHub.
+must not break. Issues and pull requests go through GitHub; branch off `main`, keep CI green, and cover new
+behaviour with a test, stating in the description what you ran.
 
 ## Development Setup
 
@@ -19,22 +20,10 @@ git clone https://github.com/cyber-shuttle/linkspan.git
 cd linkspan
 
 go build -o linkspan .
-./linkspan --port 8080
 ```
 
-With no flags beyond `--port`, Linkspan serves its HTTP API on loopback and starts neither a tunnel nor a
-workflow, which is enough to exercise every endpoint:
-
-```bash
-curl http://127.0.0.1:8080/api/v1/health
-curl http://127.0.0.1:8080/api/v1/metrics
-curl -X POST http://127.0.0.1:8080/api/v1/vscode/sessions \
-  -H 'Content-Type: application/json' \
-  -d "{\"authorized_key\": \"$(cat ~/.ssh/id_ed25519.pub)\"}"
-```
-
-The metrics endpoint reports whichever sources exist on the machine: off a Linux compute node, cgroup-v2 and
-`nvidia-smi` are usually both absent and their fields are omitted.
+Then follow the README [Quick Start](README.md#quick-start); with no tunnel or workflow flags every route in
+the [HTTP API](README.md#http-api) table answers on that loopback port.
 
 ## Source Layout
 
@@ -46,7 +35,7 @@ linkspan
 │   └── workflow/              # YAML workflow: load and run shell.exec steps in order
 └── subsystems/
     ├── metrics/               # cgroup-v2 + nvidia-smi job metrics
-    ├── sshd/                  # supervised SSH server (gliderlabs/ssh) with PTY support
+    ├── sshd/                  # supervised SSH server (gliderlabs/ssh)
     └── tunnel/                # devtunnel CLI download + relay hosting
 ```
 
@@ -75,21 +64,6 @@ Publishing a GitHub release triggers GoReleaser, which builds and uploads the ar
 
 ## Compatibility
 
-CyberShuttle clients install and drive Linkspan over the following, so a change to any of them needs a
-coordinated release of the clients too:
-
-- `--version` prints a bare `X.Y.Z[.commit]` as the only line on stdout.
-- `--help` lists `-tunnel-host-token`; a client greps for that literal before submitting a job.
-- The release archive `linkspan_Linux_<arch>.tar.gz` contains a binary named `linkspan`.
-- The four `/api/v1` paths, their response shapes, and the session id `s-<port>`.
-
-The `sftp` subsystem and the `direct-streamlocal@openssh.com` channel handler have no caller in the
-CyberShuttle clients. Their client is VS Code: Remote-SSH's bootstrap fallback uses SFTP, and its
-`remote.SSH.remoteServerListenOnSocket` setting uses streamlocal.
-
-## Pull Requests
-
-- Branch off `main`; `main` takes changes only through pull requests.
-- Keep the build, tests and vet green — CI runs them on every pull request.
-- Cover new behaviour with a test, and state in the description what you ran.
-- Report security issues privately instead of opening a pull request. See [SECURITY.md](SECURITY.md).
+CyberShuttle clients install and drive Linkspan over the flags, `--version`/`--help` output, release archive
+name, `/api/v1` routes and response shapes listed under **Consumer contracts** in [CLAUDE.md](CLAUDE.md);
+changing any of them needs a coordinated client release.

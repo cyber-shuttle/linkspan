@@ -13,7 +13,8 @@ Linkspan has two consumers, and its surface is what they use. Anything not liste
 entry is an API change and needs a consumer.
 
 - **cs-bridge** (VS Code) launches it with `--port --socket --tunnel-id --tunnel-cluster --tunnel-host-token
-  --tunnel-enable`, and calls `GET /health`, `GET /metrics`, `GET /vscode/sessions`, `POST /vscode/sessions`.
+  --tunnel-enable`, and calls `GET /api/v1/health`, `GET /api/v1/metrics`, `GET /api/v1/vscode/sessions`,
+  `POST /api/v1/vscode/sessions`.
 - **cs-control** (Jupyter) launches it with `--port --tunnel-enable --tunnel-id --tunnel-cluster
   --tunnel-host-token --workflow`, and makes no HTTP calls.
 
@@ -42,23 +43,3 @@ Changing any of these breaks a consumer.
   their client is VS Code. Remote-SSH's bootstrap fallback uses SFTP, and
   `remote.SSH.remoteServerListenOnSocket` uses streamlocal.
 
-## Runtime behaviour
-
-- A failing workflow step exits the process with status 1, after shutting down the HTTP server, the SSH
-  sessions and the tunnel relay. An exhausted tunnel bring-up (`--tunnel-enable`, three failed attempts) does
-  the same. These are the only two background failures that are fatal.
-- Access control is at the transport, not in the API: the HTTP listener is loopback-only, `--socket` is
-  created mode `0600`, and remote callers arrive over the client's tunnel. Requests carry no credential of
-  their own, so those three boundaries are the check. `SECURITY.md` states the model.
-- The client owns the tunnel: it creates it, registers its ports and mints a host-scoped token. Linkspan
-  hosts the relay, and never creates, forwards, refreshes or deletes a tunnel.
-- `make` refuses to build unless HEAD is tagged `X.Y.Z` or `X.Y.Z.<commit>`; use `go build` for a dev binary.
-- The devtunnel CLI is downloaded at runtime to `~/.linkspan/bin/` on first host attempt.
-
-## Reaching a running linkspan in-cluster
-
-Via `--socket`, with no tunnel and no TCP port:
-
-```bash
-srun --jobid=<id> --overlap curl --unix-socket /tmp/linkspan.sock http://localhost/api/v1/metrics
-```

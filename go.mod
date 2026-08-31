@@ -19,7 +19,6 @@ require (
 
 require (
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
-	github.com/creack/pty v1.1.24
 	golang.org/x/crypto v0.42.0
 	golang.org/x/sys v0.36.0 // indirect
 )
