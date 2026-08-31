@@ -63,7 +63,7 @@ func TestPanicIsolation(t *testing.T) {
 func TestSessionHandlerPanicIsolation(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
-			t.Fatalf("panic escaped guardSession (would crash linkspan): %v", r)
+			t.Fatalf("panic escaped guardSession (would crash Linkspan): %v", r)
 		}
 	}()
 	guardSession("test", func(ssh.Session) { panic("boom") })(nil)

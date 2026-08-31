@@ -1,6 +1,6 @@
 # Linkspan
 
-Go agent that runs inside a compute-node allocation. It hosts the dev tunnel its client created, runs the
+Go agent that runs inside a compute-node allocation. It hosts the Dev Tunnel its client created, runs the
 client's YAML workflow, and serves an SSH server for VS Code Remote-SSH.
 
 Build, test and lint are the Go defaults (`go build ./...`, `go test ./...`, `go vet ./...`). Public

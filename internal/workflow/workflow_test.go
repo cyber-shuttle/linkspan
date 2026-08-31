@@ -69,7 +69,7 @@ func TestStepsRunInOrderAndStopAtTheFirstFailure(t *testing.T) {
 }
 
 func TestRejectsAnUnknownAction(t *testing.T) {
-	wf := load(t, "name: u\nsteps:\n  - action: shell.evaluate\n    name: nope\n    params:\n      command: \"/usr/bin/true\"\n")
+	wf := load(t, "name: u\nsteps:\n  - action: shell.evaluate\n    name: unsupported\n    params:\n      command: \"/usr/bin/true\"\n")
 	if err := Run(context.Background(), wf); err == nil || !strings.Contains(err.Error(), "unknown action") {
 		t.Fatalf("got %v, want an unknown-action error", err)
 	}

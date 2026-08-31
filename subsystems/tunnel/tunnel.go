@@ -33,7 +33,7 @@ const (
 	hostReadyPoll    = 500 * time.Millisecond
 )
 
-// linkspan hosts exactly one tunnel; main stops it on the way out.
+// Linkspan hosts exactly one tunnel; main stops it on the way out.
 var (
 	relayMu sync.Mutex
 	relay   *process

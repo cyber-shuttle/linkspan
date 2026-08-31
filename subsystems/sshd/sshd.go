@@ -1,6 +1,6 @@
-// Package sshd is linkspan's embedded SSH server. Every session, channel and
+// Package sshd is Linkspan's embedded SSH server. Every session, channel and
 // request handler is panic-isolated behind a supervisor that restarts the
-// listener, so a panicking handler cannot take linkspan down.
+// listener, so a panicking handler cannot take Linkspan down.
 package sshd
 
 import (
@@ -30,8 +30,8 @@ const (
 
 // Start binds before returning, so the caller gets a port that is already held.
 func Start(authorized ssh.PublicKey) (id string, port int, err error) {
-	// ponytail: no TCP keepalive -- the listener is loopback and the peer is the
-	// devtunnel host on this node; revisit if sshd ever binds off-loopback again.
+	// Trade-off: no TCP keepalive. The listener is loopback and the peer is the
+	// tunnel host on this node; revisit if sshd ever binds off-loopback again.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", 0, err
