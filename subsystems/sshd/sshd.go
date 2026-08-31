@@ -1,6 +1,6 @@
-// Package sshd is linkspan's embedded SSH server: every session, channel and
-// request handler is panic-isolated and a supervisor restarts the listener, so a
-// panicking handler cannot take linkspan down.
+// Package sshd is linkspan's embedded SSH server. Every session, channel and
+// request handler is panic-isolated behind a supervisor that restarts the
+// listener, so a panicking handler cannot take linkspan down.
 package sshd
 
 import (
@@ -91,8 +91,8 @@ func runHostCommand(s ssh.Session, cmd *exec.Cmd) {
 	stderr := s.Stderr()
 	cmd.Env, cmd.Stdout, cmd.Stderr = os.Environ(), s, stderr
 
-	// Not cmd.Stdin = s. Wait would then block on a copy that only ends when the
-	// client closes its own stdin, hanging a command that had already finished.
+	// Not cmd.Stdin = s: Wait would then block on a copy ending only when the
+	// client closes its own stdin, hanging a command that had finished.
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		fmt.Fprintf(stderr, "command error: %v\n", err)
@@ -108,8 +108,8 @@ func runHostCommand(s ssh.Session, cmd *exec.Cmd) {
 	reportExit(s, err)
 }
 
-// gliderlabs sends 0 for any session whose handler simply returns, so without
-// this every failure -- including a shell that never started -- looks like success.
+// gliderlabs sends 0 for any handler that simply returns, so without this every
+// failure looks like success.
 func reportExit(s ssh.Session, err error) {
 	var exit *exec.ExitError
 	switch {
@@ -256,9 +256,9 @@ func (s *supervisor) run(build func() *ssh.Server, first net.Listener) {
 		if ln == nil { // every restart rebinds; Serve closed the last listener
 			ln, err = net.Listen("tcp", s.addr)
 		}
-		// Publish the listener before serving. gliderlabs' trackListener resets the
-		// server's doneChan while it has no listeners, so a Close in between would
-		// be erased and Serve would accept forever on a listener nothing shuts.
+		// Publish before serving: gliderlabs' trackListener resets doneChan while
+		// the server has no listeners, so a Close in between would be erased and
+		// Serve would accept forever on a listener nothing shuts.
 		s.mu.Lock()
 		if s.stopped {
 			s.state = stateStopped
@@ -328,8 +328,8 @@ func (s *supervisor) signalStop() *ssh.Server {
 
 func (s *supervisor) Close() error {
 	if srv := s.signalStop(); srv != nil {
-		// signalStop already closed the listener and gliderlabs closes it again on
-		// its way out; an already-shut listener is what was asked for.
+		// signalStop closed the listener and gliderlabs closes it again on its way
+		// out; an already-shut listener is what was asked for.
 		if err := srv.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			return err
 		}
@@ -343,8 +343,8 @@ var (
 	activeServersMu sync.Mutex
 )
 
-// Removes this supervisor's entry, and only its own: ids repeat when a later
-// session is handed the same port, so deleting by id alone could evict a live one.
+// Removes this supervisor's entry and only its own: ids repeat when a later
+// session takes the same port, so deleting by id could evict a live one.
 func (s *supervisor) deregister() {
 	activeServersMu.Lock()
 	defer activeServersMu.Unlock()

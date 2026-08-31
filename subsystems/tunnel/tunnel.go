@@ -40,10 +40,9 @@ var (
 	stopped bool
 )
 
-// StopRelay kills the hosted relay: a child is not killed when its parent exits.
-// stopped makes it exclusive with a bring-up in flight, which relayMu alone does
-// not: main os.Exits the moment StopRelay returns, so a relay spawned or
-// registered after it is an orphan that nothing ever kills.
+// StopRelay kills the hosted relay, which a parent's exit does not. stopped makes
+// it exclusive with a bring-up in flight, which relayMu alone does not: main
+// os.Exits as StopRelay returns, so a later relay is an orphan nothing kills.
 func StopRelay() {
 	relayMu.Lock()
 	r := relay
@@ -53,8 +52,8 @@ func StopRelay() {
 }
 
 // process is the running devtunnel CLI. The ready-wait reads output while the
-// child is still writing it, hence the lock; nothing reads it afterwards and the
-// relay outlives the wait inside a memory-capped cgroup, hence the cap.
+// child writes it, hence the lock; the relay outlives that wait inside a
+// memory-capped cgroup, hence the cap.
 type process struct {
 	cmd  *exec.Cmd
 	done chan struct{}
@@ -161,8 +160,8 @@ func download(ctx context.Context, dst, src string) error {
 		f.Close()
 		return fmt.Errorf("write download: %w", err)
 	}
-	// Executable before the rename publishes it: a crash in between would leave a
-	// devtunnel that every later run finds and cannot run.
+	// Executable before the rename publishes it, or a crash between the two leaves
+	// a devtunnel every later run finds and cannot run.
 	if err := f.Chmod(0o755); err != nil {
 		f.Close()
 		return err
@@ -237,8 +236,8 @@ func hostOnce(ctx context.Context, tunnelID, clusterID, hostToken string) (*proc
 			log.Printf("devtunnel host: tunnel %q ready at https://%s.devtunnels.ms", qualified, qualified)
 			return p, nil
 		}
-		// Exiting without the marker is the failure signal; stderr is not, since
-		// the CLI writes lines there and keeps hosting.
+		// Exiting without the marker is the failure signal; stderr is not, as the
+		// CLI writes there and keeps hosting.
 		if p.exited() {
 			return p, fmt.Errorf("devtunnel host %q: exited before signalling ready (output=%q)", qualified, p.String())
 		}
