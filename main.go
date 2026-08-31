@@ -23,8 +23,7 @@ import (
 // so it must stay the only line on stdout.
 var version = "dev"
 
-// A wrapper so every defer in run executes: log.Fatalf would skip them and
-// orphan the devtunnel relay.
+// A wrapper so every defer in run executes; log.Fatalf would orphan the relay.
 func main() { os.Exit(run()) }
 
 func run() int {
@@ -49,8 +48,8 @@ func run() int {
 	defer abort(nil)
 
 	// Loopback only: every route is unauthenticated and POST /vscode/sessions
-	// starts an sshd for a caller-supplied key, so the wildcard would offer a
-	// shell as the job owner to anything that could route to the node.
+	// starts an sshd for a caller-supplied key, so a wildcard would offer a shell
+	// as the job owner to anything that could route to the node.
 	addr := fmt.Sprintf("127.0.0.1:%d", *serverPort)
 	srv := &http.Server{Handler: httpapi.Mux(), ReadHeaderTimeout: 10 * time.Second}
 
