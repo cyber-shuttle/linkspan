@@ -2,8 +2,7 @@
 
 ## Supported Versions
 
-Fixes go into the latest release. Clients check for a newer release on every launch and install it, so
-running the latest is the expected state.
+Fixes go into the latest release; earlier releases are not patched.
 
 ## Reporting a Vulnerability
 
@@ -15,20 +14,27 @@ We will acknowledge the report and say whether we can reproduce it before any fi
 
 ## Security Model
 
-These are the boundaries Linkspan is designed around. A report is most useful when it shows one of them
-failing.
+A report is most useful when it shows one of these boundaries failing.
 
 - **Access control is at the transport, not in the API.** The HTTP listener binds loopback only, so nothing
   off the node can reach it. The `--socket` listener is created mode `0600`, so only the job's own user can
   connect. Remote callers reach the API over the tunnel the client created and controls. Requests carry no
   separate credential, because those three boundaries are the check.
 - **The tunnel belongs to the client.** The client creates it, registers its ports and mints the host-scoped
-  token the job is given. That token authorizes hosting and nothing else: Linkspan cannot create, forward,
-  refresh or delete a tunnel, and a job that leaked its token could not use it to reach anything.
+  token the job is given. Linkspan passes that token to `devtunnel host` and does nothing else with it: it
+  never creates, forwards, refreshes or deletes a tunnel. The tunnel terminates at Microsoft's Dev Tunnels
+  service, so traffic to the HTTP API is not end-to-end encrypted between client and job; SSH sessions carry
+  their own encryption inside it.
 - **SSH servers accept one public key and only that key**, and bind on loopback. Password authentication is
-  never enabled.
+  never enabled. A session that authenticates then gets what the job's user has: command execution, SFTP,
+  and TCP and unix-socket forwarding from the node. PTY allocation is refused, and reverse port forwarding is
+  not offered.
 - **Linkspan runs as the submitting user**, with that user's privileges and no more. It needs no root, and
   installs nothing outside `~/.linkspan/`.
+- **The `devtunnel` CLI is fetched at runtime and executed.** With `--tunnel-enable`, Linkspan downloads
+  Microsoft's `devtunnel` binary over HTTPS from `tunnelsassetsprod.blob.core.windows.net` into
+  `~/.linkspan/bin/` and runs it as the job's user. There is no checksum or signature check; the transport is
+  the only integrity guarantee.
 - **Workflow commands run without a shell**, split on whitespace with no expansion, so a workflow file cannot
   smuggle a glob, a variable or a pipe into the command it names. The file itself is trusted input: it comes
   from the client that submitted the job, and by design it runs commands as the job's user.
