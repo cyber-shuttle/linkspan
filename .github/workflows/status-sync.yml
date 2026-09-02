@@ -3,7 +3,9 @@ name: Sync issue and PR status to project
 on:
   issues:
     types: [closed, reopened]
-  pull_request:
+  # pull_request_target, not pull_request: a fork PR cannot read ADD_TO_PROJECT_PAT
+  # otherwise. No repository code is checked out or run here.
+  pull_request_target:
     types: [opened, reopened, closed, ready_for_review, converted_to_draft]
 
 jobs:

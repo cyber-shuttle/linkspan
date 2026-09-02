@@ -1,8 +1,8 @@
 # Contributing to Linkspan
 
-This document covers the source layout, how to get a development build running, and the contracts a change
-must not break. Issues and pull requests go through GitHub; branch off `main`, keep CI green, and cover new
-behaviour with a test, stating in the description what you ran.
+Issues and pull requests go through [GitHub](https://github.com/cyber-shuttle/linkspan/issues); branch off
+`main`, keep CI green, and cover new behaviour with a test, stating in the description what you ran.
+Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Development Setup
 
@@ -55,15 +55,16 @@ CI runs all three on every pull request, with `-race` on the tests. Tests sit be
 
 ## Releases
 
-`make` cross-compiles into `bin/` for Linux and macOS on `amd64`/`arm64`. It refuses to build unless HEAD is
-tagged `X.Y.Z` or `X.Y.Z.<commit>`, because the tag is the version the binary reports; use `go build` for a
-development binary.
+Add the version's entry to [CHANGELOG.md](CHANGELOG.md), push the tag `vX.Y.Z`, then publish the GitHub
+release for that tag. Publishing triggers `.github/workflows/goreleaser.yml`, which builds and uploads the
+archives clients download; the same workflow dry-runs a snapshot build on every pull request.
 
-Publishing a GitHub release triggers GoReleaser, which builds and uploads the archives that clients download.
-`goreleaser release --snapshot --clean` produces the same archives locally.
+`make` cross-compiles into `bin/` for Linux and macOS on `amd64`/`arm64`. It refuses to build unless HEAD is
+tagged `vX.Y.Z`, optionally with a `.<commit>` suffix for a build between releases, because the tag is the
+version the binary reports; the leading `v` is stripped, so `v0.17.4` reports `0.17.4`. Use `go build` for a
+development binary.
 
 ## Compatibility
 
-CyberShuttle clients install and drive Linkspan over the flags, `--version`/`--help` output, release archive
-name, `/api/v1` routes and response shapes listed under **Consumer contracts** in [CLAUDE.md](CLAUDE.md);
-changing any of them needs a coordinated client release.
+Flags, `--version`/`--help` output, the release archive name and the `/api/v1` surface are contracts with
+clients that ship separately; see [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) before changing any of them.

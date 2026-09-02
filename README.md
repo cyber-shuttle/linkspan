@@ -3,28 +3,41 @@
 [![CI](https://github.com/cyber-shuttle/linkspan/actions/workflows/ci.yml/badge.svg)](https://github.com/cyber-shuttle/linkspan/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/cyber-shuttle/linkspan)](https://github.com/cyber-shuttle/linkspan/releases/latest)
 [![Go](https://img.shields.io/github/go-mod/go-version/cyber-shuttle/linkspan)](go.mod)
-[![LICENSE](https://img.shields.io/github/license/cyber-shuttle/linkspan?color=blue)](LICENSE)
+[![License](https://img.shields.io/github/license/cyber-shuttle/linkspan?color=blue)](LICENSE)
 
-Reach a running HPC job securely from outside the cluster. Linkspan runs as the main process of a batch job,
-hosts a tunnel the client created, sets the job up from a YAML workflow, and serves an HTTP API for job
-metrics and on-demand SSH servers.
+Reach a running HPC (high-performance computing) job securely from outside the cluster. Linkspan runs as the
+main process of a batch job, hosts a
+[Microsoft Dev Tunnel](https://learn.microsoft.com/en-us/azure/developer/dev-tunnels/overview) that a client
+such as [cs-bridge](https://github.com/cyber-shuttle/CS-Bridge) created, sets the job up from a YAML workflow,
+and serves an HTTP API for job metrics and on-demand SSH servers.
 
 Compute nodes sit behind a login node and a firewall, so nothing outside the cluster can open a connection to
 a running job. The tunnel Linkspan hosts is established outbound, from inside the job. Access to it is the
-client's to control, the traffic it carries is encrypted, and the SSH servers behind it accept one public key
-each.
+client's to control, and the SSH servers behind it accept one public key each.
 
 ## Features
 
-- **Tunnel hosting** — hosts a tunnel the client created before submitting the job. The cluster opens no
-  inbound port.
-- **SSH servers** — starts a job-local SSH server bound to loopback and authorized for one public key. This
-  is what VS Code Remote-SSH attaches over.
+- **Tunnel hosting** — hosts a Microsoft Dev Tunnel the client created before submitting the job. The
+  cluster opens no inbound port.
+- **SSH servers** — starts a job-local SSH server bound to loopback. This is what VS Code Remote-SSH attaches
+  over; it runs commands and serves SFTP, but refuses PTY allocation, so there is no terminal session.
 - **Allocation metrics** — cgroup-v2 memory and CPU, and per-GPU `nvidia-smi`, covering the whole job rather
   than one step.
 - **Workflows** — an ordered list of commands, given in YAML and run at startup.
-- **Unix socket** — an optional second listener, reachable in-cluster with `srun --jobid --overlap`.
-- **Static binary** — no runtime dependencies, and runs as the submitting user.
+- **Unix socket** — an optional second listener, reachable from another step of the same allocation with the
+  [Slurm](https://slurm.schedmd.com/) workload manager's `srun --jobid --overlap`.
+- **Single binary** — no shared libraries, and runs as the submitting user. It execs binaries it does not
+  ship: Microsoft's `devtunnel` CLI, fetched on first use, `nvidia-smi` for GPU metrics, a shell for SSH
+  sessions, and whatever a workflow step names.
+
+## Requirements
+
+- Linux with cgroup v2, laid out as Slurm lays it out: the metrics read the job's own cgroup and strip the
+  `/step_*` leaf. The macOS archives run, but report neither.
+- `nvidia-smi` on `PATH` for GPU metrics; without it that field is omitted.
+- Outbound HTTPS for `--tunnel-enable`: `tunnelsassetsprod.blob.core.windows.net` to fetch the `devtunnel`
+  CLI, then the Microsoft Dev Tunnels service it connects to, which serves the tunnel under `devtunnels.ms`.
+- A writable home directory: the `devtunnel` CLI is installed to `~/.linkspan/bin/`.
 
 ## Installation
 
@@ -33,20 +46,26 @@ curl -fsSL https://github.com/cyber-shuttle/linkspan/releases/latest/download/li
   tar -xz linkspan
 ```
 
-Archives are published for Linux and macOS on `x86_64` and `arm64`. To build from source, see
+Archives are published for Linux and macOS on `x86_64` and `arm64`; every released version is listed in
+[CHANGELOG.md](CHANGELOG.md). To build from source, see
 [CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
 
 ## Quick Start
 
+In one shell:
+
 ```bash
 ./linkspan --port 8080
+```
+
+That serves the HTTP API on loopback and nothing else — no tunnel, no workflow. In another:
+
+```bash
 curl http://127.0.0.1:8080/api/v1/health
 curl -X POST http://127.0.0.1:8080/api/v1/vscode/sessions \
   -H 'Content-Type: application/json' \
   -d "{\"authorized_key\": \"$(cat ~/.ssh/id_ed25519.pub)\"}"
 ```
-
-That serves the HTTP API on loopback and nothing else — no tunnel, no workflow.
 
 ## Usage
 
@@ -63,13 +82,15 @@ linkspan --port "$PORT" \
   --workflow /path/to/workflow.yaml
 ```
 
-The `devtunnel` CLI is downloaded to `~/.linkspan/bin/` on first use. Linkspan exits non-zero if the relay
+Hosting runs Microsoft's `devtunnel` CLI: Linkspan downloads it from
+`https://tunnelsassetsprod.blob.core.windows.net` to `~/.linkspan/bin/` on first use and executes it, and the
+traffic the tunnel carries transits the Microsoft Dev Tunnels service. Linkspan exits non-zero if the relay
 fails to come up after three attempts.
 
 ### Workflows
 
 An ordered list of steps run at startup, alongside the HTTP server. `shell.exec` is the only action. Every
-step is validated before the first one runs, and a failing step exits Linkspan with status 1.
+step's action is validated before the first one runs, and a failing step exits Linkspan with status 1.
 
 Commands are split on whitespace and executed without a shell — no globs, no variable expansion, no pipes or
 redirection — so use absolute paths.
@@ -85,7 +106,13 @@ steps:
 
 ### Reaching a job from inside the cluster
 
-With `--socket`, and no tunnel or TCP port involved:
+With `--socket`, reachable without the tunnel or a TCP connection. In the job:
+
+```bash
+linkspan --port "$PORT" --socket /tmp/linkspan.sock
+```
+
+From another step of the same allocation:
 
 ```bash
 srun --jobid=<id> --overlap curl --unix-socket /tmp/linkspan.sock http://localhost/api/v1/metrics
@@ -108,8 +135,8 @@ The three tunnel values are required whenever `--tunnel-enable` is set.
 
 ## HTTP API
 
-Requests carry no credential; access control is at the transport (loopback bind, `0600` socket, client-owned
-tunnel) — see [SECURITY.md](SECURITY.md#security-model).
+Requests carry no credential; access control is at the transport: loopback bind, `0600` socket, client-owned
+tunnel.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -124,15 +151,20 @@ bound on loopback like the API.
 
 ## Used by
 
+CyberShuttle runs interactive workloads on HPC compute nodes and brings them back to an editor or browser on
+the user's own machine. Its two clients run Linkspan inside the job:
+
 - **[cs-bridge](https://github.com/cyber-shuttle/CS-Bridge)** — VS Code extension. Submits Linkspan as a
   time-bound job, has it start an SSH server for the user's key, and points VS Code Remote-SSH at it.
-- **[cs-control](https://github.com/cyber-shuttle/cs-control)** — Jupyter runtimes. Submits Linkspan with a
-  `--workflow` that builds a Python environment and starts a Jupyter server.
+- **cs-control** — the Jupyter runtime service. Submits Linkspan with a `--workflow` that builds a Python
+  environment and starts a Jupyter server.
 
 ## Contributing
 
-Issues and pull requests go through GitHub. See [CONTRIBUTING.md](CONTRIBUTING.md) for the source layout,
-development setup, and release process.
+Questions, issues and pull requests go through
+[GitHub Issues](https://github.com/cyber-shuttle/linkspan/issues). See [CONTRIBUTING.md](CONTRIBUTING.md) for
+the source layout, development setup and release process, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for the
+participation standard.
 
 ## Security
 
@@ -140,4 +172,4 @@ Report vulnerabilities privately, as described in [SECURITY.md](SECURITY.md), ra
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+Apache-2.0 — see [LICENSE](LICENSE).
