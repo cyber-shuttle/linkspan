@@ -68,10 +68,14 @@ func TestStepsRunInOrderAndStopAtTheFirstFailure(t *testing.T) {
 	}
 }
 
-func TestRejectsAnUnknownAction(t *testing.T) {
-	wf := load(t, "name: u\nsteps:\n  - action: shell.evaluate\n    name: unsupported\n    params:\n      command: \"/usr/bin/true\"\n")
+func TestRejectsAnUnknownActionBeforeRunningAnyStep(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "ran")
+	wf := load(t, "name: u\nsteps:\n  - action: shell.exec\n    name: first\n    params:\n      command: \"/usr/bin/touch "+marker+"\"\n  - action: shell.evaluate\n    name: unsupported\n    params:\n      command: \"/usr/bin/true\"\n")
 	if err := Run(context.Background(), wf); err == nil || !strings.Contains(err.Error(), "unknown action") {
 		t.Fatalf("got %v, want an unknown-action error", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("a step ran before the document was rejected")
 	}
 }
 

@@ -140,7 +140,7 @@ func TestSupervisorStopHonored(t *testing.T) {
 }
 
 // sftp and streamlocal have no cs-bridge caller to notice they went missing.
-func TestNewServerWiring(t *testing.T) {
+func TestServerWiresWhatVSCodeRemoteSSHRequires(t *testing.T) {
 	_, key := testKeyPair(t)
 	srv := newServer(key)
 
@@ -158,8 +158,7 @@ func TestNewServerWiring(t *testing.T) {
 	}
 }
 
-// The path VS Code's remoteServerListenOnSocket mode depends on.
-func TestDirectStreamLocalForwarding(t *testing.T) {
+func TestDirectStreamLocalBacksRemoteServerListenOnSocket(t *testing.T) {
 	dir, err := os.MkdirTemp("", "sl") // not t.TempDir: macOS caps socket paths at 104 chars
 	if err != nil {
 		t.Fatal(err)

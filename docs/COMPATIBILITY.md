@@ -23,8 +23,8 @@ Changing any of these breaks a consumer.
   linkspan on every launch.
 - `--help` contains the literal `-tunnel-host-token`, one dash, as Go's flag package prints it. cs-control
   runs `--help 2>&1 | grep -q -- '-tunnel-host-token'` and does not submit a job when it is absent, so the
-  flag cannot be renamed or removed. Only the printed spelling is matched: Go accepts either form, and the
-  consumers pass both (`--tunnel-enable` from cs-control, `-tunnel-enable` from cs-bridge).
+  flag cannot be renamed or removed. Consumers pass both spellings; only the printed
+  one is matched.
 - The goreleaser archive name (`linkspan_Linux_${arch}.tar.gz`) and the `linkspan` member inside it. Both
   consumers curl and untar them by those names.
 - The session id `s-<port>` and the `addr` field of a session status. cs-bridge takes the port from the last

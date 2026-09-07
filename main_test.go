@@ -44,4 +44,20 @@ func TestHelpKeepsTheFlagSpellingConsumersGrepFor(t *testing.T) {
 	if !strings.Contains(out.String(), "-tunnel-host-token") {
 		t.Error("cs-control greps --help for -tunnel-host-token before submitting a job")
 	}
+	if !strings.Contains(out.String(), "-socket string") {
+		t.Error("a backquoted word in a usage string renames the printed argument")
+	}
+}
+
+func TestFlagsAcceptBothSingleAndDoubleDashSpellings(t *testing.T) {
+	for _, spelling := range []string{"-tunnel-enable", "--tunnel-enable"} {
+		fs := flag.NewFlagSet("linkspan", flag.ContinueOnError)
+		opts := registerFlags(fs)
+		if err := fs.Parse([]string{spelling}); err != nil {
+			t.Fatalf("%s: %v", spelling, err)
+		}
+		if !opts.tunnelEnable {
+			t.Errorf("%s did not set the flag", spelling)
+		}
+	}
 }
