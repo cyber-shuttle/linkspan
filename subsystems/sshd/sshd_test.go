@@ -423,3 +423,39 @@ func TestServerRejectsAKeyItWasNotCreatedWith(t *testing.T) {
 		t.Fatalf("the authorized key was rejected: %v", err)
 	}
 }
+
+func TestSessionGetsNoPtyAndNoReversePortForwarding(t *testing.T) {
+	signer, authorized := testKeyPair(t)
+	srv := newServer(authorized)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Serve(ln) }()
+	defer srv.Close()
+
+	client, err := gossh.Dial("tcp", ln.Addr().String(), &gossh.ClientConfig{
+		User:            "t",
+		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
+		Timeout:         5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if err := session.RequestPty("xterm", 24, 80, gossh.TerminalModes{}); err == nil {
+		t.Fatal("a pty was granted")
+	}
+
+	if remote, err := client.Listen("tcp", "127.0.0.1:0"); err == nil {
+		_ = remote.Close()
+		t.Fatal("a reverse port forward was granted")
+	}
+}

@@ -17,13 +17,18 @@ import (
 // An ssh public key is well under a kilobyte.
 const maxRequestBytes = 64 << 10
 
-// cs-bridge calls these exact paths; renaming one is an API break.
+var consumerContract = map[string]http.HandlerFunc{
+	"GET /api/v1/health":           health,
+	"GET /api/v1/metrics":          jobMetrics,
+	"GET /api/v1/vscode/sessions":  listSessions,
+	"POST /api/v1/vscode/sessions": createSession,
+}
+
 func Mux() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/health", health)
-	mux.HandleFunc("GET /api/v1/metrics", jobMetrics)
-	mux.HandleFunc("GET /api/v1/vscode/sessions", listSessions)
-	mux.HandleFunc("POST /api/v1/vscode/sessions", createSession)
+	for pattern, handler := range consumerContract {
+		mux.HandleFunc(pattern, handler)
+	}
 	return mux
 }
 

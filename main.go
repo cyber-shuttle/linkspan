@@ -19,25 +19,40 @@ import (
 	"github.com/cyber-shuttle/linkspan/subsystems/tunnel"
 )
 
-// Set via ldflags. Both consumers parse `--version` as a bare X.Y.Z[.commit],
-// so it must stay the only line on stdout.
-var version = "dev"
+var version = "dev" // set via ldflags
 
 // A wrapper so every defer in run executes; log.Fatalf would orphan the relay.
 func main() { os.Exit(run()) }
 
+type options struct {
+	version         bool
+	tunnelEnable    bool
+	tunnelID        string
+	tunnelCluster   string
+	tunnelHostToken string
+	serverPort      int
+	socketPath      string
+	workflowFile    string
+}
+
+func registerFlags(fs *flag.FlagSet) *options {
+	var o options
+	fs.BoolVar(&o.version, "version", false, "print version information and exit")
+	fs.BoolVar(&o.tunnelEnable, "tunnel-enable", false, "enable tunnel startup")
+	fs.StringVar(&o.tunnelID, "tunnel-id", "", "id of the client-created Dev Tunnel to host; the client owns its lifecycle")
+	fs.StringVar(&o.tunnelCluster, "tunnel-cluster", "", "cluster id of --tunnel-id, needed to resolve it")
+	fs.StringVar(&o.tunnelHostToken, "tunnel-host-token", "", "host-scoped access token for --tunnel-id; the client owns the tunnel and its ports, so no Entra bearer is needed")
+	fs.IntVar(&o.serverPort, "port", 8080, "port for the HTTP server to listen on")
+	fs.StringVar(&o.socketPath, "socket", "", "also listen on this unix socket path, for in-cluster access via srun --jobid")
+	fs.StringVar(&o.workflowFile, "workflow", "", "path to workflow YAML file")
+	return &o
+}
+
 func run() int {
-	versionFlag := flag.Bool("version", false, "print version information and exit")
-	tunnelEnable := flag.Bool("tunnel-enable", false, "enable tunnel startup")
-	tunnelID := flag.String("tunnel-id", "", "id of the client-created Dev Tunnel to host; the client owns its lifecycle")
-	tunnelCluster := flag.String("tunnel-cluster", "", "cluster id of --tunnel-id, needed to resolve it")
-	tunnelHostToken := flag.String("tunnel-host-token", "", "host-scoped access token for --tunnel-id; the client owns the tunnel and its ports, so no Entra bearer is needed")
-	serverPort := flag.Int("port", 8080, "port for the HTTP server to listen on")
-	socketPath := flag.String("socket", "", "also listen on this unix socket path, for in-cluster access via srun --jobid")
-	workflowFile := flag.String("workflow", "", "path to workflow YAML file")
+	opts := registerFlags(flag.CommandLine)
 	flag.Parse()
 
-	if *versionFlag {
+	if opts.version {
 		fmt.Println(version)
 		return 0
 	}
@@ -50,7 +65,7 @@ func run() int {
 	// Loopback only: every route is unauthenticated and POST /vscode/sessions
 	// starts an sshd for a caller-supplied key, so a wildcard would offer a shell
 	// as the job owner to anything that could route to the node.
-	addr := fmt.Sprintf("127.0.0.1:%d", *serverPort)
+	addr := fmt.Sprintf("127.0.0.1:%d", opts.serverPort)
 	srv := &http.Server{Handler: httpapi.Mux(), ReadHeaderTimeout: 10 * time.Second}
 
 	// Bind before the tunnel starts, so the port is open when the relay connects.
@@ -61,16 +76,16 @@ func run() int {
 	}
 	log.Printf("listening on %s", listener.Addr())
 
-	if *socketPath != "" {
-		if err := httpapi.ListenUnix(srv, *socketPath); err != nil {
-			log.Printf("failed to listen on unix socket %s: %v", *socketPath, err)
+	if opts.socketPath != "" {
+		if err := httpapi.ListenUnix(srv, opts.socketPath); err != nil {
+			log.Printf("failed to listen on unix socket %s: %v", opts.socketPath, err)
 			return 1
 		}
-		log.Printf("also listening on unix socket %s", *socketPath)
+		log.Printf("also listening on unix socket %s", opts.socketPath)
 	}
 
-	if *workflowFile != "" {
-		wf, err := workflow.LoadFile(*workflowFile)
+	if opts.workflowFile != "" {
+		wf, err := workflow.LoadFile(opts.workflowFile)
 		if err != nil {
 			log.Printf("workflow: %v", err)
 			return 1
@@ -82,13 +97,13 @@ func run() int {
 		}()
 	}
 
-	if *tunnelEnable {
-		if *tunnelID == "" || *tunnelCluster == "" || *tunnelHostToken == "" {
+	if opts.tunnelEnable {
+		if opts.tunnelID == "" || opts.tunnelCluster == "" || opts.tunnelHostToken == "" {
 			log.Printf("devtunnel: --tunnel-enable needs --tunnel-id, --tunnel-cluster and --tunnel-host-token")
 			return 1
 		}
 		go func() {
-			if err := tunnel.Host(ctx, *tunnelID, *tunnelCluster, *tunnelHostToken); err != nil {
+			if err := tunnel.Host(ctx, opts.tunnelID, opts.tunnelCluster, opts.tunnelHostToken); err != nil {
 				abort(fmt.Errorf("devtunnel: %w", err))
 			}
 		}()

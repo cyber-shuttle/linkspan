@@ -6,6 +6,8 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -48,15 +50,20 @@ func TestListenUnix(t *testing.T) {
 
 // The four paths cs-bridge calls. Renaming one is an API break.
 func TestMuxRoutesTheConsumerContract(t *testing.T) {
+	want := []string{
+		"GET /api/v1/health",
+		"GET /api/v1/metrics",
+		"GET /api/v1/vscode/sessions",
+		"POST /api/v1/vscode/sessions",
+	}
+	if got := slices.Sorted(maps.Keys(consumerContract)); !slices.Equal(got, want) {
+		t.Errorf("the surface cs-bridge ships against changed:\n got %q\nwant %q", got, want)
+	}
 	mux := Mux()
-	for _, r := range [][2]string{
-		{"GET", "/api/v1/health"},
-		{"GET", "/api/v1/metrics"},
-		{"GET", "/api/v1/vscode/sessions"},
-		{"POST", "/api/v1/vscode/sessions"},
-	} {
-		if _, pattern := mux.Handler(httptest.NewRequest(r[0], r[1], nil)); pattern == "" {
-			t.Errorf("%s %s is not routed", r[0], r[1])
+	for _, pattern := range want {
+		method, path, _ := strings.Cut(pattern, " ")
+		if _, routed := mux.Handler(httptest.NewRequest(method, path, nil)); routed == "" {
+			t.Errorf("%s is not routed", pattern)
 		}
 	}
 }
