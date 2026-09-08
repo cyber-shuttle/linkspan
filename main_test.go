@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"flag"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -29,9 +31,20 @@ func TestFlagsAreTheSurfaceClientsShipAgainst(t *testing.T) {
 	}
 }
 
-func TestVersionPrintsAsOneBareLine(t *testing.T) {
-	if version == "" || version != strings.TrimSpace(version) || strings.ContainsAny(version, "\n\r") {
-		t.Errorf("consumers match --version output whole and anchored; got %q", version)
+func TestVersionFlagPrintsOnlyTheInjectedVersion(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "linkspan")
+	build := exec.Command("go", "build", "-ldflags", "-X main.version=9.9.9", "-o", binary, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %v\n%s", err, out)
+	}
+
+	out, err := exec.Command(binary, "--version").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(out) != "9.9.9\n" {
+		t.Errorf("consumers match --version output whole and anchored; got %q", out)
 	}
 }
 
