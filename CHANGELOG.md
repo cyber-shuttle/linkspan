@@ -5,11 +5,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+## [0.17.5] - 2026-09-07
+
+### Added
+
+- `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `CHANGELOG.md` and `docs/COMPATIBILITY.md`, which
+  states the flags, routes, response shapes and `--version` output the CyberShuttle clients depend on.
+
+### Changed
+
+- The README describes the routes that exist and the binaries Linkspan execs. It advertised endpoints for
+  running scripts, stopping subprocesses and opening tunnels, none of which are routes, and claimed no runtime
+  dependencies although the `devtunnel` CLI is fetched on first use and `nvidia-smi` is executed.
+- The README names the cluster, network and home-directory requirements a site needs in order to run Linkspan.
+
 ### Removed
 
 - The interactive PTY shell. An SSH session runs commands and serves SFTP; PTY allocation is now refused.
 - Reverse port forwarding. Local TCP and unix-socket forwarding are unchanged.
 - The TCP keep-alive set on accepted SSH connections.
+
+### Fixed
+
+- The `LICENSE` copyright line, which still carried the Apache-2.0 placeholder text.
 
 ## [0.17.4] - 2026-08-25
 
@@ -437,7 +455,8 @@ No change. The tag points at the same commit as 0.14.8.
   tunnel routes, and opens a dev tunnel at startup unless `--tunnel-enable=false`.
 - GoReleaser archives for Linux, macOS and Windows.
 
-[Unreleased]: https://github.com/cyber-shuttle/linkspan/compare/v0.17.4...HEAD
+[Unreleased]: https://github.com/cyber-shuttle/linkspan/compare/v0.17.5...HEAD
+[0.17.5]: https://github.com/cyber-shuttle/linkspan/compare/v0.17.4...v0.17.5
 [0.17.4]: https://github.com/cyber-shuttle/linkspan/compare/v0.17.3...v0.17.4
 [0.17.3]: https://github.com/cyber-shuttle/linkspan/compare/v0.17.2...v0.17.3
 [0.17.2]: https://github.com/cyber-shuttle/linkspan/compare/v0.17.1...v0.17.2
