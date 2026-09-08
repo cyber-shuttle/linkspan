@@ -38,8 +38,6 @@ func LoadFile(path string) (*Config, error) {
 }
 
 func Run(ctx context.Context, wf *Config) error {
-	// Reject the whole document first: a typo in the last step should not surface
-	// only after the earlier ones have already changed the node.
 	for i, step := range wf.Steps {
 		if step.Action != actionShellExec {
 			return fmt.Errorf("workflow step %d: unknown action %q", i+1, step.Action)

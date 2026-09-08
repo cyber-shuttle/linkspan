@@ -9,9 +9,5 @@ reader needs belongs in one of those, not here.
 
 ## Rules
 
-- Read `docs/COMPATIBILITY.md` before changing a flag, the `--version` or `--help` output, the release
-  archive name, an `/api/v1` route or a response shape. Each is a contract with a client that ships
-  separately.
-- The surface listed there is the whole surface. A new flag or route is an API change and needs a consumer.
-- Restoring PTY allocation or reverse port forwarding to the SSH server is a change, not a fix: both were
-  removed in d55b0a1 (#43). `SECURITY.md` states what a session gets.
+- Adding to the flag, route or response surface needs a consumer; `docs/COMPATIBILITY.md` names the ones
+  there are.

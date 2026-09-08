@@ -140,7 +140,7 @@ func TestSupervisorStopHonored(t *testing.T) {
 }
 
 // sftp and streamlocal have no cs-bridge caller to notice they went missing.
-func TestNewServerWiring(t *testing.T) {
+func TestServerWiresWhatVSCodeRemoteSSHRequires(t *testing.T) {
 	_, key := testKeyPair(t)
 	srv := newServer(key)
 
@@ -158,8 +158,7 @@ func TestNewServerWiring(t *testing.T) {
 	}
 }
 
-// The path VS Code's remoteServerListenOnSocket mode depends on.
-func TestDirectStreamLocalForwarding(t *testing.T) {
+func TestDirectStreamLocalBacksRemoteServerListenOnSocket(t *testing.T) {
 	dir, err := os.MkdirTemp("", "sl") // not t.TempDir: macOS caps socket paths at 104 chars
 	if err != nil {
 		t.Fatal(err)
@@ -421,5 +420,41 @@ func TestServerRejectsAKeyItWasNotCreatedWith(t *testing.T) {
 	}
 	if err := dial(authorizedSigner); err != nil {
 		t.Fatalf("the authorized key was rejected: %v", err)
+	}
+}
+
+func TestSessionGetsNoPtyAndNoReversePortForwarding(t *testing.T) {
+	signer, authorized := testKeyPair(t)
+	srv := newServer(authorized)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Serve(ln) }()
+	defer srv.Close()
+
+	client, err := gossh.Dial("tcp", ln.Addr().String(), &gossh.ClientConfig{
+		User:            "t",
+		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
+		Timeout:         5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if err := session.RequestPty("xterm", 24, 80, gossh.TerminalModes{}); err == nil {
+		t.Fatal("a pty was granted")
+	}
+
+	if remote, err := client.Listen("tcp", "127.0.0.1:0"); err == nil {
+		_ = remote.Close()
+		t.Fatal("a reverse port forward was granted")
 	}
 }

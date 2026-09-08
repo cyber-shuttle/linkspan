@@ -48,7 +48,7 @@ func newServer(authorized ssh.PublicKey) *ssh.Server {
 	return &ssh.Server{
 		Handler:                     guardSession("session", handleSession),
 		PublicKeyHandler:            authorizer(authorized), // PasswordHandler stays nil: keys only
-		PtyCallback:                 func(ssh.Context, ssh.Pty) bool { return false },
+		PtyCallback:                 denyPty,
 		LocalPortForwardingCallback: allowForward("local port forwarding"),
 		ChannelHandlers: map[string]ssh.ChannelHandler{
 			"session":                        guardChannel("session", ssh.DefaultSessionHandler),
@@ -66,6 +66,8 @@ func authorizer(authorized ssh.PublicKey) ssh.PublicKeyHandler {
 		return authorized != nil && ssh.KeysEqual(key, authorized)
 	}
 }
+
+func denyPty(ssh.Context, ssh.Pty) bool { return false }
 
 func allowForward(kind string) func(ssh.Context, string, uint32) bool {
 	return func(_ ssh.Context, host string, port uint32) bool {
