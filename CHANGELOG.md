@@ -5,6 +5,39 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `make check`: format, vet, lint, vulnerability scan and race tests, as CI runs them.
+- `TestLayout` enforces the declaration order and outline that `CONTRIBUTING.md` describes.
+- `docs/COMPATIBILITY.md` states the exit status an SSH session reports.
+
+### Changed
+
+- `internal/procmgr` is a context per process. The launch gate, published stop and liveness probe are
+  removed; a panic in a task is its error.
+- Every server, the relay and the workflow run under `procmgr.Start`; every child process is forked
+  through `procmgr.Exec`.
+- A child process runs in its own process group, killed with it; a `setsid` daemon is left alone. Its
+  pipes close two seconds after it exits, so an orphan cannot hold an SSH session or the probe open.
+- The `nvidia-smi` probe runs outside procmgr, is killed at 3s, and no longer delays shutdown.
+- A malformed workflow is refused before any listener binds.
+- Log lines carry a package prefix; a fatal error names its process once.
+- An SSH session runs its command, and the commands on its stdin, through `sh`; the stdin path ran
+  `$SHELL`.
+- `POST /api/v1/vscode/sessions` refuses a key line with `authorized_keys` options, once ignored, and
+  answers `413` over 64KB, once `400`.
+- `GET /api/v1/vscode/sessions` orders by id.
+- `--socket` unlinks a stale socket only; a regular file at the path fails the bind, once deleted.
+- The README lists every response body; `SECURITY.md` states which listener assumes an exclusive node.
+
+### Fixed
+
+- A relay that exited with status zero was reported with a nil cause.
+- A relay killed for not reporting ready was reported as exited.
+- A relay printing more than 64KB before its ready line was killed at the timeout.
+- `internal/httpapi` and `subsystems/sshd` had no package documentation, a blank line detaching the
+  comment; `TestLayout` now checks attachment.
+
 ## [0.17.5] - 2026-09-07
 
 ### Added

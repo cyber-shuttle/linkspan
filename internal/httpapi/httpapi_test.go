@@ -1,132 +1,149 @@
+// Tests for the /api/v1 surface cs-bridge parses.
+//
+//	call                             It sends one request through the real route
+//	                                 table.
+//	createSession                    It posts the test key and returns the id and
+//	                                 port of the session created.
+//	TestRoutes                       Each frozen pattern must route to a handler
+//	                                 registered under exactly that pattern.
+//	TestCreateSessionServesOnReturn  The port in the response must already accept
+//	                                 connections.
+//	TestCreateSessionRejectsBadKey   A key that does not parse, or one carrying
+//	                                 options, must answer 400 with the error
+//	                                 shape.
+//	TestSocketIsOwnerOnly            The socket must be mode 0600, a stale socket
+//	                                 must be replaced, and a regular file at the
+//	                                 path must fail the bind. The directory
+//	                                 avoids t.TempDir because macOS caps socket
+//	                                 paths at 104 characters.
+//	TestResponseBodies               An empty session list must marshal as [],
+//	                                 and only the SSH kind may be listed.
 package httpapi
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/json"
-	"fmt"
-	"maps"
-	"slices"
-	"strconv"
-	"strings"
-
-	"github.com/cyber-shuttle/linkspan/subsystems/sshd"
-	gossh "golang.org/x/crypto/ssh"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
+
+	"github.com/cyber-shuttle/linkspan/internal/procmgr"
 )
 
-func TestListenUnix(t *testing.T) {
-	sock := filepath.Join(t.TempDir(), "linkspan.sock")
-	os.WriteFile(sock, []byte("stale"), 0o600) // a prior run's leftover, which ListenUnix must clear
+const authorizedKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH66P8ofDO6v2AaMYZ7JN3lW/m/b32Ab75yYTf3n6NZg test"
 
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("ok"))
-	})}
-	if err := ListenUnix(srv, sock); err != nil {
-		t.Fatal(err)
-	}
-	defer srv.Close()
-
-	client := &http.Client{Transport: &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", sock)
-		},
-	}}
-	resp, err := client.Get("http://unix/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
+func call(method, path, body string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	mux().ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+	return rec
 }
 
-// The four paths cs-bridge calls. Renaming one is an API break.
-func TestMuxRoutesTheConsumerContract(t *testing.T) {
+func createSession(t *testing.T) (string, int) {
+	t.Helper()
+	t.Cleanup(func() { procmgr.StopAll() })
+	rec := call(http.MethodPost, "/api/v1/vscode/sessions", `{"authorized_key": "`+authorizedKey+`"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create = %d: %s", rec.Code, rec.Body)
+	}
+	var out struct {
+		ID       string `json:"id"`
+		BindPort int    `json:"bind_port"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("response is not the documented object: %v (%s)", err, rec.Body)
+	}
+	return out.ID, out.BindPort
+}
+
+func TestRoutes(t *testing.T) {
 	want := []string{
 		"GET /api/v1/health",
 		"GET /api/v1/metrics",
 		"GET /api/v1/vscode/sessions",
 		"POST /api/v1/vscode/sessions",
 	}
-	if got := slices.Sorted(maps.Keys(consumerContract)); !slices.Equal(got, want) {
-		t.Errorf("the surface cs-bridge ships against changed:\n got %q\nwant %q", got, want)
-	}
-	mux := Mux()
+	m := mux()
 	for _, pattern := range want {
 		method, path, _ := strings.Cut(pattern, " ")
-		if _, routed := mux.Handler(httptest.NewRequest(method, path, nil)); routed == "" {
-			t.Errorf("%s is not routed", pattern)
+		if _, routed := m.Handler(httptest.NewRequest(method, path, nil)); routed != pattern {
+			t.Errorf("%s routes as %q; the surface cs-bridge ships against changed", pattern, routed)
 		}
 	}
 }
 
-// cs-bridge parses {"id":"s-<port>","bind_port":<port>} in linkspanSupport.ts;
-// renaming a field, reshaping the id, or not answering 201 breaks it.
-func TestCreateSessionResponseShape(t *testing.T) {
-	t.Cleanup(sshd.StopAll)
-
-	_, private, err := ed25519.GenerateKey(rand.Reader)
+func TestCreateSessionServesOnReturn(t *testing.T) {
+	id, port := createSession(t)
+	if port == 0 {
+		t.Fatal("bind_port missing or zero")
+	}
+	if want := "s-" + strconv.Itoa(port); id != want {
+		t.Fatalf("id = %q, want %q", id, want)
+	}
+	c, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(port))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("nothing accepting on bind_port when the response was written: %v", err)
 	}
-	signer, err := gossh.NewSignerFromKey(private)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := `{"authorized_key":` + strconv.Quote(string(gossh.MarshalAuthorizedKey(signer.PublicKey()))) + `}`
+	_ = c.Close()
+}
 
-	rec := httptest.NewRecorder()
-	Mux().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/vscode/sessions", strings.NewReader(body)))
-
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want 201; body %s", rec.Code, rec.Body)
-	}
-	var got struct {
-		ID       string `json:"id"`
-		BindPort int32  `json:"bind_port"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("response is not the documented object: %v (%s)", err, rec.Body)
-	}
-	if got.BindPort == 0 {
-		t.Fatalf("bind_port missing or zero: %s", rec.Body)
-	}
-	if want := "s-" + strconv.Itoa(int(got.BindPort)); got.ID != want {
-		t.Fatalf("id = %q, want %q", got.ID, want)
+func TestCreateSessionRejectsBadKey(t *testing.T) {
+	for name, body := range map[string]string{
+		"unparsable":   `{"authorized_key":"not-a-key"}`,
+		"with options": `{"authorized_key":"from=\"10.0.0.1\" ` + authorizedKey + `"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := call(http.MethodPost, "/api/v1/vscode/sessions", body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body)
+			}
+			var body struct {
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Error == "" {
+				t.Fatalf("error body = %s, want an {\"error\": ...} message", rec.Body)
+			}
+		})
 	}
 }
 
-func TestCreateSessionRejectsAnUnusableKey(t *testing.T) {
-	rec := httptest.NewRecorder()
-	Mux().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/vscode/sessions",
-		strings.NewReader(`{"authorized_key":"not-a-key"}`)))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", rec.Code)
-	}
-}
-
-// Unauthenticated routes behind a socket cs-bridge puts in a shared directory.
-func TestListenUnixSocketIsNotGroupOrWorldAccessible(t *testing.T) {
-	dir, err := os.MkdirTemp("", "sock") // not t.TempDir: macOS caps socket paths at 104 chars
+func TestSocketIsOwnerOnly(t *testing.T) {
+	dir, err := os.MkdirTemp("", "sock")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	sock := filepath.Join(dir, "linkspan.sock")
-	srv := &http.Server{Handler: Mux()}
-	if err := ListenUnix(srv, sock); err != nil {
+	if err := os.WriteFile(sock, []byte("not a socket"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	defer srv.Close()
-
+	if _, err := New("unix", sock); err == nil {
+		t.Fatal("a regular file at the socket path was unlinked and replaced")
+	}
+	if err := os.Remove(sock); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale.(*net.UnixListener).SetUnlinkOnClose(false)
+	_ = stale.Close()
+	l, err := New("unix", sock)
+	if err != nil {
+		t.Fatalf("a stale socket was not replaced: %v", err)
+	}
+	l.Start()
+	t.Cleanup(func() { procmgr.StopAll() })
+	c, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatalf("nothing accepting on the socket after Start: %v", err)
+	}
+	_ = c.Close()
 	info, err := os.Stat(sock)
 	if err != nil {
 		t.Fatal(err)
@@ -136,15 +153,14 @@ func TestListenUnixSocketIsNotGroupOrWorldAccessible(t *testing.T) {
 	}
 }
 
-// cs-bridge reads these bodies, not just the status codes.
-func TestContractResponseBodies(t *testing.T) {
-	t.Cleanup(sshd.StopAll)
-
+func TestResponseBodies(t *testing.T) {
 	get := func(path string) *httptest.ResponseRecorder {
-		rec := httptest.NewRecorder()
-		Mux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		rec := call(http.MethodGet, path, "")
 		if rec.Code != http.StatusOK {
 			t.Fatalf("GET %s = %d, want 200", path, rec.Code)
+		}
+		if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+			t.Fatalf("GET %s Content-Type = %q, want application/json", path, ct)
 		}
 		return rec
 	}
@@ -153,16 +169,18 @@ func TestContractResponseBodies(t *testing.T) {
 		t.Fatalf("health body = %s, want {\"status\":\"ok\"}", got)
 	}
 
-	// A JSON object, so absent sources are omitted rather than sent as zeroes.
+	metricsBody := get("/api/v1/metrics").Body
 	var snap map[string]any
-	if err := json.Unmarshal(get("/api/v1/metrics").Body.Bytes(), &snap); err != nil {
-		t.Fatalf("metrics body is not an object: %v (%s)", err, get("/api/v1/metrics").Body)
+	if err := json.Unmarshal(metricsBody.Bytes(), &snap); err != nil {
+		t.Fatalf("metrics body is not an object: %v (%s)", err, metricsBody)
 	}
 
-	_, _, err := startTestSession(t)
-	if err != nil {
-		t.Fatal(err)
+	if body := strings.TrimSpace(get("/api/v1/vscode/sessions").Body.String()); body != "[]" {
+		t.Fatalf("an empty sessions list must marshal as [], got %s", body)
 	}
+	idle := func(ctx context.Context) error { <-ctx.Done(); return nil }
+	procmgr.Start(procmgr.KindTunnel, "not-a-session", "relay-addr", idle)
+	id, _ := createSession(t)
 	var sessions []struct {
 		ID    string `json:"id"`
 		State string `json:"state"`
@@ -171,37 +189,10 @@ func TestContractResponseBodies(t *testing.T) {
 	if err := json.Unmarshal(get("/api/v1/vscode/sessions").Body.Bytes(), &sessions); err != nil {
 		t.Fatalf("sessions body is not the documented array: %v", err)
 	}
-	if len(sessions) == 0 {
-		t.Fatal("no sessions listed after creating one")
+	if len(sessions) != 1 || sessions[0].ID != id || sessions[0].Addr == "" {
+		t.Fatalf("want the one ssh session %s with its addr, got %+v", id, sessions)
 	}
-	s := sessions[0]
-	if s.ID == "" || s.Addr == "" {
-		t.Fatalf("id/addr missing from %+v", s)
+	if sessions[0].State != "running" {
+		t.Fatalf("state = %q, want %q -- cs-bridge compares against this literal", sessions[0].State, "running")
 	}
-	if s.State != "running" {
-		t.Fatalf("state = %q, want %q -- cs-bridge compares against this literal", s.State, "running")
-	}
-}
-
-func startTestSession(t *testing.T) (string, int32, error) {
-	t.Helper()
-	_, private, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return "", 0, err
-	}
-	signer, err := gossh.NewSignerFromKey(private)
-	if err != nil {
-		return "", 0, err
-	}
-	body := `{"authorized_key":` + strconv.Quote(string(gossh.MarshalAuthorizedKey(signer.PublicKey()))) + `}`
-	rec := httptest.NewRecorder()
-	Mux().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/vscode/sessions", strings.NewReader(body)))
-	if rec.Code != http.StatusCreated {
-		return "", 0, fmt.Errorf("create = %d: %s", rec.Code, rec.Body)
-	}
-	var out struct {
-		ID       string `json:"id"`
-		BindPort int32  `json:"bind_port"`
-	}
-	return out.ID, out.BindPort, json.Unmarshal(rec.Body.Bytes(), &out)
 }

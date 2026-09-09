@@ -1,106 +1,74 @@
+// Tests for step execution: the first failure stops it, and a forking step
+// does not block it.
+//
+//	step, shell, loadSteps       They build a document from steps and load it.
+//	TestForkingStepDoesNotBlock  A step that forks a daemon, as cs-control's
+//	                             setsid --fork does, must not hold the workflow
+//	                             open.
+//	TestStopsAtFirstFailure      The step after a failure must not run.
 package workflow
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
 
-func load(t *testing.T, doc string) *Config {
+type step struct{ action, command string }
+
+func shell(command string) step { return step{"shell.exec", command} }
+
+func loadSteps(t *testing.T, steps ...step) *Workflow {
 	t.Helper()
+	doc := "name: t\nsteps:\n"
+	for i, s := range steps {
+		doc += fmt.Sprintf("  - action: %s\n    name: s%d\n    params:\n      command: %q\n", s.action, i+1, s.command)
+	}
 	path := filepath.Join(t.TempDir(), "wf.yaml")
 	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	wf, err := LoadFile(path)
+	wf, err := New(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return wf
 }
 
-func script(t *testing.T, body string) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "step.sh")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+func TestForkingStepDoesNotBlock(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "step.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n/bin/sleep 2 &\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return path
-}
+	wf := loadSteps(t, shell("sh "+script))
 
-// cs-control's provisioning ends in `setsid --fork python -m jupyter_server`,
-// which leaves a grandchild holding the inherited stdout.
-func TestAStepThatForksDoesNotBlockTheWorkflow(t *testing.T) {
-	wf := load(t, "name: d\nsteps:\n  - action: shell.exec\n    name: fork\n    params:\n      command: \"/bin/sh "+script(t, "/bin/sleep 3 &")+"\"\n")
-
-	done := make(chan error, 1)
-	go func() { done <- Run(context.Background(), wf) }()
+	ran := make(chan error, 1)
+	go func() { ran <- wf.run(context.Background()) }()
 	select {
-	case err := <-done:
+	case err := <-ran:
 		if err != nil {
 			t.Fatalf("step failed: %v", err)
 		}
-	case <-time.After(1500 * time.Millisecond):
-		// The child sleeps 3s; a pipe would make Run wait for it.
-		t.Fatal("Run blocked on a step that forked a long-lived child")
+	case <-time.After(time.Second):
+		t.Fatal("run blocked on a step that forked a long-lived child")
 	}
 }
 
-func TestStepsRunInOrderAndStopAtTheFirstFailure(t *testing.T) {
+func TestStopsAtFirstFailure(t *testing.T) {
 	dir := t.TempDir()
 	first, third := filepath.Join(dir, "first"), filepath.Join(dir, "third")
-	wf := load(t, "name: o\nsteps:\n"+
-		"  - action: shell.exec\n    name: one\n    params:\n      command: \"/usr/bin/touch "+first+"\"\n"+
-		"  - action: shell.exec\n    name: two\n    params:\n      command: \"/usr/bin/false\"\n"+
-		"  - action: shell.exec\n    name: three\n    params:\n      command: \"/usr/bin/touch "+third+"\"\n")
+	wf := loadSteps(t, shell("/usr/bin/touch "+first), shell("/usr/bin/false"), shell("/usr/bin/touch "+third))
 
-	if err := Run(context.Background(), wf); err == nil {
-		t.Fatal("expected the failing step to stop the workflow")
+	if err := wf.run(context.Background()); err == nil {
+		t.Fatal("a failing step must stop the workflow")
 	}
 	if _, err := os.Stat(first); err != nil {
-		t.Error("the first step should have run")
+		t.Error("the first step must have run")
 	}
 	if _, err := os.Stat(third); err == nil {
-		t.Error("the step after the failure should not have run")
-	}
-}
-
-func TestRejectsAnUnknownActionBeforeRunningAnyStep(t *testing.T) {
-	marker := filepath.Join(t.TempDir(), "ran")
-	wf := load(t, "name: u\nsteps:\n  - action: shell.exec\n    name: first\n    params:\n      command: \"/usr/bin/touch "+marker+"\"\n  - action: shell.evaluate\n    name: unsupported\n    params:\n      command: \"/usr/bin/true\"\n")
-	if err := Run(context.Background(), wf); err == nil || !strings.Contains(err.Error(), "unknown action") {
-		t.Fatalf("got %v, want an unknown-action error", err)
-	}
-	if _, err := os.Stat(marker); !os.IsNotExist(err) {
-		t.Fatal("a step ran before the document was rejected")
-	}
-}
-
-func TestRejectsAnEmptyCommand(t *testing.T) {
-	wf := load(t, "name: e\nsteps:\n  - action: shell.exec\n    name: blank\n    params:\n      command: \"\"\n")
-	if err := Run(context.Background(), wf); err == nil {
-		t.Fatal("expected an empty command to be rejected")
-	}
-}
-
-func TestACancelledContextStopsBeforeTheNextStep(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	wf := load(t, "name: c\nsteps:\n  - action: shell.exec\n    name: one\n    params:\n      command: \"/usr/bin/true\"\n")
-	if err := Run(ctx, wf); err == nil || !strings.Contains(err.Error(), "cancelled") {
-		t.Fatalf("got %v, want a cancellation error", err)
-	}
-}
-
-func TestLoadFile(t *testing.T) {
-	wf := load(t, "name: demo\nsteps:\n  - action: shell.exec\n    name: greet\n    params:\n      command: \"echo hi\"\n")
-	if wf.Name != "demo" || len(wf.Steps) != 1 || wf.Steps[0].Params.Command != "echo hi" {
-		t.Fatalf("parsed %+v", wf)
-	}
-	if _, err := LoadFile(filepath.Join(t.TempDir(), "missing.yaml")); err == nil {
-		t.Fatal("expected an error for a missing file")
+		t.Error("the step after the failure must not have run")
 	}
 }

@@ -1,0 +1,43 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - dupl
+    - gocritic
+    - nilerr
+    - prealloc
+    - unconvert
+    - unparam
+    - wastedassign
+
+  exclusions:
+    # this whitelists known patterns from needing //nolint comments.
+    rules:
+      # Tests exec (G204, G702) their own fixtures and binary, write them executable (G306) and read them (G304).
+      - path: _test\.go
+        linters: [gosec]
+        text: "G204|G304|G306|G702"
+      # Reads the --workflow file (G304) and runs its commands (G204).
+      - path: internal/workflow/workflow\.go
+        linters: [gosec]
+        text: "G304|G204"
+      # Reads a path the kernel wrote to /proc/self/cgroup (G304, G703).
+      - path: subsystems/metrics/metrics\.go
+        linters: [gosec]
+        text: "G304|G703"
+      # Writes the devtunnel binary executable (G306) and runs it (G204).
+      - path: subsystems/tunnel/tunnel\.go
+        linters: [gosec]
+        text: "G306|G204"
+      # Runs the command the authenticated client sends (G204, G702).
+      - path: subsystems/sshd/sshd\.go
+        linters: [gosec]
+        text: "G204|G702"
+
+formatters:
+  enable:
+    - gofmt

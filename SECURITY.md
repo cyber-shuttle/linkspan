@@ -6,38 +6,41 @@ Fixes go into the latest release; earlier releases are not patched.
 
 ## Reporting a Vulnerability
 
-Report vulnerabilities privately through GitHub: open the repository's **Security** tab and choose **Report a
-vulnerability**. Please do not use a public issue, pull request or discussion for a security problem.
-
-Include what an attacker can reach, the steps to reproduce it, and the version `linkspan --version` prints.
-We will acknowledge the report and say whether we can reproduce it before any fix is published.
+Report privately through the repository's **Security** tab, **Report a vulnerability**; not through a
+public issue, pull request or discussion. Include what an attacker can reach, the steps to reproduce it,
+and the version `linkspan --version` prints. We acknowledge the report and say whether we can reproduce it
+before any fix is published.
 
 ## Security Model
 
 A report is most useful when it shows one of these boundaries failing.
 
-- **Access control is at the transport, not in the API.** The HTTP listener binds loopback only, so nothing
-  off the node can reach it. The `--socket` listener is created mode `0600`, so only the job's own user can
-  connect. Remote callers reach the API over the tunnel the client created and controls. Requests carry no
-  separate credential, because those three boundaries are the check.
-- **The tunnel belongs to the client.** The client creates it, registers its ports and mints the host-scoped
-  token the job is given. Linkspan passes that token to `devtunnel host` and does nothing else with it: it
-  never creates, forwards, refreshes or deletes a tunnel. The tunnel terminates at Microsoft's Dev Tunnels
-  service, so traffic to the HTTP API is not end-to-end encrypted between client and job; SSH sessions carry
-  their own encryption inside it.
-- **SSH servers accept one public key and only that key**, and bind on loopback. Password authentication is
-  never enabled. A session that authenticates then gets what the job's user has: command execution, SFTP,
-  and TCP and unix-socket forwarding from the node. PTY allocation is refused, and reverse port forwarding is
-  not offered.
-- **Linkspan runs as the submitting user**, with that user's privileges and no more. It needs no root, and
-  installs nothing outside `~/.linkspan/`.
-- **The `devtunnel` CLI is fetched at runtime and executed.** With `--tunnel-enable`, Linkspan downloads
-  Microsoft's `devtunnel` binary over HTTPS from `tunnelsassetsprod.blob.core.windows.net` into
-  `~/.linkspan/bin/` and runs it as the job's user. There is no checksum or signature check; the transport is
-  the only integrity guarantee.
-- **Workflow commands run without a shell**, split on whitespace with no expansion, so a workflow file cannot
-  smuggle a glob, a variable or a pipe into the command it names. The file itself is trusted input: it comes
-  from the client that submitted the job, and by design it runs commands as the job's user.
+- **Access control at the transport**: the HTTP listener binds loopback only; the `--socket` listener is
+  set to mode `0600` immediately after bind; remote callers arrive over the tunnel the client created and
+  controls. Requests carry no credential because those three boundaries are the check. The port admits
+  every process on the node, so Linkspan assumes the job holds its node exclusively, as the CyberShuttle
+  clients request; the socket admits the job's user alone. On a shared node, bind only the socket: over
+  the port another user can start an SSH server for their own key that runs commands as the job's user.
+- **A client-owned tunnel**: the client creates it, registers its ports and mints the host-scoped token.
+  Linkspan passes that token to `devtunnel host` and never creates, forwards, refreshes or deletes a
+  tunnel. The token is a command-line argument, the only form the CLI documents, so the process list
+  shows it to every user on the node; a host-scoped token allows hosting and nothing else. The tunnel
+  terminates at Microsoft's Dev Tunnels service, so HTTP API traffic is not end-to-end encrypted between
+  client and job; SSH sessions carry their own encryption inside it.
+- **One key per SSH server**: each server accepts one public key, binds on loopback and never enables
+  password authentication; a key line with `authorized_keys` options is refused, not accepted with the
+  options ignored. An authenticated session has what the job's user has: command execution through `sh`,
+  SFTP, and TCP and unix-socket forwarding from the node. PTY allocation is refused and reverse port
+  forwarding is not offered.
+- **No privilege**: Linkspan runs as the submitting user, requires no root privilege and installs nothing
+  outside `~/.linkspan/`.
+- **A fetched binary is executed**: with `--tunnel-enable`, Linkspan downloads Microsoft's binary over
+  HTTPS from `tunnelsassetsprod.blob.core.windows.net` into `~/.linkspan/bin/` and runs it as the job's
+  user. There is no checksum or signature check; the transport is the only integrity guarantee.
+- **No shell for workflow commands**: they are split on whitespace with no expansion, so a workflow file
+  cannot smuggle a glob, a variable or a pipe into the command it names. The file is trusted input from
+  the client that submitted the job and runs commands as the job's user by design.
 
-A finding that depends on already holding the job's credentials, or on already having an account on the
-compute node as that user, describes one of these boundaries rather than a way through it.
+A finding that depends on already holding the job's credentials, an account on the compute node as
+that user, or another account on a node the job was meant to hold exclusively, describes one of these
+boundaries rather than a way through it.

@@ -1,8 +1,29 @@
+// Package tunnel hosts the Dev Tunnel the client created by running the
+// devtunnel CLI, the relay, under procmgr. A relay that dies ends the task and
+// is not restarted; StopAll kills it and waits.
+//
+//	readyMarker
+//	output                   It holds the last 64KB of the relay's stdout and
+//	                         stderr, and ready is closed as the ready marker is
+//	                         written.
+//	Tunnel                   Its host method fetches the CLI on first use, runs
+//	                         it, and returns on relay exit, on hostReadyTimeout
+//	                         without the ready marker, or on cancellation, always
+//	                         with the captured output. Start registers it under
+//	                         procmgr as "tunnel". hostReadyTimeout is a test
+//	                         seam.
+//	downloadDevtunnelBinary  It owns ~/.linkspan/bin/devtunnel: it returns the
+//	                         path when the file is present, and otherwise fetches
+//	                         this platform's CLI through a sibling file renamed
+//	                         into place. cliBase is a test seam.
+//	New                      It validates its inputs, so main refuses them before
+//	                         binding.
 package tunnel
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -11,236 +32,141 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/cyber-shuttle/linkspan/internal/procmgr"
 )
 
-var devtunnelAsset = map[string]string{
-	"linux/amd64":  "linux-x64",
-	"linux/arm64":  "linux-arm64",
-	"darwin/amd64": "osx-x64",
-	"darwin/arm64": "osx-arm64",
+const readyMarker = "Ready to accept connections"
+
+type output struct {
+	ready chan struct{}
+
+	mu  sync.Mutex
+	buf bytes.Buffer
 }
 
-const (
-	devtunnelURL     = "https://tunnelsassetsprod.blob.core.windows.net/cli/%s-devtunnel"
-	downloadTimeout  = 5 * time.Minute
-	retries          = 3
-	retryDelay       = 2 * time.Second
-	hostReadyMarker  = "Ready to accept connections"
-	hostReadyTimeout = 30 * time.Second
-	hostReadyPoll    = 500 * time.Millisecond
-)
-
-// Linkspan hosts exactly one tunnel; main stops it on the way out.
-var (
-	relayMu sync.Mutex
-	relay   *process
-	stopped bool
-)
-
-// StopRelay kills the hosted relay, which a parent's exit does not. stopped makes
-// it exclusive with a bring-up in flight, which relayMu alone does not: main
-// os.Exits as StopRelay returns, so a later relay is an orphan nothing kills.
-func StopRelay() {
-	relayMu.Lock()
-	r := relay
-	relay, stopped = nil, true
-	relayMu.Unlock()
-	r.kill()
+type Tunnel struct {
+	qualifiedID, token string
 }
 
-// process is the running devtunnel CLI. The ready-wait reads output while the
-// child writes it, hence the lock; the relay outlives that wait inside a
-// memory-capped cgroup, hence the cap.
-type process struct {
-	cmd  *exec.Cmd
-	done chan struct{}
+var hostReadyTimeout = 30 * time.Second
 
-	mu     sync.Mutex
-	output bytes.Buffer
-}
+var cliBase = "https://tunnelsassetsprod.blob.core.windows.net/cli/"
 
-const outputLimit = 64 << 10
-
-func (p *process) Write(b []byte) (int, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if room := outputLimit - p.output.Len(); room > 0 {
-		p.output.Write(b[:min(room, len(b))])
-	}
-	return len(b), nil // never fail the child's write
-}
-
-func (p *process) String() string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.output.String()
-}
-
-func (p *process) exited() bool {
-	select {
-	case <-p.done:
-		return true
-	default:
-		return false
-	}
-}
-
-func (p *process) kill() {
-	if p == nil || p.cmd.Process == nil {
-		return
-	}
-	_ = p.cmd.Process.Kill()
-}
-
-func start(cmd *exec.Cmd) (*process, error) {
-	p := &process{cmd: cmd, done: make(chan struct{})}
-	cmd.Stdout, cmd.Stderr = p, p
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	go func() { defer close(p.done); _ = cmd.Wait() }()
-	return p, nil
-}
-
-func devtunnelBin(ctx context.Context) (string, error) {
+func downloadDevtunnelBinary(ctx context.Context) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("devtunnel cli: resolve home dir: %w", err)
+		return "", fmt.Errorf("home dir: %w", err)
 	}
-	path := filepath.Join(home, ".linkspan", "bin", "devtunnel")
-
-	if _, err := os.Stat(path); err == nil {
-		return path, nil
+	dst := filepath.Join(home, ".linkspan", "bin", "devtunnel")
+	if _, err := os.Stat(dst); err == nil {
+		return dst, nil
 	}
-
 	platform := runtime.GOOS + "/" + runtime.GOARCH
-	asset, ok := devtunnelAsset[platform]
+	asset, ok := map[string]string{
+		"linux/amd64":  "linux-x64",
+		"linux/arm64":  "linux-arm64",
+		"darwin/amd64": "osx-x64",
+		"darwin/arm64": "osx-arm64",
+	}[platform]
 	if !ok {
-		return "", fmt.Errorf("devtunnel cli: no binary for platform %s", platform)
+		return "", fmt.Errorf("no devtunnel binary for %s", platform)
 	}
-	url := fmt.Sprintf(devtunnelURL, asset)
-
-	log.Printf("devtunnel cli: downloading %s -> %s", url, path)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return "", fmt.Errorf("devtunnel cli: create bin dir: %w", err)
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return "", err
 	}
-	if err := download(ctx, path, url); err != nil {
-		return "", fmt.Errorf("devtunnel cli: %w", err)
-	}
-	return path, nil
-}
-
-// Via a temp file, so an interrupted transfer leaves no partial binary behind.
-func download(ctx context.Context, dst, src string) error {
-	ctx, cancel := context.WithTimeout(ctx, downloadTimeout)
+	src := cliBase + asset + "-devtunnel"
+	log.Printf("tunnel: downloading %s -> %s", src, dst)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src, nil) //nolint:gosec // src is built from a static map
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("GET %s: %w", src, err)
+		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: unexpected status %s", src, resp.Status)
+		return "", fmt.Errorf("GET %s: unexpected status %s", src, resp.Status)
 	}
-
-	f, err := os.CreateTemp(filepath.Dir(dst), ".devtunnel-download-*")
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return "", fmt.Errorf("GET %s: %w", src, err)
 	}
-	defer os.Remove(f.Name()) // no-op once the rename below succeeds
-
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		f.Close()
-		return fmt.Errorf("write download: %w", err)
+	part := dst + ".part"
+	defer func() { _ = os.Remove(part) }()
+	if err := os.WriteFile(part, data, 0o700); err != nil {
+		return "", err
 	}
-	// Executable before the rename publishes it, or a crash between the two leaves
-	// a devtunnel every later run finds and cannot run.
-	if err := f.Chmod(0o755); err != nil {
-		f.Close()
-		return err
+	if err := os.Rename(part, dst); err != nil {
+		return "", err
 	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), dst)
+	return dst, nil
 }
 
-// Host retries the relay bring-up, killing the relay a failed attempt left
-// running. Returns nil once hosting, or when ctx ends.
-func Host(ctx context.Context, tunnelID, clusterID, hostToken string) error {
-	for attempt := 1; attempt <= retries; attempt++ {
-		log.Printf("devtunnel: attempt %d/%d to host tunnel %s", attempt, retries, tunnelID)
-
-		p, err := hostOnce(ctx, tunnelID, clusterID, hostToken)
-		if err == nil {
-			log.Printf("devtunnel: successfully hosting %s", tunnelID)
-			return nil
-		}
-		p.kill()
-		if ctx.Err() != nil {
-			return nil
-		}
-		log.Printf("devtunnel: attempt %d failed: %v", attempt, err)
-
-		if attempt < retries {
-			select {
-			case <-time.After(retryDelay):
-			case <-ctx.Done():
-				return nil
-			}
+func (o *output) Write(b []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.buf.Write(b)
+	if over := o.buf.Len() - 64<<10; over > 0 {
+		o.buf.Next(over)
+	}
+	select {
+	case <-o.ready:
+	default:
+		if bytes.Contains(o.buf.Bytes(), []byte(readyMarker)) {
+			close(o.ready)
 		}
 	}
-	return fmt.Errorf("failed to host tunnel %s after %d attempts", tunnelID, retries)
+	return len(b), nil
 }
 
-// The host token authorizes hosting and nothing else, so no ports are passed.
-// Every return after the relay starts carries it, so the caller can kill it.
-func hostOnce(ctx context.Context, tunnelID, clusterID, hostToken string) (*process, error) {
-	qualified := tunnelID
-	if clusterID != "" {
-		qualified = tunnelID + "." + clusterID
-	}
-	bin, err := devtunnelBin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("devtunnel host %q: %w", qualified, err)
-	}
+func (o *output) String() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buf.String()
+}
 
-	log.Printf("devtunnel host: running %s host %s --access-token [redacted]", bin, qualified)
-	relayMu.Lock()
-	if stopped {
-		relayMu.Unlock()
-		return nil, fmt.Errorf("devtunnel host %q: shutting down", qualified)
+func New(id, cluster, token string) (*Tunnel, error) {
+	if id == "" || cluster == "" || token == "" {
+		return nil, errors.New("tunnel: id, cluster and host token are all required")
 	}
-	//nolint:gosec // the binary path is one we downloaded to a path we chose
-	p, err := start(exec.CommandContext(ctx, bin, "host", qualified, "--access-token", hostToken))
-	relay = p
-	relayMu.Unlock()
-	if err != nil {
-		return nil, fmt.Errorf("devtunnel host %q: start: %w", qualified, err)
-	}
+	return &Tunnel{qualifiedID: id + "." + cluster, token: token}, nil
+}
 
-	for deadline := time.Now().Add(hostReadyTimeout); time.Now().Before(deadline); {
-		select {
-		case <-time.After(hostReadyPoll):
-		case <-ctx.Done():
-			return p, ctx.Err()
-		}
-		if out := p.String(); strings.Contains(out, hostReadyMarker) {
-			log.Printf("devtunnel host: tunnel %q ready at https://%s.devtunnels.ms", qualified, qualified)
-			return p, nil
-		}
-		// Exiting without the marker is the failure signal; stderr is not, as the
-		// CLI writes there and keeps hosting.
-		if p.exited() {
-			return p, fmt.Errorf("devtunnel host %q: exited before signalling ready (output=%q)", qualified, p.String())
-		}
+func (t *Tunnel) host(ctx context.Context) error {
+	bin, err := downloadDevtunnelBinary(ctx)
+	if err != nil {
+		return err
 	}
-	return p, fmt.Errorf("devtunnel host %q: no ready signal within %s (output=%q)", qualified, hostReadyTimeout, p.String())
+	log.Printf("tunnel: running %s host %s --access-token [redacted]", bin, t.qualifiedID)
+	out := &output{ready: make(chan struct{})}
+	cmd := exec.Command(bin, "host", t.qualifiedID, "--access-token", t.token)
+	cmd.Stdout, cmd.Stderr = out, out
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	exited := make(chan error, 1)
+	go func() { exited <- procmgr.Exec(ctx, cmd) }()
+	select {
+	case <-out.ready:
+		log.Printf("tunnel: %s ready", t.qualifiedID)
+		err = <-exited
+	case <-time.After(hostReadyTimeout):
+		cancel()
+		<-exited
+		return fmt.Errorf("relay killed: no ready signal within %s (output=%q)", hostReadyTimeout, out)
+	case err = <-exited:
+	}
+	if err == nil {
+		err = errors.New("exit status 0")
+	}
+	return fmt.Errorf("relay exited (output=%q): %w", out, err)
+}
+
+func (t *Tunnel) Start() {
+	procmgr.Start(procmgr.KindTunnel, "tunnel", "", t.host)
 }

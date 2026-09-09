@@ -1,6 +1,5 @@
 tmp/
 bin/
-# Added by goreleaser init:
 dist/
 linkspan
 .pi/

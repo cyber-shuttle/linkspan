@@ -1,8 +1,22 @@
-// Package metrics reports the running job's live resource use: cgroup-v2 memory
-// and cpu, plus per-GPU nvidia-smi.
+// Package metrics reports the job's current use: memory and CPU from its
+// cgroup v2 hierarchy, GPU utilisation from nvidia-smi. A source that cannot
+// be read leaves its field unset.
+//
+//	GPU, Snapshot
+//	parseGPUs      It skips rows that do not scan, because a failed nvidia-smi
+//	               prints its complaint to stdout.
+//	readCgroupInt  It reads the integer on the line starting with key; an empty
+//	               key takes the first line that parses.
+//	Collect        The nvidia-smi probe runs outside procmgr behind the probing
+//	               flag and is killed at gpuProbeTimeout. A wedged nvidia-smi
+//	               ignores SIGKILL, so the call gives up at the timeout, the flag
+//	               stays held until Wait returns, and no second probe starts. The
+//	               job's cgroup is the 0:: entry of /proc/self/cgroup without its
+//	               step suffix. procCgroup and cgroupRoot are test seams.
 package metrics
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -11,15 +25,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/cyber-shuttle/linkspan/internal/procmgr"
 )
-
-// nvidia-smi wedges on exactly the sick GPU these metrics are wanted for, and a
-// stuck process ignores SIGKILL, so the read abandons the probe.
-var gpuProbeTimeout = 3 * time.Second
-
-// One probe at a time: cs-bridge polls every 5s, so a wedged one would otherwise
-// accumulate a stuck process per poll.
-var gpuProbeInFlight atomic.Bool
 
 type GPU struct {
 	Index       int `json:"index"`
@@ -28,96 +36,74 @@ type GPU struct {
 	MemTotalMiB int `json:"memTotalMiB"`
 }
 
-// Snapshot mirrors the csbridge MetricSample live fields. Absent sources are
-// omitted, so the client sees undefined rather than a misleading zero.
 type Snapshot struct {
 	MemBytes     *int64 `json:"memBytes,omitempty"`
 	CPUUsageUsec *int64 `json:"cpuUsageUsec,omitempty"`
 	GPUs         []GPU  `json:"gpus,omitempty"`
 }
 
-func Read(ctx context.Context) Snapshot {
-	m := Snapshot{GPUs: readGPUMetrics(ctx)}
-	if cg, err := jobCgroupDir(); err == nil {
-		m.MemBytes = readCgroup(cg+"/memory.current", parseInt64)
-		m.CPUUsageUsec = readCgroup(cg+"/cpu.stat", parseCPUUsageUsec)
-	}
-	return m
-}
+var gpuProbeTimeout = 3 * time.Second
 
-func readCgroup(path string, parse func(string) (int64, error)) *int64 {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	v, err := parse(string(b))
-	if err != nil {
-		return nil
-	}
-	return &v
-}
+var probing atomic.Bool
 
-// Strips the /step_* leaf so metrics cover the whole allocation, not one step.
-func jobCgroupDir() (string, error) {
-	b, err := os.ReadFile("/proc/self/cgroup")
-	if err != nil {
-		return "", err
-	}
-	return "/sys/fs/cgroup" + jobCgroupSuffix(string(b)), nil
-}
+var (
+	procCgroup = "/proc/self/cgroup"
+	cgroupRoot = "/sys/fs/cgroup"
+)
 
-func jobCgroupSuffix(procCgroup string) string {
-	lines := strings.Split(strings.TrimSpace(procCgroup), "\n")
-	p := strings.TrimPrefix(strings.TrimSpace(lines[len(lines)-1]), "0::")
-	if i := strings.Index(p, "/step_"); i >= 0 {
-		p = p[:i]
-	}
-	return p
-}
-
-func parseInt64(s string) (int64, error) { return strconv.ParseInt(strings.TrimSpace(s), 10, 64) }
-
-func parseCPUUsageUsec(cpuStat string) (int64, error) {
-	for ln := range strings.SplitSeq(cpuStat, "\n") {
-		if v, ok := strings.CutPrefix(ln, "usage_usec "); ok {
-			return parseInt64(v)
-		}
-	}
-	return 0, fmt.Errorf("usage_usec not found in cpu.stat")
-}
-
-func readGPUMetrics(ctx context.Context) []GPU {
-	if !gpuProbeInFlight.CompareAndSwap(false, true) {
-		return nil
-	}
-	probed := make(chan []GPU, 1)
-	go func() {
-		defer gpuProbeInFlight.Store(false)
-		out, err := exec.CommandContext(ctx, "nvidia-smi",
-			"--query-gpu=index,utilization.gpu,memory.used,memory.total",
-			"--format=csv,noheader,nounits").Output()
-		if err != nil {
-			probed <- nil
-			return
-		}
-		probed <- parseGPUMetrics(string(out))
-	}()
-
-	select {
-	case gpus := <-probed:
-		return gpus
-	case <-time.After(gpuProbeTimeout):
-		return nil // still running; the flag stays set until it exits
-	}
-}
-
-func parseGPUMetrics(out string) []GPU {
+func parseGPUs(out string) []GPU {
 	var gpus []GPU
-	for ln := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		var g GPU
-		if _, err := fmt.Sscanf(ln, "%d, %d, %d, %d", &g.Index, &g.UtilPct, &g.MemUsedMiB, &g.MemTotalMiB); err == nil {
+		if _, err := fmt.Sscanf(line, "%d, %d, %d, %d", &g.Index, &g.UtilPct, &g.MemUsedMiB, &g.MemTotalMiB); err == nil {
 			gpus = append(gpus, g)
 		}
 	}
 	return gpus
+}
+
+func readCgroupInt(path, key string) *int64 {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	for line := range strings.SplitSeq(string(b), "\n") {
+		if s, ok := strings.CutPrefix(line, key); ok {
+			if v, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
+				return &v
+			}
+		}
+	}
+	return nil
+}
+
+func Collect() Snapshot {
+	var snap Snapshot
+	if probing.CompareAndSwap(false, true) {
+		ctx, cancel := context.WithTimeout(context.Background(), gpuProbeTimeout)
+		defer cancel()
+		var out bytes.Buffer
+		cmd := exec.Command("nvidia-smi",
+			"--query-gpu=index,utilization.gpu,memory.used,memory.total",
+			"--format=csv,noheader,nounits")
+		cmd.Stdout = &out
+		done := make(chan struct{})
+		go func() {
+			defer probing.Store(false)
+			defer close(done)
+			_ = procmgr.Exec(ctx, cmd)
+		}()
+		select {
+		case <-done:
+			snap.GPUs = parseGPUs(out.String())
+		case <-ctx.Done():
+		}
+	}
+	if b, err := os.ReadFile(procCgroup); err == nil {
+		_, path, _ := strings.Cut(string(b), "0::")
+		job, _, _ := strings.Cut(strings.TrimSpace(path), "/step_")
+		snap.MemBytes = readCgroupInt(cgroupRoot+job+"/memory.current", "")
+		snap.CPUUsageUsec = readCgroupInt(cgroupRoot+job+"/cpu.stat", "usage_usec ")
+	}
+	return snap
 }
