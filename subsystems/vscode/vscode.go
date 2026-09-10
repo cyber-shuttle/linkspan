@@ -16,9 +16,9 @@ import (
 	"net/http"
 
 	"github.com/cyber-shuttle/linkspan/internal/router"
+	"github.com/cyber-shuttle/linkspan/internal/sessions"
 	"github.com/cyber-shuttle/linkspan/internal/sshd"
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
-	"github.com/cyber-shuttle/linkspan/subsystems/sessions"
 	gossh "golang.org/x/crypto/ssh"
 )
 

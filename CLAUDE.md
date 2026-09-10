@@ -38,7 +38,8 @@ them, not here.
   whoever starts the task. No restart policy. `tasks.go` is the model, the registry and a task's life;
   `exec.go` is the fork path.
 - `internal/{metrics,sshd,tunnel,install}` are primitives: they report data, run SSH servers, host the
-  relay, publish ports and say when the relay is hosting, and own `~/.cybershuttle`.
+  relay, publish ports and say when the relay is hosting, and own `~/.cybershuttle`. `internal/sessions`
+  is the list and stop commands over the registry that the session subsystems share.
 - `subsystems/` are the capabilities a client drives. `workflow` loads a YAML of steps, each on a trigger,
   `start`, `ready`, `stop` or a signal, and each one action with its params or a `tasks` list of them;
   every task binds its command at load from the table main passes, the workflow's own `shell.exec`
@@ -49,7 +50,7 @@ them, not here.
   route names a `Commands` entry, so each command is a route and a workflow step alike;
   `TestRoutesCoverCommands` checks the two tables agree. Each owns its wire shapes. `jupyter` and `terminal` `Spawn` a task with a step that composes
   `install.Fetch` and `tunnel.Publish` before the command, `vscode` runs `sshd.New` as a task's `Server`,
-  the three take their list and stop commands from `sessions`,
+  the three take their list and stop commands from `internal/sessions`,
   and `filesystem` declares mount, unmount, copy and sync as routes and commands that answer 501 until
   they do something.
 - `tasks.Kind` classifies tasks on a separate axis: the HTTP listener is a task that is not a

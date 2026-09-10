@@ -62,7 +62,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 - `GET /api/v1/vscode/sessions` orders by id.
 - `--socket` unlinks a stale socket only; a regular file at the path fails the bind, once deleted.
 - The README lists every response body; `SECURITY.md` states which listener assumes an exclusive node.
-- The README leads with what Linkspan launches, and documents the workflow's triggers and actions.
+- The README introduces Linkspan, shows its architecture, and describes the control plane it provides.
 
 ### Fixed
 

@@ -27,6 +27,7 @@ linkspan
 ├── main_test.go               # the surface docs/COMPATIBILITY.md freezes
 ├── layout_test.go             # the file-layout rules below
 ├── docs/COMPATIBILITY.md      # what clients depend on
+├── docs/assets/               # the README's architecture diagram, architecture.mmd rendered to .png
 ├── examples/workflow.yml      # a workflow that exercises every trigger
 ├── internal/
 │   ├── router/                # a tree of routers; main.go roots it at /api/v1
@@ -34,10 +35,10 @@ linkspan
 │   ├── metrics/               # cgroup v2 + nvidia-smi job metrics
 │   ├── sshd/                  # SSH server (gliderlabs/ssh)
 │   ├── tunnel/                # relay hosting and tunnel port publishing
-│   └── install/               # ~/.cybershuttle: fetched binaries, uv, Python, the Jupyter environment
+│   ├── install/               # ~/.cybershuttle: fetched binaries, uv, Python, the Jupyter environment
+│   └── sessions/              # the list and stop commands the session subsystems share
 └── subsystems/
     ├── workflow/              # YAML steps on lifecycle triggers; no routes
-    ├── sessions/              # the list and stop commands the session subsystems share
     ├── vscode/                # /api/v1/vscode/sessions: SSH servers for VS Code Remote-SSH
     ├── jupyter/               # /api/v1/jupyter/sessions: Jupyter sessions in a uv-built environment
     ├── terminal/              # /api/v1/terminal/sessions: ttyd web terminals
@@ -45,10 +46,16 @@ linkspan
 ```
 
 `internal/` is Linkspan's own infrastructure and its primitives, which handle no request. `subsystems/`
-are the capabilities a client drives: each exports `Router`, a `router.Router` at its own prefix with its
-commands and routes relative to it, and `Commands`, the same commands by name, which a workflow step
-calls with its params. `main.go` mounts the ones its `Config` enables into the `/api/v1`
-root, and is the only file that reads flags.
+are the capabilities a client drives: each exports `Commands`, its actions by name, and `Router`, a
+`router.Router` at its own prefix whose every route names a `Commands` entry, so one function answers a
+request and a workflow step; `TestRoutesCoverCommands` holds the two tables to each other. `main.go`
+mounts the ones its `Config` enables into the `/api/v1` root, and is the only file that reads flags. The
+README's [Architecture](README.md#architecture) section states the three ideas the code is built on.
+
+Adding a subsystem is one package that exports the two tables and one line in `main.go`'s `subsystems`
+map; adding an action to one is one function and one entry in each table. A subsystem that appears in
+the README's diagram is added to `docs/assets/architecture.mmd`, rendered with
+`mmdc -i docs/assets/architecture.mmd -o docs/assets/architecture.png -b white -s 2 -w 1600`.
 
 ## File Layout
 

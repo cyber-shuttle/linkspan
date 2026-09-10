@@ -26,9 +26,9 @@ import (
 
 	"github.com/cyber-shuttle/linkspan/internal/install"
 	"github.com/cyber-shuttle/linkspan/internal/router"
+	"github.com/cyber-shuttle/linkspan/internal/sessions"
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
 	"github.com/cyber-shuttle/linkspan/internal/tunnel"
-	"github.com/cyber-shuttle/linkspan/subsystems/sessions"
 )
 
 const kind tasks.Kind = "terminal"
