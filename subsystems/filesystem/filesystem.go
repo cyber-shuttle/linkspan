@@ -1,11 +1,34 @@
-// Package filesystem will let you mount datasets, copy files and manage the job's files. Nothing is served yet.
+// Package filesystem is reserved for mounting datasets and moving files between the job and elsewhere. Each
+// operation is a route and a workflow command alike, declared and answering 501 until it does something.
 //
-//	Router    No route yet: adding one is a contract that needs a client (docs/COMPATIBILITY.md).
-//	Commands  None yet.
+//	notImplemented  The placeholder every operation is, naming itself.
+//	Commands        mount, unmount, copy and sync.
+//	Router          POST /filesystem/mount, /unmount, /copy and /sync, each a Commands entry.
 package filesystem
 
-import "github.com/cyber-shuttle/linkspan/internal/router"
+import (
+	"context"
+	"net/http"
 
-var Router = router.New(router.Router{Prefix: "/filesystem"})
+	"github.com/cyber-shuttle/linkspan/internal/router"
+)
 
-var Commands = map[string]router.Command{}
+func notImplemented(name string) router.Command {
+	return func(context.Context, map[string]any) (int, any, string) {
+		return http.StatusNotImplemented, nil, name + " is not implemented"
+	}
+}
+
+var Commands = map[string]router.Command{
+	"mount":   notImplemented("mount"),
+	"unmount": notImplemented("unmount"),
+	"copy":    notImplemented("copy"),
+	"sync":    notImplemented("sync"),
+}
+
+var Router = router.New("/filesystem", map[string]router.Command{
+	"POST /mount":   Commands["mount"],
+	"POST /unmount": Commands["unmount"],
+	"POST /copy":    Commands["copy"],
+	"POST /sync":    Commands["sync"],
+})

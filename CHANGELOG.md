@@ -19,6 +19,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   request body, so VS Code and Jupyter are bootstrapped from the file. A step's `tasks` is a list of
   them under one `on`.
 - `examples/workflow.yml`, a workflow that exercises every trigger against a local Linkspan.
+- Every subsystem command is a route, so `POST /api/v1/jupyter/setup` builds the environment ahead of
+  the first server and the `/filesystem` placeholders answer `501`.
 - `jupyter.sessions.start` takes `addr` and `token`, and takes the token from `JUPYTER_TOKEN` when given
   none, so cs-control's workflow is one step that reuses Linkspan's server.
 - Every listed process is one object: `id`, `addr`, `state`, `error` and its own fields. A VS Code

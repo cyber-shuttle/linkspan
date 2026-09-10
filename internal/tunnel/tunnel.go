@@ -1,5 +1,6 @@
-// Package tunnel hosts the Dev Tunnel the client created by running the devtunnel CLI, the relay, under tasks, and
-// publishes ports on it for the servers the subsystems start. A relay that dies ends the task and is not restarted.
+// Package tunnel hosts the Dev Tunnel a client created, by running the devtunnel CLI, the relay, as a task, and
+// publishes ports on it for the servers the subsystems start. A relay that dies ends the task and is not
+// restarted.
 //
 //	apiVersion, readyLine  What the relay prints once it is hosting.
 //	output         The last 64KB of the relay's stdout and stderr; onReady runs once the ready line has appeared.

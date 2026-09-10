@@ -105,12 +105,14 @@ tasks run in order and stop at the first failure, which exits Linkspan with stat
 | Action | Does | `params` |
 |---|---|---|
 | `shell.exec` | Runs `command`, split on whitespace, without a shell | `command` |
+| `vscode.sessions.select`, `jupyter.sessions.select`, `terminal.sessions.select` | Lists that subsystem's sessions | |
 | `vscode.sessions.start` | Starts an SSH server for a key | `authorized_key` |
 | `jupyter.setup` | Builds the Jupyter environment ahead of the first server | |
 | `jupyter.sessions.start` | Starts a Jupyter server | `root_dir`, `addr`, `token` |
 | `jupyter.sessions.stop` | Stops one | `id` |
 | `terminal.sessions.start` | Starts a web terminal | `cwd` |
 | `terminal.sessions.stop` | Stops one | `id` |
+| `filesystem.mount`, `.unmount`, `.copy`, `.sync` | Declared, not yet implemented; answer `501` | |
 
 ```yaml
 name: workspace
@@ -197,9 +199,11 @@ socket admits the job's user alone ([SECURITY.md](SECURITY.md)).
 | GET | `/api/v1/jupyter/sessions` | `[{"id":"j-<port>","addr":"127.0.0.1:<port>","state":"<state>","error":"","url":"<public url>","root_dir":"<dir>","token":"<token>"}]`, ordered by id |
 | POST | `/api/v1/jupyter/sessions` | `201` with one session object; takes `{"root_dir": "<dir>"}`, default Linkspan's own directory |
 | DELETE | `/api/v1/jupyter/sessions/{id}` | `{"id":"j-<port>","state":"stopped"}`, `404` for an unknown id |
+| POST | `/api/v1/jupyter/setup` | `200` once the environment is built, which takes minutes the first time |
 | GET | `/api/v1/terminal/sessions` | `[{"id":"t-<port>","addr":"127.0.0.1:<port>","state":"<state>","error":"","url":"<public url>","cwd":"<dir>"}]`, ordered by id |
 | POST | `/api/v1/terminal/sessions` | `201` with one session object; takes `{"cwd": "<dir>"}`, default Linkspan's own directory |
 | DELETE | `/api/v1/terminal/sessions/{id}` | `{"id":"t-<port>","state":"stopped"}`, `404` for an unknown id |
+| POST | `/api/v1/filesystem/{mount,unmount,copy,sync}` | `501`: declared, not yet implemented, and off unless the subsystem is enabled |
 
 A VS Code session is one SSH server, bound on loopback for one public key, running commands through
 `sh`. The POST takes `{"authorized_key": "<ssh public key>"}`, a bare key without `authorized_keys`

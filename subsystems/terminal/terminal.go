@@ -1,17 +1,16 @@
-// Package terminal gives you a shell in the browser. Post a working directory to /api/v1/terminal/sessions and
-// a login shell comes up behind ttyd, fetched on first use, published on the tunnel and answered with its URL;
-// You must be signed in to access it. If you are not signed in, you will be redirected to the sign-in page.
+// Package terminal serves a login shell in the browser. A working directory posted to /api/v1/terminal/sessions
+// starts ttyd, fetched on first use, publishes its port on the tunnel and answers with the URL, which opens after
+// the tunnel owner signs in. Linux only, one shell per session.
 //
 //	kind
 //	ttydVersion, ttydBase, assets  The release Linkspan fetches, by platform.
-//	selectSessions
 //	startSession                   Answers 501 on a platform without a ttyd build; else spawns a terminal for
 //	                               params.cwd: fetches ttyd, publishes the port and runs ttyd writable on loopback
 //	                               with the user's shell, or sh, as a login shell; an empty cwd is Linkspan's own
 //	                               directory.
-//	stopSession
-//	Router                         Patterns and shapes are frozen by docs/COMPATIBILITY.md.
-//	Commands                       The create and stop routes, for workflow steps.
+//	Commands                       sessions.start, with sessions.select and sessions.stop from sessions; shapes
+//	                               are frozen by docs/COMPATIBILITY.md.
+//	Router                         /terminal/sessions, each route a Commands entry.
 package terminal
 
 import (
@@ -29,6 +28,7 @@ import (
 	"github.com/cyber-shuttle/linkspan/internal/router"
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
 	"github.com/cyber-shuttle/linkspan/internal/tunnel"
+	"github.com/cyber-shuttle/linkspan/subsystems/sessions"
 )
 
 const kind tasks.Kind = "terminal"
@@ -41,10 +41,6 @@ const (
 var assets = map[string]string{
 	"linux/amd64": "ttyd.x86_64",
 	"linux/arm64": "ttyd.aarch64",
-}
-
-func selectSessions(context.Context, map[string]any) (int, any, string) {
-	return http.StatusOK, tasks.Select(kind), ""
 }
 
 func startSession(_ context.Context, params map[string]any) (int, any, string) {
@@ -71,19 +67,14 @@ func startSession(_ context.Context, params map[string]any) (int, any, string) {
 	return http.StatusCreated, created, ""
 }
 
-func stopSession(_ context.Context, params map[string]any) (int, any, string) {
-	id, _ := params["id"].(string)
-	if !tasks.Stop(id) {
-		return http.StatusNotFound, nil, "unknown id " + id
-	}
-	return http.StatusOK, map[string]string{"id": id, "state": "stopped"}, ""
+var Commands = map[string]router.Command{
+	"sessions.select": sessions.Select(kind),
+	"sessions.start":  startSession,
+	"sessions.stop":   sessions.Stop,
 }
 
-var Router = router.New(router.Router{
-	Prefix: "/terminal/sessions",
-	Select: selectSessions,
-	Create: startSession,
-	Stop:   stopSession,
+var Router = router.New("/terminal", map[string]router.Command{
+	"GET /sessions":         Commands["sessions.select"],
+	"POST /sessions":        Commands["sessions.start"],
+	"DELETE /sessions/{id}": Commands["sessions.stop"],
 })
-
-var Commands = map[string]router.Command{"sessions.start": startSession, "sessions.stop": stopSession}

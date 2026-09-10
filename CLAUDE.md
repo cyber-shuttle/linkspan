@@ -21,12 +21,12 @@ them, not here.
   service under tasks, the workflow's triggers included; its `subsystems` table is the one place a
   subsystem's `Router` and `Commands` are named, gated by its `Config`, a literal until a file loader
   replaces it.
-- `internal/router` is a tree of routers: a `Router` is a prefix, the Select, Create and Stop
-  commands of the resource at it, any other `Routes` relative to it, and the routers mounted under it;
-  `New` takes any subset of those fields and `Routes` is the whole table, so a tree is built leaf first.
-  Every route is a `Command` over a params map: the router decodes the body into it and adds the path
-  id, so the same function is a workflow action. It imports nothing of Linkspan's and knows no path:
-  `main.go` owns `/api/v1`, health and metrics.
+- `internal/router` is a tree of routers, and every route is a command. A `Router` is a prefix and its
+  `Routes`, `"METHOD path"` relative to the prefix, each naming a command; `New(prefix, routes)` writes
+  them behind the prefix and `Routes` is the whole table, so a tree is built leaf first and one function
+  is a route and a workflow action alike. The router decodes the body into the params map and adds the
+  path id. It imports nothing of Linkspan's and knows no path: `main.go` owns `/api/v1`, health and
+  metrics.
 - `internal/tasks` is one registry of `Task`: a `Run` function with an id, kind, address, state, error
   and the caller's attrs, under a context. `Start` is its one way in: a task with an address is bound
   first and its `Run` serves the listener it finds on it, and a task stays listed after `Run` ends, as
@@ -41,15 +41,17 @@ them, not here.
   relay, publish ports and say when the relay is hosting, and own `~/.cybershuttle`.
 - `subsystems/` are the capabilities a client drives. `workflow` loads a YAML of steps, each on a trigger,
   `start`, `ready`, `stop` or a signal, and each one action with its params or a `tasks` list of them;
-  every task binds its command at load, `shell.exec` its own through `tasks.Exec`, any other action the
-  `Commands` entry main enabled under that name, called with the params. One document is loaded per
+  every task binds its command at load from the table main passes, the workflow's own `shell.exec`
+  unprefixed and each enabled subsystem's `Commands` behind its name, called with the params. One document is loaded per
   process; `Run` runs one trigger's tasks, `Start` is the task main starts, the start tasks then the
-  ready tasks once `tunnel.Ready` closes, and `WatchSignal` the task of one signal. It has no routes and
-  no `Commands`. `vscode`, `jupyter`, `terminal` and `filesystem` each export `Router`, built by
-  `router.New(router.Router{...})` over their commands, and `Commands`, the same by name for workflow
-  steps, empty in `filesystem`, and own their wire shapes. `jupyter` and `terminal`
-  `Spawn` a task with a step that composes `install.Fetch` and `tunnel.Publish` before the command,
-  `vscode` runs `sshd.New` as a task's `Server`, and `filesystem` has no routes yet.
+  ready tasks once `tunnel.Ready` closes, and `WatchSignal` the task of one signal; main mounts no
+  workflow router. Every subsystem exports `Commands`, its actions by name, and `Router`, whose every
+  route names a `Commands` entry, so each command is a route and a workflow step alike;
+  `TestRoutesCoverCommands` checks the two tables agree. Each owns its wire shapes. `jupyter` and `terminal` `Spawn` a task with a step that composes
+  `install.Fetch` and `tunnel.Publish` before the command, `vscode` runs `sshd.New` as a task's `Server`,
+  the three take their list and stop commands from `sessions`,
+  and `filesystem` declares mount, unmount, copy and sync as routes and commands that answer 501 until
+  they do something.
 - `tasks.Kind` classifies tasks on a separate axis: the HTTP listener is a task that is not a
   capability.
 
@@ -68,9 +70,9 @@ them, not here.
   `workflow.Start`, or a function of its arguments returning one, `workflow.WatchSignal(name)`; a server
   is composed where it is started, `(&tasks.Task{Kind: kind, Server: sshd.New(key)}).Start()`, and a
   child server is a `Spawn` step in the same literal. Every subsystem declares `var Commands`, a map
-  from a dotted name such as `sessions.start` to a `router.Command`, empty when it has none; its routes
-  name the same commands, and a workflow step calls one with the step's params, so one function answers
-  both. A loop over a query belongs at the call site.
+  from a name such as `sessions.start` to a `router.Command`; every route of its `Router` names an entry
+  of that map, and a workflow step calls the same command with the step's params, so one function
+  answers both. A loop over a query belongs at the call site.
 - An error that leaves a package before tasks is involved carries that package's prefix once, as in
   `workflow: read: ...`. An error from a running task carries none, because `Failed` prefixes the
   process id. `startAll` returns them unwrapped.

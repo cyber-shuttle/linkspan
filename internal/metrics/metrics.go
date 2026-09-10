@@ -1,6 +1,6 @@
-// Package metrics reports the job's use: memory and CPU from its cgroup v2 hierarchy, GPU utilisation and memory from
-// nvidia-smi. A source that cannot be read leaves its field unset. The whole set is sampled by a task, so a call
-// answers the last sample without waiting on anything.
+// Package metrics reports the job's resource use: memory and CPU from its cgroup v2 hierarchy, and GPU utilisation
+// and memory from nvidia-smi. A source that cannot be read leaves its field unset. A task samples the whole set,
+// so a request answers from the last sample without waiting on anything.
 //
 //	GPU, Snapshot
 //	interval, procCgroup, cgroupRoot  Test seams.

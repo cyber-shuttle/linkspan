@@ -1,10 +1,10 @@
-// Package workflow runs the steps your YAML names at the moments of the job's life you choose: start, once the
-// API is up; ready, once the tunnel is hosting, or at once without one; stop, when Linkspan is told to exit; or
-// a signal such as SIGUSR1, which Slurm sends ahead of the time limit. A step is one action with its params, or a
-// list of tasks under one trigger; they run in order and the first failure stops them. shell.exec runs a command
-// without a shell, so nothing expands and a forking command cannot hold the workflow open. Any other action is
-// one a subsystem offers, as vscode.sessions.start, with the params it takes, so a workspace is set up from the
-// file. One document per job.
+// Package workflow runs the steps a YAML document names at the moments of the job's life it chooses: start, once
+// the API is up; ready, once the tunnel is hosting, or at once without one; stop, when Linkspan is told to exit;
+// or a signal such as SIGUSR1, which Slurm sends ahead of the time limit. A step is one action with its params
+// or a list of tasks under one trigger; they run in order, and the first failure stops them. shell.exec runs a
+// command without a shell, so nothing expands and a forking command cannot hold the workflow open. Any other
+// action is one a subsystem offers, such as vscode.sessions.start, with the params it takes, so a workspace is
+// set up from the file. One document is loaded per job.
 //
 //	signals          The triggers beyond start, ready and stop, by name.
 //	Step             On defaults to start; Tasks, when given, are the actions under it, else Action and Params are
@@ -18,6 +18,9 @@
 //	Signals          The signal triggers the document names, each once, so main watches each.
 //	Load             Reads and validates the document against the commands main enables, so an invalid one is
 //	                 refused at startup.
+//	Commands         shell.exec, the package's own action, which main adds unprefixed.
+//	Router           POST /workflow/shell/exec; main mounts no workflow router, a workflow being driven by its
+//	                 document.
 package workflow
 
 import (
@@ -148,9 +151,6 @@ func Load(path string, commands map[string]router.Command) error {
 		}
 		for _, task := range list {
 			task.On, task.command = on, commands[task.Action]
-			if task.Action == "shell.exec" {
-				task.command = execute
-			}
 			if task.command == nil {
 				return fmt.Errorf("workflow: step %d (%s): unknown action %q", i+1, task.Name, task.Action)
 			}
@@ -160,3 +160,11 @@ func Load(path string, commands map[string]router.Command) error {
 	steps = flat
 	return nil
 }
+
+var Commands = map[string]router.Command{
+	"shell.exec": execute,
+}
+
+var Router = router.New("/workflow", map[string]router.Command{
+	"POST /shell/exec": Commands["shell.exec"],
+})

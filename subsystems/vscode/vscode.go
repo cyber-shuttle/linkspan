@@ -1,14 +1,13 @@
-// Package vscode gives VS Code a way in. Post your public key to /api/v1/vscode/sessions and an SSH server for
-// that key alone comes up on a loopback port, listed with its id and address for as long as the job runs; point
-// Remote-SSH at it through the tunnel. The server runs commands as the job's user, forwards ports and serves SFTP,
-// and refuses PTYs and passwords. This package owns the wire shape; the server is internal/sshd.
+// Package vscode serves VS Code Remote-SSH. A public key posted to /api/v1/vscode/sessions starts an SSH server
+// on a loopback port that accepts that key alone, listed with its id and address while the job runs. The server
+// runs commands as the job's user, forwards ports and serves SFTP; it refuses PTYs and passwords. This package
+// owns the wire shape, and the server is internal/sshd.
 //
 //	kind            The SSH kind, so ids are s-<port>.
-//	selectSessions
 //	startSession    Serves one sshd server for params.authorized_key under tasks; the port accepts before it
 //	                answers. A key carrying authorized_keys options is refused, since the server would ignore them.
-//	Router          Patterns and shapes are frozen by docs/COMPATIBILITY.md.
-//	Commands        sessions.start, the create route, for workflow steps.
+//	Commands        sessions.select, from sessions, and sessions.start; shapes are frozen by docs/COMPATIBILITY.md.
+//	Router          /vscode/sessions, each route a Commands entry.
 package vscode
 
 import (
@@ -19,14 +18,11 @@ import (
 	"github.com/cyber-shuttle/linkspan/internal/router"
 	"github.com/cyber-shuttle/linkspan/internal/sshd"
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
+	"github.com/cyber-shuttle/linkspan/subsystems/sessions"
 	gossh "golang.org/x/crypto/ssh"
 )
 
 const kind tasks.Kind = "sshd"
-
-func selectSessions(context.Context, map[string]any) (int, any, string) {
-	return http.StatusOK, tasks.Select(kind), ""
-}
 
 func startSession(_ context.Context, params map[string]any) (int, any, string) {
 	authorizedKey, _ := params["authorized_key"].(string)
@@ -45,10 +41,12 @@ func startSession(_ context.Context, params map[string]any) (int, any, string) {
 	return http.StatusCreated, map[string]any{"id": created.ID, "bind_port": created.Port()}, ""
 }
 
-var Router = router.New(router.Router{
-	Prefix: "/vscode/sessions",
-	Select: selectSessions,
-	Create: startSession,
-})
+var Commands = map[string]router.Command{
+	"sessions.select": sessions.Select(kind),
+	"sessions.start":  startSession,
+}
 
-var Commands = map[string]router.Command{"sessions.start": startSession}
+var Router = router.New("/vscode", map[string]router.Command{
+	"GET /sessions":  Commands["sessions.select"],
+	"POST /sessions": Commands["sessions.start"],
+})

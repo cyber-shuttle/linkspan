@@ -1,8 +1,8 @@
-// Exec is the fork path: every child Linkspan starts goes through it, so cancellation
-// reaches the child and its helpers alike; stdio is wired at each call site. spawn is the Run of a task given a
-// Spawn: that step runs under the task's context and returns the command, bound to the port the task released. The
-// task is starting until the port accepts, however long that takes, then running; the Run ends as the child does,
-// and Start records the exit, never fatal for a child.
+// Exec is the one fork path: every child Linkspan starts goes through it, so cancellation reaches the child and
+// its helpers alike, and stdio is wired at each call site. spawn is the Run of a task given a Spawn: the step runs
+// under the task's context and returns the command, bound to the port the task released. The task is starting
+// until the port accepts, however long that takes, then running; the Run ends as the child does, and Start
+// records the exit, never fatal for a child.
 //
 //	stdioGrace    Bounds the wait for a child's pipes after it exits, which an orphan holding them would otherwise
 //	              keep open.

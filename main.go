@@ -1,6 +1,6 @@
-// Package main parses the flags, serves the HTTP API on loopback and on the optional unix socket, and starts the
-// tunnel and the workflow's triggers, all under tasks: one StopAll ends everything and the first fatal error
-// reaches main.
+// Package main is the entry point. It parses the flags, serves the HTTP API on loopback and on the optional unix
+// socket, and starts the tunnel and the workflow's triggers, all as tasks, so one StopAll ends everything and the
+// first fatal error reaches main.
 //
 //	version                 Set by the linker; "dev" otherwise.
 //	Config                  Which subsystems publish their routes, by name; main passes a literal until a file
@@ -8,7 +8,7 @@
 //	subsystem, subsystems   The one table of what each subsystem offers.
 //	options, registerFlags  Flag spellings are frozen by docs/COMPATIBILITY.md; a test passes its own FlagSet.
 //	routes                  The tree: /api/v1 with health and metrics, then only enabled subsystems.
-//	commands                The workflow's actions, each prefixed by its subsystem, from enabled subsystems only.
+//	commands                The workflow's actions: its own unprefixed, and each enabled subsystem's behind its name.
 //	startAll                Validates every input before binding anything, then starts every task in one pass, the
 //	                        listeners first: each as h-<port> or h-<socket path>, metrics, the tunnel and the
 //	                        workflow by kind, and the workflow's signal tasks as workflow-<signal>.
@@ -21,6 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"maps"
 	"net/http"
 	"os"
 	"os/signal"
@@ -79,12 +80,12 @@ func registerFlags(fs *flag.FlagSet) *options {
 }
 
 func routes(cfg Config) *router.Router {
-	root := router.New(router.Router{Prefix: "/api/v1", Routes: map[string]router.Command{
+	root := router.New("/api/v1", map[string]router.Command{
 		"GET /health": func(context.Context, map[string]any) (int, any, string) {
 			return http.StatusOK, map[string]string{"status": "ok"}, ""
 		},
 		"GET /metrics": func(context.Context, map[string]any) (int, any, string) { return http.StatusOK, metrics.Latest(), "" },
-	}})
+	})
 	for name, sub := range subsystems {
 		if cfg[name] {
 			root.Mount(sub.router)
@@ -94,7 +95,7 @@ func routes(cfg Config) *router.Router {
 }
 
 func commands(cfg Config) map[string]router.Command {
-	out := map[string]router.Command{}
+	out := maps.Clone(workflow.Commands)
 	for name, sub := range subsystems {
 		for command, c := range sub.commands {
 			if cfg[name] {

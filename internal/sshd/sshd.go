@@ -1,5 +1,5 @@
-// Package sshd is the SSH server VS Code Remote-SSH connects to: one public key per server, commands run as the job's
-// user. Every handler and goroutine recovers from panics, so a client cannot bring Linkspan down.
+// Package sshd is the SSH server VS Code Remote-SSH connects to: one public key per server, and commands run as
+// the job's user. Every handler and goroutine recovers from panics, so a client cannot bring Linkspan down.
 //
 //	exitNeverRan, exitSignalled  What VS Code reads when the command could not run, or was signalled.
 //	guard                        The one recover body; callers start their own goroutine.

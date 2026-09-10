@@ -37,10 +37,11 @@ linkspan
 │   └── install/               # ~/.cybershuttle: fetched binaries, uv, Python, the Jupyter environment
 └── subsystems/
     ├── workflow/              # YAML steps on lifecycle triggers; no routes
+    ├── sessions/              # the list and stop commands the session subsystems share
     ├── vscode/                # /api/v1/vscode/sessions: SSH servers for VS Code Remote-SSH
     ├── jupyter/               # /api/v1/jupyter/sessions: Jupyter sessions in a uv-built environment
     ├── terminal/              # /api/v1/terminal/sessions: ttyd web terminals
-    └── filesystem/            # no routes yet
+    └── filesystem/            # /api/v1/filesystem: mount, unmount, copy and sync, 501 placeholders
 ```
 
 `internal/` is Linkspan's own infrastructure and its primitives, which handle no request. `subsystems/`

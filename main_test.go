@@ -1,7 +1,9 @@
 // Tests for the surface docs/COMPATIBILITY.md freezes.
 //
 //	binary                       Built once per run.
-//	TestFlagSurface, TestRoutesFollowConfig, TestVersionIsOneLine, TestArchiveName
+//	TestFlagSurface, TestRoutesFollowConfig
+//	TestRoutesCoverCommands      Every command a subsystem exports is behind one of its routes.
+//	TestVersionIsOneLine, TestArchiveName
 //	TestExampleWorkflowLoads     examples/workflow.yml must name only commands the subsystems export.
 //	TestBindsLoopbackAndUnwinds  Sends SIGTERM once the socket answers, so every listener is up before the unwind.
 package main
@@ -19,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -85,6 +88,28 @@ func TestRoutesFollowConfig(t *testing.T) {
 		}
 		if rec := get(Config{}, path); rec.Code != http.StatusNotFound {
 			t.Errorf("%s answered %d with its subsystem disabled, want 404", path, rec.Code)
+		}
+	}
+	post := func(cfg Config, path string) int {
+		rec := httptest.NewRecorder()
+		routes(cfg).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, nil))
+		return rec.Code
+	}
+	if post(all, "/api/v1/filesystem/mount") != http.StatusNotImplemented || post(Config{}, "/api/v1/filesystem/mount") != http.StatusNotFound {
+		t.Error("a filesystem route must answer 501 when enabled and 404 when disabled")
+	}
+}
+
+func TestRoutesCoverCommands(t *testing.T) {
+	for name, sub := range subsystems {
+		for command, c := range sub.commands {
+			routed := false
+			for _, r := range sub.router.Routes {
+				routed = routed || reflect.ValueOf(r).Pointer() == reflect.ValueOf(c).Pointer()
+			}
+			if !routed {
+				t.Errorf("%s.%s is a command but not a route", name, command)
+			}
 		}
 	}
 }

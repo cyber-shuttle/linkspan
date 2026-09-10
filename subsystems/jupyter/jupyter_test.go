@@ -27,7 +27,7 @@ func TestCommands(t *testing.T) {
 	_, _ = (&tasks.Task{ID: "t-1", Kind: "terminal", Run: idle}).Start()
 	_, _ = (&tasks.Task{ID: "j-2", Kind: kind, Run: idle}).Start()
 	t.Cleanup(tasks.StopAll)
-	if _, body, _ := selectSessions(ctx, nil); len(body.([]tasks.Task)) != 1 || body.([]tasks.Task)[0].ID != "j-2" {
+	if _, body, _ := Commands["sessions.select"](ctx, nil); len(body.([]tasks.Task)) != 1 || body.([]tasks.Task)[0].ID != "j-2" {
 		t.Fatalf("list = %+v, want the Jupyter kind alone", body)
 	}
 	stop := func(id string) int {

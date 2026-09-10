@@ -14,6 +14,8 @@ adding to it needs a client.
   --tunnel-host-token --workflow`, exports `JUPYTER_TOKEN`, and makes no HTTP calls. Its document is one
   `jupyter.sessions.start` step naming `root_dir` and `addr`, the port it declared on the tunnel ahead.
 - **A browser**, for `/terminal/sessions` URLs: the tunnel owner signs in at the Dev Tunnels page.
+- The `/filesystem` routes and commands answer `501` and have no client yet, so they are not contracts;
+  nor is `POST /jupyter/setup`, a route because every command is one.
 
 Both clients run `--version`.
 

@@ -1,10 +1,10 @@
 // Package tasks is the registry of Linkspan's background work: every goroutine, server and child process that
 // outlives a request. A Task is a Run under its own context, with an id, a kind, an address, a state and an error.
-// It names its work in one of three ways: a Run, Linkspan's own code, whose error is fatal; a Server, served on
-// the bound listener; or a Spawn, a child process on the bound port, whose life Linkspan only observes, so its end
-// is recorded and never fatal. Start is the one entry: it binds the address, if any, registers the task and runs
-// it on its own goroutine. A task remains listed after its work ends, as failed or exited, until Stop removes it;
-// StopAll cancels every task, waits for each and empties the registry. Nothing restarts. exec.go forks.
+// Its work is one of three things: a Run, Linkspan's own code, whose error is fatal; a Server, served on the bound
+// listener; or a Spawn, a child process on the bound port, whose life Linkspan only observes, so its end is
+// recorded and never fatal. Start is the one entry: it binds the address, if any, registers the task and runs it
+// on its own goroutine. A task stays listed after its work ends, as failed or exited, until Stop removes it;
+// StopAll cancels every task, waits for each and empties the registry. Nothing restarts. exec.go holds the fork.
 //
 //	Kind         Declared by whoever starts the task.
 //	State*       Starting until the port accepts, then running; failed carries the error; exited is a nil return.

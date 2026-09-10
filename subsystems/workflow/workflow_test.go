@@ -58,7 +58,7 @@ func loadSteps(t *testing.T, steps ...step) error {
 	for i, s := range steps {
 		doc += fmt.Sprintf("  - action: %s\n    name: s%d\n    on: %q\n    params:\n      command: %q\n", s.action, i+1, s.on, s.command)
 	}
-	return loadDoc(t, doc, nil)
+	return loadDoc(t, doc, Commands)
 }
 
 func TestForkingStepDoesNotBlock(t *testing.T) {
@@ -152,7 +152,7 @@ steps:
   - action: shell.exec
     params: {command: /usr/bin/touch %[1]s/c}
 `, dir)
-	if err := loadDoc(t, doc, nil); err != nil {
+	if err := loadDoc(t, doc, Commands); err != nil {
 		t.Fatal(err)
 	}
 	if len(steps) != 3 || steps[0].On != "stop" || steps[1].On != "stop" || steps[2].On != "start" {

@@ -75,7 +75,7 @@ func TestCreateSessionRejectsBadKey(t *testing.T) {
 }
 
 func TestSelectShape(t *testing.T) {
-	_, body, _ := selectSessions(context.Background(), nil)
+	_, body, _ := Commands["sessions.select"](context.Background(), nil)
 	if got := string(marshal(t, body)); got != "[]" {
 		t.Fatalf("an empty sessions list must marshal as [], got %s", got)
 	}
@@ -87,7 +87,7 @@ func TestSelectShape(t *testing.T) {
 		State string `json:"state"`
 		Addr  string `json:"addr"`
 	}
-	_, body, _ = selectSessions(context.Background(), nil)
+	_, body, _ = Commands["sessions.select"](context.Background(), nil)
 	if err := json.Unmarshal(marshal(t, body), &listed); err != nil {
 		t.Fatalf("sessions body is not the documented array: %v", err)
 	}
