@@ -1,12 +1,19 @@
-// Package main parses the flags, binds the HTTP API on loopback, and starts
-// the workflow and the tunnel. Everything runs under procmgr, so one StopAll
-// ends it all and the first fatal error reaches main on one channel.
+// Package main parses the flags, serves the HTTP API on loopback and on the optional unix socket, and starts the
+// tunnel and the workflow's triggers, all under tasks: one StopAll ends everything and the first fatal error
+// reaches main.
 //
-//	version        It is set by the linker, and is "dev" otherwise.
-//	options        Its flag spellings are frozen by docs/COMPATIBILITY.md.
-//	registerFlags  It takes a FlagSet so a test can use a fresh one.
-//	startAll       It validates every input before binding anything.
-//	main           os.Exit is the first defer, so StopAll runs before it.
+//	version                 Set by the linker; "dev" otherwise.
+//	Config                  Which subsystems publish their routes, by name; main passes a literal until a file
+//	                        loader does.
+//	subsystem, subsystems   The one table of what each subsystem offers.
+//	options, registerFlags  Flag spellings are frozen by docs/COMPATIBILITY.md; a test passes its own FlagSet.
+//	routes                  The tree: /api/v1 with health and metrics, then only enabled subsystems.
+//	commands                The workflow's actions, each prefixed by its subsystem, from enabled subsystems only.
+//	startAll                Validates every input before binding anything, then starts every task in one pass, the
+//	                        listeners first: each as h-<port> or h-<socket path>, metrics, the tunnel and the
+//	                        workflow by kind, and the workflow's signal tasks as workflow-<signal>.
+//	main                    os.Exit is the first defer, so StopAll runs before it; the workflow's stop steps run
+//	                        first, with the API still up.
 package main
 
 import (
@@ -14,17 +21,38 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	"github.com/cyber-shuttle/linkspan/internal/httpapi"
-	"github.com/cyber-shuttle/linkspan/internal/procmgr"
-	"github.com/cyber-shuttle/linkspan/internal/workflow"
-	"github.com/cyber-shuttle/linkspan/subsystems/tunnel"
+	"github.com/cyber-shuttle/linkspan/internal/metrics"
+	"github.com/cyber-shuttle/linkspan/internal/router"
+	"github.com/cyber-shuttle/linkspan/internal/tasks"
+	"github.com/cyber-shuttle/linkspan/internal/tunnel"
+	"github.com/cyber-shuttle/linkspan/subsystems/filesystem"
+	"github.com/cyber-shuttle/linkspan/subsystems/jupyter"
+	"github.com/cyber-shuttle/linkspan/subsystems/terminal"
+	"github.com/cyber-shuttle/linkspan/subsystems/vscode"
+	"github.com/cyber-shuttle/linkspan/subsystems/workflow"
 )
 
 var version = "dev"
+
+type Config map[string]bool
+
+type subsystem struct {
+	router   *router.Router
+	commands map[string]router.Command
+}
+
+var subsystems = map[string]subsystem{
+	"vscode":     {vscode.Router, vscode.Commands},
+	"jupyter":    {jupyter.Router, jupyter.Commands},
+	"terminal":   {terminal.Router, terminal.Commands},
+	"filesystem": {filesystem.Router, filesystem.Commands},
+}
 
 type options struct {
 	printVersion    bool
@@ -50,12 +78,37 @@ func registerFlags(fs *flag.FlagSet) *options {
 	return &o
 }
 
-func startAll(opts *options) error {
+func routes(cfg Config) *router.Router {
+	root := router.New(router.Router{Prefix: "/api/v1", Routes: map[string]router.Command{
+		"GET /health": func(context.Context, map[string]any) (int, any, string) {
+			return http.StatusOK, map[string]string{"status": "ok"}, ""
+		},
+		"GET /metrics": func(context.Context, map[string]any) (int, any, string) { return http.StatusOK, metrics.Latest(), "" },
+	}})
+	for name, sub := range subsystems {
+		if cfg[name] {
+			root.Mount(sub.router)
+		}
+	}
+	return root
+}
+
+func commands(cfg Config) map[string]router.Command {
+	out := map[string]router.Command{}
+	for name, sub := range subsystems {
+		for command, c := range sub.commands {
+			if cfg[name] {
+				out[name+"."+command] = c
+			}
+		}
+	}
+	return out
+}
+
+func startAll(opts *options, cfg Config) error {
 	var (
-		tn   *tunnel.Tunnel
-		wf   *workflow.Workflow
-		sock *httpapi.HttpAPI
-		err  error
+		tn  *tunnel.Tunnel
+		err error
 	)
 	if opts.tunnelEnable {
 		if tn, err = tunnel.New(opts.tunnelID, opts.tunnelCluster, opts.tunnelHostToken); err != nil {
@@ -63,29 +116,37 @@ func startAll(opts *options) error {
 		}
 	}
 	if opts.workflow != "" {
-		if wf, err = workflow.New(opts.workflow); err != nil {
+		if err := workflow.Load(opts.workflow, commands(cfg)); err != nil {
 			return err
 		}
 	}
-
-	tcp, err := httpapi.New("tcp", fmt.Sprintf("127.0.0.1:%d", opts.port))
-	if err != nil {
-		return err
-	}
+	addrs := []string{fmt.Sprintf("127.0.0.1:%d", opts.port)}
 	if opts.socket != "" {
-		if sock, err = httpapi.New("unix", opts.socket); err != nil {
-			return err
+		addrs = append(addrs, opts.socket)
+	}
+	h := routes(cfg).Handler()
+	var all []*tasks.Task
+	for _, addr := range addrs {
+		all = append(all, &tasks.Task{Kind: "http", Addr: addr, Server: &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}})
+	}
+	all = append(all, &tasks.Task{Kind: "metrics", Run: metrics.Poll})
+	if tn != nil {
+		all = append(all, &tasks.Task{Kind: "tunnel", Run: tn.Relay})
+	}
+	if opts.workflow != "" {
+		all = append(all, &tasks.Task{Kind: "workflow", Run: workflow.Start})
+		for _, name := range workflow.Signals() {
+			all = append(all, &tasks.Task{ID: "workflow-" + name, Kind: "workflow", Run: workflow.WatchSignal(name)})
 		}
 	}
-	tcp.Start()
-	if sock != nil {
-		sock.Start()
-	}
-	if wf != nil {
-		wf.Start()
-	}
-	if tn != nil {
-		tn.Start()
+	for _, t := range all {
+		created, err := t.Start()
+		if err != nil {
+			return err
+		}
+		if t.Kind == "http" {
+			log.Printf("api: listening on %s", created.Addr)
+		}
 	}
 	return nil
 }
@@ -104,12 +165,12 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer func() {
-		procmgr.StopAll()
+		tasks.StopAll()
 		stop()
 		log.Println("stopped")
 	}()
 
-	if err := startAll(opts); err != nil {
+	if err := startAll(opts, Config{"vscode": true, "jupyter": true, "terminal": false, "filesystem": false}); err != nil {
 		log.Printf("fatal: %v", err)
 		code = 1
 		return
@@ -118,8 +179,12 @@ func main() {
 	select {
 	case <-ctx.Done():
 		log.Println("signal received, stopping")
-	case err := <-procmgr.Failed:
+	case err := <-tasks.Failed:
 		log.Printf("fatal: %v", err)
+		code = 1
+	}
+	if err := workflow.Run(context.Background(), "stop"); err != nil {
+		log.Printf("fatal: workflow: %v", err)
 		code = 1
 	}
 }

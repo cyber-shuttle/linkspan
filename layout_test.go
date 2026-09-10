@@ -1,18 +1,12 @@
-// Enforces the declaration order CONTRIBUTING.md numbers under File Layout on
-// every .go file in the module, this one included.
+// Enforces the declaration order CONTRIBUTING.md numbers under File Layout on every .go file in the module.
 //
-//	decl, parsed, index  They hold what the rules read from one file.
-//	recvName             It returns the identifier a receiver expression names.
-//	parseAll             It parses every file and reads only the doc comment
-//	                     attached to the package clause, since a detached one
-//	                     is invisible to go doc. Uses skip a selector's right
-//	                     side, so net.Listen is not our Listen.
-//	buildIndex           It also parses the outline: a tab then a non-space
-//	                     starts an entry, a tab then spaces continues one, a
-//	                     trailing star covers a family, and names run to the
-//	                     first double space, after which the sentence begins.
-//	check*               Each checks one or two rules, numbered as in
-//	                     CONTRIBUTING.md.
+//	decl, parsed, index
+//	isFunc, exported, recvName
+//	parseAll    Reads only the doc comment attached to the package clause, as go doc does; a selector's right side is
+//	            skipped, so net.Listen is not our Listen.
+//	buildIndex  Parses the outline: a tab then a non-space starts an entry, a tab then spaces continues one, a
+//	            trailing star covers a family, and names run to the first double space.
+//	check*      One or two rules each, numbered as in CONTRIBUTING.md.
 //	TestLayout
 package main
 

@@ -1,29 +1,15 @@
-// Tests for what a client can and cannot make the server do, and for the exit
-// status VS Code reads.
+// Tests for what a client can and cannot make the server do, and for the exit status VS Code reads.
 //
-//	captureSession, blockingStdinSession  They fake a session: one records the
-//	                                      exit status, the other never closes
-//	                                      stdin.
-//	dial, keyPair, serve, connect         They make a client, a key pair, a
-//	                                      server with a known host key, and all
-//	                                      three wired together.
-//	TestPanicIsolation                    A panic in any handler newServer
-//	                                      installs must be recovered.
-//	TestStreamLocalForwardAndTeardown     The forward must echo, and the socket
-//	                                      must close when the channel closes. The
-//	                                      socket directory avoids t.TempDir
-//	                                      because macOS caps socket paths at 104
+//	captureSession, blockingStdinSession  Fake sessions with the ssh.Session methods runCommand touches: one records
+//	                                      the exit status, the other never closes stdin.
+//	exitCode
+//	dial, keyPair, serve, connect
+//	TestPanicIsolation                    A panic in any handler New installs must be recovered.
+//	TestStreamLocalForwardAndTeardown     The socket directory avoids t.TempDir because macOS caps socket paths at 104
 //	                                      characters.
-//	TestRunCommand*                       The exit status must be the child's
-//	                                      own, since without an explicit Exit
-//	                                      gliderlabs reports 0.
-//	TestExecRunsTheCommand                An exec request must run the command
-//	                                      and return its output.
-//	TestRejectsOtherKeys                  A key the server was not given must be
-//	                                      rejected.
-//	TestLocalForwardOnly                  A local forward must work, and a
-//	                                      reverse forward must be refused.
-//	TestPtyIsRefused                      A PTY request must be refused.
+//	TestRunCommand*                       Without an explicit Exit gliderlabs reports 0, and a client that never
+//	                                      closes stdin must not delay it.
+//	TestExecRequestRunsTheCommand, TestRejectsOtherKeys, TestLocalForwardOnly, TestPtyIsRefused
 package sshd
 
 import (
@@ -108,7 +94,7 @@ func serve(t *testing.T, key ssh.PublicKey) (string, ssh.PublicKey) {
 		t.Fatal(err)
 	}
 	hostSigner, hostKey := keyPair(t)
-	srv := newServer(key)
+	srv := New(key)
 	srv.AddHostKey(hostSigner)
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
@@ -135,7 +121,7 @@ func TestPanicIsolation(t *testing.T) {
 		}
 	}()
 	_, key := keyPair(t)
-	srv := newServer(key)
+	srv := New(key)
 	srv.Handler(nil)
 	srv.ChannelHandlers["direct-streamlocal@openssh.com"](nil, nil, nil, nil)
 	srv.SubsystemHandlers["sftp"](nil)
@@ -234,7 +220,7 @@ func TestRunCommandReturnsWithStdinOpen(t *testing.T) {
 	}
 }
 
-func TestExecRunsTheCommand(t *testing.T) {
+func TestExecRequestRunsTheCommand(t *testing.T) {
 	client := connect(t)
 	session, err := client.NewSession()
 	if err != nil {

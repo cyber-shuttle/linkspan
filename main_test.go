@@ -1,22 +1,21 @@
 // Tests for the surface docs/COMPATIBILITY.md freezes.
 //
-//	binary                       It is built once per run.
-//	TestFlagSurface              The flag names must be exactly the frozen list.
-//	TestVersionIsOneLine         The --version output must be the version alone.
-//	TestArchiveName              The archive name must render as goreleaser
-//	                             renders it.
-//	TestBindsLoopbackAndUnwinds  It sends SIGTERM once the socket answers, so
-//	                             every listener is up before the unwind, and
-//	                             every listener must be loopback.
+//	binary                       Built once per run.
+//	TestFlagSurface, TestRoutesFollowConfig, TestVersionIsOneLine, TestArchiveName
+//	TestExampleWorkflowLoads     examples/workflow.yml must name only commands the subsystems export.
+//	TestBindsLoopbackAndUnwinds  Sends SIGTERM once the socket answers, so every listener is up before the unwind.
 package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +27,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/cyber-shuttle/linkspan/subsystems/workflow"
 	"gopkg.in/yaml.v3"
 )
 
@@ -62,6 +62,30 @@ func TestFlagSurface(t *testing.T) {
 	fs.VisitAll(func(f *flag.Flag) { got = append(got, f.Name) })
 	if !slices.Equal(got, want) {
 		t.Errorf("the flag surface changed:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestRoutesFollowConfig(t *testing.T) {
+	get := func(cfg Config, path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		routes(cfg).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec
+	}
+	if rec := get(Config{}, "/api/v1/health"); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"status":"ok"}` {
+		t.Fatalf("health answered %d %s, want the documented literal", rec.Code, rec.Body)
+	}
+	var snap map[string]any
+	if rec := get(Config{}, "/api/v1/metrics"); rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &snap) != nil {
+		t.Fatalf("metrics answered %d %s, want an object", rec.Code, rec.Body)
+	}
+	all := Config{"vscode": true, "jupyter": true, "terminal": true, "filesystem": true}
+	for _, path := range []string{"/api/v1/vscode/sessions", "/api/v1/jupyter/sessions", "/api/v1/terminal/sessions"} {
+		if rec := get(all, path); rec.Code != http.StatusOK {
+			t.Errorf("%s answered %d with its subsystem enabled, want 200", path, rec.Code)
+		}
+		if rec := get(Config{}, path); rec.Code != http.StatusNotFound {
+			t.Errorf("%s answered %d with its subsystem disabled, want 404", path, rec.Code)
+		}
 	}
 }
 
@@ -119,6 +143,16 @@ func TestArchiveName(t *testing.T) {
 		if got.String() != want {
 			t.Errorf("%s archive is %q, want %q", arch, got.String(), want)
 		}
+	}
+}
+
+func TestExampleWorkflowLoads(t *testing.T) {
+	all := Config{"vscode": true, "jupyter": true, "terminal": true, "filesystem": true}
+	if err := workflow.Load("examples/workflow.yml", commands(all)); err != nil {
+		t.Fatal(err)
+	}
+	if sigs := workflow.Signals(); !slices.Equal(sigs, []string{"SIGUSR1"}) {
+		t.Fatalf("the example watches %v, want SIGUSR1", sigs)
 	}
 }
 

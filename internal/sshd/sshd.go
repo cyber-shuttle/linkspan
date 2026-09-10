@@ -1,28 +1,17 @@
-// Package sshd is the SSH server VS Code Remote-SSH connects to: one public
-// key per server, commands run as the job's user. Every handler and goroutine
-// recovers from panics, so a client cannot bring Linkspan down. A stopped
-// server is not replaced.
+// Package sshd is the SSH server VS Code Remote-SSH connects to: one public key per server, commands run as the job's
+// user. Every handler and goroutine recovers from panics, so a client cannot bring Linkspan down.
 //
-//	Server                   Its Start registers the bound server under procmgr
-//	                         as s-<port>.
-//	guard                    It is the one recover body; callers start their own
-//	                         goroutine.
-//	runCommand               It runs a command on the session and reports the
-//	                         exit status VS Code reads. Stdin is a pipe copied by
-//	                         hand, since a client that never closes stdin would
-//	                         hold Wait open after the child exits.
-//	handleDirectStreamLocal  It forwards a channel to a unix socket. The payload
-//	                         mirrors x/crypto/ssh's unexported
-//	                         streamLocalChannelOpenDirectMsg.
-//	newServer                It builds a server for one key with no PTY, local
-//	                         forwarding only, and sh running either the
-//	                         requested command or the commands on stdin, as
-//	                         OpenSSH does for a session without a PTY. The
-//	                         handler tables and the key callback are wrapped by
-//	                         iteration so no entry is left unguarded; the pty
-//	                         and forwarding callbacks return constants.
-//	New                      It binds a loopback port for one key; the port
-//	                         accepts before it returns.
+//	exitNeverRan, exitSignalled  What VS Code reads when the command could not run, or was signalled.
+//	guard                        The one recover body; callers start their own goroutine.
+//	runCommand                   Reports the exit status VS Code reads. Stdin is a pipe copied by hand, since a client
+//	                             that never closes stdin would otherwise delay Wait by tasks's pipe grace after the
+//	                             child exits.
+//	handleDirectStreamLocal      Forwards a channel to a unix socket; the payload mirrors x/crypto/ssh's unexported
+//	                             streamLocalChannelOpenDirectMsg.
+//	New                          A server for one key: no PTY, local forwarding only, sh running the requested
+//	                             command or the commands on stdin. The handler tables are wrapped by iteration and
+//	                             the session handler and key callback by hand, so no entry is left unguarded; the
+//	                             pty and forwarding callbacks return constants.
 package sshd
 
 import (
@@ -37,7 +26,7 @@ import (
 	"runtime/debug"
 	"sync"
 
-	"github.com/cyber-shuttle/linkspan/internal/procmgr"
+	"github.com/cyber-shuttle/linkspan/internal/tasks"
 	"github.com/gliderlabs/ssh"
 	"github.com/pkg/sftp"
 	gossh "golang.org/x/crypto/ssh"
@@ -47,13 +36,6 @@ const (
 	exitNeverRan  = 127
 	exitSignalled = 255
 )
-
-type Server struct {
-	ID   string
-	Port int
-	ln   net.Listener
-	srv  *ssh.Server
-}
 
 func guard(name string, fn func()) {
 	defer func() {
@@ -70,7 +52,7 @@ func runCommand(ctx context.Context, s ssh.Session, cmd *exec.Cmd) {
 
 	stdin, _ := cmd.StdinPipe()
 	go guard("session stdin copy", func() { defer func() { _ = stdin.Close() }(); _, _ = io.Copy(stdin, s) })
-	err := procmgr.Exec(ctx, cmd)
+	err := tasks.Exec(ctx, cmd)
 
 	code := exitNeverRan
 	switch {
@@ -111,7 +93,7 @@ func handleDirectStreamLocal(_ *ssh.Server, _ *gossh.ServerConn, newChan gossh.N
 	go guard("streamlocal copy", func() { defer closeBoth(); _, _ = io.Copy(ch, sock) })
 }
 
-func newServer(key ssh.PublicKey) *ssh.Server {
+func New(key ssh.PublicKey) *ssh.Server {
 	srv := &ssh.Server{
 		Handler: func(s ssh.Session) {
 			user, remote := s.User(), s.RemoteAddr()
@@ -165,18 +147,4 @@ func newServer(key ssh.PublicKey) *ssh.Server {
 		srv.SubsystemHandlers[name] = func(s ssh.Session) { guard("handler "+name, func() { h(s) }) }
 	}
 	return srv
-}
-
-func New(key ssh.PublicKey) (*Server, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, fmt.Errorf("sshd: %w", err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	return &Server{ID: fmt.Sprintf("s-%d", port), Port: port, ln: ln, srv: newServer(key)}, nil
-}
-
-func (s *Server) Start() {
-	log.Printf("sshd: %s listening on %s", s.ID, s.ln.Addr())
-	procmgr.Start(procmgr.KindSSHD, s.ID, s.ln.Addr().String(), procmgr.Serve(s.ln, s.srv))
 }

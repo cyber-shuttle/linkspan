@@ -27,27 +27,35 @@ linkspan
 ├── main_test.go               # the surface docs/COMPATIBILITY.md freezes
 ├── layout_test.go             # the file-layout rules below
 ├── docs/COMPATIBILITY.md      # what clients depend on
+├── examples/workflow.yml      # a workflow that exercises every trigger
 ├── internal/
-│   ├── httpapi/               # every route, handler and listener
-│   ├── procmgr/               # start, stop and query long-running processes; no restart policy
-│   └── workflow/              # YAML workflow: load and run shell.exec steps in order
+│   ├── router/                # a tree of routers; main.go roots it at /api/v1
+│   ├── tasks/                 # the task registry; Start is the one way in
+│   ├── metrics/               # cgroup v2 + nvidia-smi job metrics
+│   ├── sshd/                  # SSH server (gliderlabs/ssh)
+│   ├── tunnel/                # relay hosting and tunnel port publishing
+│   └── install/               # ~/.cybershuttle: fetched binaries, uv, Python, the Jupyter environment
 └── subsystems/
-    ├── metrics/               # cgroup v2 + nvidia-smi job metrics
-    ├── sshd/                  # SSH server (gliderlabs/ssh)
-    └── tunnel/                # devtunnel CLI download + relay hosting
+    ├── workflow/              # YAML steps on lifecycle triggers; no routes
+    ├── vscode/                # /api/v1/vscode/sessions: SSH servers for VS Code Remote-SSH
+    ├── jupyter/               # /api/v1/jupyter/sessions: Jupyter sessions in a uv-built environment
+    ├── terminal/              # /api/v1/terminal/sessions: ttyd web terminals
+    └── filesystem/            # no routes yet
 ```
 
-`subsystems/` are capabilities hosted for the client; `internal/` is Linkspan's own infrastructure. The
-subsystems report data and run processes and handle no request. `internal/httpapi` is the only
-package that handles requests, and `main.go` the only one that reads flags.
+`internal/` is Linkspan's own infrastructure and its primitives, which handle no request. `subsystems/`
+are the capabilities a client drives: each exports `Router`, a `router.Router` at its own prefix with its
+commands and routes relative to it, and `Commands`, the same commands by name, which a workflow step
+calls with its params. `main.go` mounts the ones its `Config` enables into the `/api/v1`
+root, and is the only file that reads flags.
 
 ## File Layout
 
 Go fixes no declaration order, so this repository picks one and enforces it in `TestLayout`
 (`layout_test.go`):
 
-1. The doc comment attached to the package clause names every top-level function and type. `Name*`
-   covers a family; a method is covered by its receiver's entry.
+1. The doc comment attached to the package clause names every top-level declaration, methods included.
+   `Name*` covers a family; a fake's interface methods are covered by its type's entry.
 2. A const, var or type used by two or more functions sits above the first function.
 3. A method is declared after the type it is on.
 4. Every unexported function precedes every exported one, a method taking its receiver's visibility.
@@ -55,9 +63,9 @@ Go fixes no declaration order, so this repository picks one and enforces it in `
 6. The doc comment names them in the order the file declares them.
 7. Every doc-comment entry names something the file declares.
 
-Files read bottom-up: primitives first, the surface built on them last. An outline entry is a sentence a
-reader can follow without the code: what the name is for, and the reason, contract or client behind it. A
-name whose signature says it all stands alone. Names on an entry line end at the first double space.
+Files read bottom-up: primitives first, the surface built on them last. An outline entry carries only what the
+code cannot say: the reason, contract or client behind a name. A name whose signature says it all stands
+alone. Names on an entry line end at the first double space, and comment lines run to 120 columns.
 
 ## Checks
 

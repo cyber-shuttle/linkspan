@@ -22,19 +22,27 @@ linters:
         linters: [gosec]
         text: "G204|G304|G306|G702"
       # Reads the --workflow file (G304) and runs its commands (G204).
-      - path: internal/workflow/workflow\.go
+      - path: subsystems/workflow/workflow\.go
         linters: [gosec]
         text: "G304|G204"
       # Reads a path the kernel wrote to /proc/self/cgroup (G304, G703).
-      - path: subsystems/metrics/metrics\.go
+      - path: internal/metrics/metrics\.go
         linters: [gosec]
         text: "G304|G703"
-      # Writes the devtunnel binary executable (G306) and runs it (G204).
-      - path: subsystems/tunnel/tunnel\.go
+      # Writes a fetched binary executable (G306).
+      - path: internal/install/install\.go
         linters: [gosec]
-        text: "G306|G204"
+        text: "G306"
+      # Runs the fetched devtunnel binary (G204).
+      - path: internal/tunnel/tunnel\.go
+        linters: [gosec]
+        text: "G204"
+      # Run the uv, python and ttyd binaries they installed, and the user's shell (G204, G702).
+      - path: subsystems/(jupyter/jupyter|terminal/terminal)\.go
+        linters: [gosec]
+        text: "G204|G702"
       # Runs the command the authenticated client sends (G204, G702).
-      - path: subsystems/sshd/sshd\.go
+      - path: internal/sshd/sshd\.go
         linters: [gosec]
         text: "G204|G702"
 

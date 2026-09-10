@@ -1,0 +1,33 @@
+# A workflow to run against Linkspan and watch every trigger fire:
+#
+#   linkspan --port 8080 --workflow examples/workflow.yml
+#
+# start logs a line and builds the Jupyter environment under ~/.cybershuttle; ready, at once when no tunnel is
+# hosted, starts a Jupyter server, listed at http://127.0.0.1:8080/api/v1/jupyter/sessions; SIGUSR1, as
+# `kill -USR1 <pid>` or Slurm's --signal sends it, logs a line; stop, on Ctrl-C or SIGTERM, logs a line
+# before anything is torn down. Every line reaches Linkspan's stdout.
+name: example
+steps:
+  - on: start
+    tasks:
+      - name: Announce
+        action: shell.exec
+        params:
+          command: echo workflow started
+      - name: Build the Jupyter environment
+        action: jupyter.setup
+  - name: Jupyter
+    on: ready
+    action: jupyter.sessions.start
+    params:
+      root_dir: /tmp
+  - name: Checkpoint before the time limit
+    on: SIGUSR1
+    action: shell.exec
+    params:
+      command: echo time limit near, checkpointing
+  - name: Sync results
+    on: stop
+    action: shell.exec
+    params:
+      command: echo stopping, syncing results
