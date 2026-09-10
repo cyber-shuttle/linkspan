@@ -1,4 +1,4 @@
-// Package filesystem is the capability a file browser will drive.
+// Package filesystem will let you mount datasets, copy files and manage the job's files. Nothing is served yet.
 //
 //	Router    No route yet: adding one is a contract that needs a client (docs/COMPATIBILITY.md).
 //	Commands  None yet.

@@ -1,11 +1,10 @@
-// Package workflow runs the steps a job's YAML names, each on the trigger it names: start, once the listeners are
-// up; ready, after the start steps once the tunnel is hosting, or at once without one; stop, when Linkspan is told
-// to exit; or a signal such as SIGUSR1, which Slurm sends ahead of a time limit. A step is one action with its
-// params, or a list of tasks under one trigger, each an action with its params; a trigger's tasks run in order and
-// stop at the first failure. shell.exec is the package's own command: params.command split on whitespace and run
-// without a shell, inheriting Linkspan's stdout and stderr, so a forking step cannot hold the workflow open. Any
-// other action names a command a subsystem exports, as vscode.sessions.start, called with the params, so a session
-// is bootstrapped from the file. One document is loaded per process.
+// Package workflow runs the steps your YAML names at the moments of the job's life you choose: start, once the
+// API is up; ready, once the tunnel is hosting, or at once without one; stop, when Linkspan is told to exit; or
+// a signal such as SIGUSR1, which Slurm sends ahead of the time limit. A step is one action with its params, or a
+// list of tasks under one trigger; they run in order and the first failure stops them. shell.exec runs a command
+// without a shell, so nothing expands and a forking command cannot hold the workflow open. Any other action is
+// one a subsystem offers, as vscode.sessions.start, with the params it takes, so a workspace is set up from the
+// file. One document per job.
 //
 //	signals          The triggers beyond start, ready and stop, by name.
 //	Step             On defaults to start; Tasks, when given, are the actions under it, else Action and Params are

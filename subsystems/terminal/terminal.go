@@ -1,14 +1,14 @@
-// Package terminal is the capability a browser drives: a login shell served as a web terminal by ttyd, fetched on
-// first use, one per session, published on the tunnel and reachable at its URL after the tunnel owner's sign-in.
-// Sessions are served over /api/v1/terminal/sessions.
+// Package terminal gives you a shell in the browser. Post a working directory to /api/v1/terminal/sessions and
+// a login shell comes up behind ttyd, fetched on first use, published on the tunnel and answered with its URL;
+// You must be signed in to access it. If you are not signed in, you will be redirected to the sign-in page.
 //
 //	kind
 //	ttydVersion, ttydBase, assets  The release Linkspan fetches, by platform.
 //	selectSessions
 //	startSession                   Answers 501 on a platform without a ttyd build; else spawns a terminal for
-//	                               params.cwd: fetches ttyd and publishes the port, then runs ttyd writable on
-//	                               loopback with the user's shell, or sh, as a login shell; an empty cwd is
-//	                               Linkspan's own directory.
+//	                               params.cwd: fetches ttyd, publishes the port and runs ttyd writable on loopback
+//	                               with the user's shell, or sh, as a login shell; an empty cwd is Linkspan's own
+//	                               directory.
 //	stopSession
 //	Router                         Patterns and shapes are frozen by docs/COMPATIBILITY.md.
 //	Commands                       The create and stop routes, for workflow steps.

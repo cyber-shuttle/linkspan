@@ -1,20 +1,20 @@
-// Package jupyter is the capability cs-control's Jupyter runtime drives: a Jupyter Server per root directory, built
-// into one shared environment under ~/.cybershuttle, started on loopback with a token Linkspan mints, published on the
-// tunnel, and served over /api/v1/jupyter/sessions. The cs-jupyter site talks to a stock server.
+// Package jupyter gives you a Jupyter Server. Post a root directory to /api/v1/jupyter/sessions, or name one in a
+// workflow step. Linkspan will start a jupyter server there, publish its port on the tunnel, and answers with the
+// URL and token that open it in a browser. Specify a port and token of your own, or let Linkspan choose one.
 //
 //	kind
 //	newToken
 //	setupMu                             Two uv runs on one environment race.
-//	setup                               Installs uv on first use without touching shell profiles, then creates the
-//	                                    environment and installs the packages, idempotently; each step runs with
-//	                                    Linkspan's stdio and uv's paths under install.Dir. A workflow runs it on
-//	                                    start to build ahead of the first session.
+//	setup                               Installs uv without touching shell profiles, then creates the environment
+//	                                    and installs the packages, idempotently, with Linkspan's stdio and uv's
+//	                                    paths under install.Dir. A workflow runs it on start to build ahead of the
+//	                                    first session.
 //	selectSessions
 //	startSession                        Spawns a server for params.root_dir on params.addr, loopback at any port by
-//	                                    default: sets the environment up and publishes the port anonymously, the
-//	                                    token being the credential, then runs the server with params.token, else the
-//	                                    JUPYTER_TOKEN Linkspan inherited, else one it mints, in JUPYTER_TOKEN, which
-//	                                    every Jupyter Server reads; an empty root_dir is Linkspan's own directory.
+//	                                    default: sets the environment up, publishes the port anonymously, the
+//	                                    token being the credential, and runs the server with params.token, else the
+//	                                    JUPYTER_TOKEN Linkspan inherited, else one it mints; an empty root_dir is
+//	                                    Linkspan's own directory.
 //	stopSession
 //	Router                              Patterns and shapes are frozen by docs/COMPATIBILITY.md.
 //	Commands                            setup, and the create and stop routes, for workflow steps.

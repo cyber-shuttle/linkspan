@@ -1,11 +1,12 @@
-// Package vscode is the capability cs-bridge drives: one SSH server per public key for VS Code Remote-SSH, listed and
-// started over /api/v1/vscode/sessions. The servers are internal/sshd; this package owns the wire shape.
+// Package vscode gives VS Code a way in. Post your public key to /api/v1/vscode/sessions and an SSH server for
+// that key alone comes up on a loopback port, listed with its id and address for as long as the job runs; point
+// Remote-SSH at it through the tunnel. The server runs commands as the job's user, forwards ports and serves SFTP,
+// and refuses PTYs and passwords. This package owns the wire shape; the server is internal/sshd.
 //
 //	kind            The SSH kind, so ids are s-<port>.
 //	selectSessions
-//	startSession    Parses params.authorized_key and serves one sshd server for it under tasks; the port accepts
-//	                before it answers. A key carrying authorized_keys options is refused, because the server would
-//	                ignore them.
+//	startSession    Serves one sshd server for params.authorized_key under tasks; the port accepts before it
+//	                answers. A key carrying authorized_keys options is refused, since the server would ignore them.
 //	Router          Patterns and shapes are frozen by docs/COMPATIBILITY.md.
 //	Commands        sessions.start, the create route, for workflow steps.
 package vscode
