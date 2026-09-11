@@ -2,7 +2,8 @@
 // publishes ports on it for the servers the subsystems start. A relay that dies ends the task and is not
 // restarted.
 //
-//	apiVersion, readyLine  What the relay prints once it is hosting.
+//	apiVersion     The Dev Tunnels REST API version portRequest sends.
+//	readyLine      What the relay prints once it is hosting.
 //	output         The last 64KB of the relay's stdout and stderr; onReady runs once the ready line has appeared.
 //	Tunnel
 //	assets, cliBase, apiBase, active, none  cliBase and apiBase are test seams; none is closed, for no tunnel.
@@ -30,7 +31,6 @@ import (
 	"net/http"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -118,9 +118,9 @@ func (t *Tunnel) portRequest(ctx context.Context, method string, port int, anony
 }
 
 func (t *Tunnel) Relay(ctx context.Context) error {
-	asset, ok := assets[runtime.GOOS+"/"+runtime.GOARCH]
-	if !ok {
-		return fmt.Errorf("no devtunnel binary for %s/%s", runtime.GOOS, runtime.GOARCH)
+	asset, err := install.Asset(assets, "devtunnel")
+	if err != nil {
+		return err
 	}
 	bin := filepath.Join(install.Dir(), "bin", "devtunnel")
 	if err := install.Fetch(ctx, bin, cliBase+asset+"-devtunnel"); err != nil {
@@ -131,7 +131,7 @@ func (t *Tunnel) Relay(ctx context.Context) error {
 	out := &output{onReady: func() { t.readyOnce.Do(func() { close(t.ready) }) }}
 	cmd := exec.Command(bin, "host", qualifiedID, "--access-token", t.token)
 	cmd.Stdout, cmd.Stderr = out, out
-	err := tasks.Exec(ctx, cmd)
+	err = tasks.Exec(ctx, cmd)
 	if err == nil {
 		err = errors.New("exit status 0")
 	}

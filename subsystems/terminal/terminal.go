@@ -16,12 +16,10 @@ package terminal
 import (
 	"cmp"
 	"context"
-	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 
 	"github.com/cyber-shuttle/linkspan/internal/install"
@@ -44,9 +42,9 @@ var assets = map[string]string{
 }
 
 func startSession(_ context.Context, params map[string]any) (int, any, string) {
-	asset, ok := assets[runtime.GOOS+"/"+runtime.GOARCH]
-	if !ok {
-		return http.StatusNotImplemented, nil, fmt.Sprintf("no ttyd binary for %s/%s", runtime.GOOS, runtime.GOARCH)
+	asset, err := install.Asset(assets, "ttyd")
+	if err != nil {
+		return http.StatusNotImplemented, nil, err.Error()
 	}
 	cwd, _ := params["cwd"].(string)
 	created, err := (&tasks.Task{Kind: kind, Attrs: func(t tasks.Task) map[string]string {

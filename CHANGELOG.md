@@ -10,24 +10,24 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 - `/api/v1/jupyter/sessions`: Jupyter sessions created, listed and stopped by Linkspan, in an
   environment it builds with `uv` under `~/.cybershuttle`, with a token it mints. This replaces the
   workflow cs-control shipped for the same purpose.
-- `/api/v1/terminal/sessions`: web terminals served by `ttyd`, fetched on first use.
+- `/api/v1/terminal/sessions`: web terminals served by `ttyd`, fetched on first use. The subsystem is off
+  as shipped.
 - Workflow triggers: a step's `on` is `start`, `ready`, `stop`, or `SIGUSR1`, `SIGUSR2` or `SIGHUP`, so a
   workflow bootstraps a workspace once the tunnel is hosting, checkpoints before Slurm's time limit and
   syncs on exit. A step without `on` runs on `start`, as before.
-- Workflow actions beyond `shell.exec`: `vscode.sessions.start`, `jupyter.setup`,
-  `jupyter.sessions.start` and `.stop`, `terminal.sessions.start` and `.stop`, with `params` as the
-  request body, so VS Code and Jupyter are bootstrapped from the file. A step's `tasks` is a list of
-  them under one `on`.
-- `examples/workflow.yml`, a workflow that exercises every trigger against a local Linkspan.
+- Workflow actions beyond `shell.exec`: every subsystem command, `vscode.sessions.select` and `.start`,
+  `jupyter.setup`, `jupyter.sessions.select`, `.start` and `.stop`, `terminal.sessions.select`, `.start`
+  and `.stop`, and the `filesystem` placeholders, with `params` as the request body, so VS Code and
+  Jupyter are bootstrapped from the file. A step's `tasks` is a list of them under one `on`.
+- `examples/workflow.yml`, a workflow that exercises each kind of trigger against a local Linkspan.
 - Every subsystem command is a route, so `POST /api/v1/jupyter/setup` builds the environment ahead of
-  the first server and the `/filesystem` placeholders answer `501`.
+  the first server and the `/filesystem` placeholders answer `501` where enabled, `404` as shipped.
 - `jupyter.sessions.start` takes `addr` and `token`, and takes the token from `JUPYTER_TOKEN` when given
   none, so cs-control's workflow is one step that reuses Linkspan's server.
 - Every listed process is one object: `id`, `addr`, `state`, `error` and its own fields. A VS Code
   session therefore also carries `error`.
 - A Jupyter server or terminal created while a tunnel is hosted is added to the tunnel, with the
-  `--tunnel-host-token`, for as long as it runs, and answered with its public URL. The port is
-  non-anonymous.
+  `--tunnel-host-token`, for as long as it runs, and answered with its public URL.
 - `make check`: format, vet, lint, vulnerability scan and race tests, as CI runs them.
 - `TestLayout` enforces the declaration order and outline that `CONTRIBUTING.md` describes.
 - `docs/COMPATIBILITY.md` states the exit status an SSH session reports.
@@ -38,7 +38,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   a terminal's port still needs the tunnel owner's sign-in.
 - `metrics`, `sshd` and `tunnel` moved to `internal/` as primitives.
 - `subsystems/` now holds `workflow`, `vscode`, `terminal`, `jupyter` and `filesystem`.
-- A `Config` in `main.go` to turn subsystems on/off.
+- Subsystems are turned on and off by a `config` map in `main.go`.
 - `internal/tasks` is one registry: a `Task` is a `Run` under a context with a state, listed until
   stopped even after `Run` ends. The launch gate, published stop and liveness probe are removed; a panic
   in a task is its error. `Start` is the one way in and binds the address a task names; a task's

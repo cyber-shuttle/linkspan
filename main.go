@@ -3,8 +3,8 @@
 // first fatal error reaches main.
 //
 //	version                 Set by the linker; "dev" otherwise.
-//	Config                  Which subsystems publish their routes, by name; main passes a literal until a file
-//	                        loader does.
+//	config                  Which subsystems publish their routes and actions, by name; main passes a literal until
+//	                        a file loader does.
 //	subsystem, subsystems   The one table of what each subsystem offers.
 //	options, registerFlags  Flag spellings are frozen by docs/COMPATIBILITY.md; a test passes its own FlagSet.
 //	routes                  The tree: /api/v1 with health and metrics, then only enabled subsystems.
@@ -41,7 +41,7 @@ import (
 
 var version = "dev"
 
-type Config map[string]bool
+type config map[string]bool
 
 type subsystem struct {
 	router   *router.Router
@@ -49,6 +49,7 @@ type subsystem struct {
 }
 
 var subsystems = map[string]subsystem{
+	"workflow":   {workflow.Router, nil},
 	"vscode":     {vscode.Router, vscode.Commands},
 	"jupyter":    {jupyter.Router, jupyter.Commands},
 	"terminal":   {terminal.Router, terminal.Commands},
@@ -79,7 +80,7 @@ func registerFlags(fs *flag.FlagSet) *options {
 	return &o
 }
 
-func routes(cfg Config) *router.Router {
+func routes(cfg config) *router.Router {
 	root := router.New("/api/v1", map[string]router.Command{
 		"GET /health": func(context.Context, map[string]any) (int, any, string) {
 			return http.StatusOK, map[string]string{"status": "ok"}, ""
@@ -94,19 +95,20 @@ func routes(cfg Config) *router.Router {
 	return root
 }
 
-func commands(cfg Config) map[string]router.Command {
+func commands(cfg config) map[string]router.Command {
 	out := maps.Clone(workflow.Commands)
 	for name, sub := range subsystems {
+		if !cfg[name] {
+			continue
+		}
 		for command, c := range sub.commands {
-			if cfg[name] {
-				out[name+"."+command] = c
-			}
+			out[name+"."+command] = c
 		}
 	}
 	return out
 }
 
-func startAll(opts *options, cfg Config) error {
+func startAll(opts *options, cfg config) error {
 	var (
 		tn  *tunnel.Tunnel
 		err error
@@ -171,7 +173,7 @@ func main() {
 		log.Println("stopped")
 	}()
 
-	if err := startAll(opts, Config{"vscode": true, "jupyter": true, "terminal": false, "filesystem": false}); err != nil {
+	if err := startAll(opts, config{"workflow": true, "vscode": true, "jupyter": true, "terminal": false, "filesystem": false}); err != nil {
 		log.Printf("fatal: %v", err)
 		code = 1
 		return

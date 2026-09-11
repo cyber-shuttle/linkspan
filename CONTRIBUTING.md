@@ -28,7 +28,9 @@ linkspan
 ├── layout_test.go             # the file-layout rules below
 ├── docs/COMPATIBILITY.md      # what clients depend on
 ├── docs/assets/               # the README's architecture diagram, architecture.mmd rendered to .png
-├── examples/workflow.yml      # a workflow that exercises every trigger
+├── examples/workflow.yml      # a workflow that exercises each kind of trigger
+├── Makefile                   # make check, make tools, and the tagged cross-compile
+├── .golangci.yml              # the linters and the one place suppressions live
 ├── internal/
 │   ├── router/                # a tree of routers; main.go roots it at /api/v1
 │   ├── tasks/                 # the task registry; Start is the one way in
@@ -38,7 +40,7 @@ linkspan
 │   ├── install/               # ~/.cybershuttle: fetched binaries, uv, Python, the Jupyter environment
 │   └── sessions/              # the list and stop commands the session subsystems share
 └── subsystems/
-    ├── workflow/              # YAML steps on lifecycle triggers; no routes
+    ├── workflow/              # /api/v1/workflow/shell/exec, and YAML steps on lifecycle triggers
     ├── vscode/                # /api/v1/vscode/sessions: SSH servers for VS Code Remote-SSH
     ├── jupyter/               # /api/v1/jupyter/sessions: Jupyter sessions in a uv-built environment
     ├── terminal/              # /api/v1/terminal/sessions: ttyd web terminals
@@ -48,8 +50,9 @@ linkspan
 `internal/` is Linkspan's own infrastructure and its primitives, with no route of their own. `subsystems/`
 are the capabilities a client drives: each exports `Commands`, its actions by name, and `Router`, a
 `router.Router` at its own prefix whose every route names a `Commands` entry, so one function answers a
-request and a workflow step. `TestRoutesCoverCommands` checks that the two tables agree. `main.go` mounts
-the ones its `Config` enables into the `/api/v1` root, and is the only file that reads flags. The README's
+request and a workflow step. `TestRoutesCoverCommands` checks that every command a
+subsystem exports is behind one of its routes. `main.go` mounts the ones its `config` enables into the
+`/api/v1` root, and is the only file that reads flags. The README's
 [Architecture](README.md#architecture) section states the three ideas the code is built on.
 
 Adding a subsystem is one package that exports the two tables and one line in `main.go`'s `subsystems`
@@ -62,7 +65,8 @@ README's diagram is added to `docs/assets/architecture.mmd`, rendered with
 Go fixes no declaration order, so this repository picks one and enforces it in `TestLayout`
 (`layout_test.go`):
 
-1. The doc comment attached to the package clause names every top-level declaration, methods included.
+1. The doc comment attached to the package clause names every top-level type, function and method. A
+   const or var may be named.
    `Name*` covers a family, and a fake's interface methods are covered by its type's entry.
 2. A const, var or type used by two or more functions sits above the first function.
 3. A method is declared after the type it is on.

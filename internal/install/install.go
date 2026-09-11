@@ -1,6 +1,7 @@
 // Package install owns ~/.cybershuttle, where everything Linkspan fetches or builds lives, beside the binary the
 // clients install there. Nothing is verified beyond the transport.
 //
+//	Asset  The entry of a GOOS/GOARCH-keyed table for this platform, or an error naming what has no build for it.
 //	Dir    ~/.cybershuttle.
 //	Fetch  Does nothing when dst is present; otherwise downloads src through a sibling file renamed into place, so a
 //	       failed transfer publishes nothing.
@@ -14,7 +15,16 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 )
+
+func Asset(table map[string]string, name string) (string, error) {
+	asset, ok := table[runtime.GOOS+"/"+runtime.GOARCH]
+	if !ok {
+		return "", fmt.Errorf("no %s binary for %s/%s", name, runtime.GOOS, runtime.GOARCH)
+	}
+	return asset, nil
+}
 
 func Dir() string {
 	home, _ := os.UserHomeDir()

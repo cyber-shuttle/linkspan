@@ -1,4 +1,4 @@
-# A workflow that exercises every trigger against a local Linkspan. Run it, then verify each step:
+# A workflow that exercises each kind of trigger against a local Linkspan. Run it, then verify each step:
 #
 #   linkspan --port 8080 --workflow examples/workflow.yml
 #

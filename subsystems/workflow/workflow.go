@@ -19,8 +19,7 @@
 //	Load             Reads and validates the document against the commands main enables, so an invalid one is
 //	                 refused at startup.
 //	Commands         shell.exec, the package's own action, which main adds unprefixed.
-//	Router           POST /workflow/shell/exec; main mounts no workflow router, a workflow being driven by its
-//	                 document.
+//	Router           POST /workflow/shell/exec, the same command as a route.
 package workflow
 
 import (
