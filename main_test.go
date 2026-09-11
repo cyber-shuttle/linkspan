@@ -81,7 +81,7 @@ func TestRoutesFollowConfig(t *testing.T) {
 	if rec := get(config{}, "/api/v1/metrics"); rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &snap) != nil {
 		t.Fatalf("metrics answered %d %s, want an object", rec.Code, rec.Body)
 	}
-	all := config{"vscode": true, "jupyter": true, "terminal": true, "filesystem": true}
+	all := config{"workflow": true, "vscode": true, "jupyter": true, "terminal": true, "filesystem": true}
 	for _, path := range []string{"/api/v1/vscode/sessions", "/api/v1/jupyter/sessions", "/api/v1/terminal/sessions"} {
 		if rec := get(all, path); rec.Code != http.StatusOK {
 			t.Errorf("%s answered %d with its subsystem enabled, want 200", path, rec.Code)
@@ -97,6 +97,9 @@ func TestRoutesFollowConfig(t *testing.T) {
 	}
 	if post(all, "/api/v1/filesystem/mount") != http.StatusNotImplemented || post(config{}, "/api/v1/filesystem/mount") != http.StatusNotFound {
 		t.Error("a filesystem route must answer 501 when enabled and 404 when disabled")
+	}
+	if post(all, "/api/v1/workflow/shell/exec") != http.StatusBadRequest || post(config{}, "/api/v1/workflow/shell/exec") != http.StatusNotFound {
+		t.Error("the workflow route must refuse an empty command when enabled and answer 404 when disabled")
 	}
 }
 

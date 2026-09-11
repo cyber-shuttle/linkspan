@@ -40,7 +40,7 @@ linkspan
 │   ├── install/               # ~/.cybershuttle: fetched binaries, uv, Python, the Jupyter environment
 │   └── sessions/              # the list and stop commands the session subsystems share
 └── subsystems/
-    ├── workflow/              # YAML steps on lifecycle triggers; no routes
+    ├── workflow/              # /api/v1/workflow/shell/exec, and YAML steps on lifecycle triggers
     ├── vscode/                # /api/v1/vscode/sessions: SSH servers for VS Code Remote-SSH
     ├── jupyter/               # /api/v1/jupyter/sessions: Jupyter sessions in a uv-built environment
     ├── terminal/              # /api/v1/terminal/sessions: ttyd web terminals

@@ -239,6 +239,7 @@ the model.
 |---|---|---|
 | GET | `/api/v1/health` | `{"status":"ok"}` |
 | GET | `/api/v1/metrics` | `{"memBytes":<n>,"cpuUsageUsec":<n>,"gpus":[{"index":<n>,"utilPct":<n>,"memUsedMiB":<n>,"memTotalMiB":<n>}]}`; a missing source omits its field, and the object is the last sample of a 5s loop |
+| POST | `/api/v1/workflow/shell/exec` | `200` once the command exits 0; takes `{"command": "<argv>"}`, split on spaces and run without a shell |
 | GET | `/api/v1/vscode/sessions` | `[{"id":"s-<port>","addr":"127.0.0.1:<port>","state":"<state>","error":""}]`, ordered by id, `[]` when none |
 | POST | `/api/v1/vscode/sessions` | `201` with `{"id":"s-<port>","bind_port":<port>}` |
 | GET | `/api/v1/jupyter/sessions` | `[{"id":"j-<port>","addr":"127.0.0.1:<port>","state":"<state>","error":"","url":"<public url>","root_dir":"<dir>","token":"<token>"}]`, ordered by id |

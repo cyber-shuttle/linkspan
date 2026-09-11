@@ -49,6 +49,7 @@ type subsystem struct {
 }
 
 var subsystems = map[string]subsystem{
+	"workflow":   {workflow.Router, nil},
 	"vscode":     {vscode.Router, vscode.Commands},
 	"jupyter":    {jupyter.Router, jupyter.Commands},
 	"terminal":   {terminal.Router, terminal.Commands},
@@ -172,7 +173,7 @@ func main() {
 		log.Println("stopped")
 	}()
 
-	if err := startAll(opts, config{"vscode": true, "jupyter": true, "terminal": false, "filesystem": false}); err != nil {
+	if err := startAll(opts, config{"workflow": true, "vscode": true, "jupyter": true, "terminal": false, "filesystem": false}); err != nil {
 		log.Printf("fatal: %v", err)
 		code = 1
 		return
