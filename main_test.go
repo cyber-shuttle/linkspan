@@ -69,33 +69,33 @@ func TestFlagSurface(t *testing.T) {
 }
 
 func TestRoutesFollowConfig(t *testing.T) {
-	get := func(cfg Config, path string) *httptest.ResponseRecorder {
+	get := func(cfg config, path string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		routes(cfg).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		return rec
 	}
-	if rec := get(Config{}, "/api/v1/health"); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"status":"ok"}` {
+	if rec := get(config{}, "/api/v1/health"); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"status":"ok"}` {
 		t.Fatalf("health answered %d %s, want the documented literal", rec.Code, rec.Body)
 	}
 	var snap map[string]any
-	if rec := get(Config{}, "/api/v1/metrics"); rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &snap) != nil {
+	if rec := get(config{}, "/api/v1/metrics"); rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &snap) != nil {
 		t.Fatalf("metrics answered %d %s, want an object", rec.Code, rec.Body)
 	}
-	all := Config{"vscode": true, "jupyter": true, "terminal": true, "filesystem": true}
+	all := config{"vscode": true, "jupyter": true, "terminal": true, "filesystem": true}
 	for _, path := range []string{"/api/v1/vscode/sessions", "/api/v1/jupyter/sessions", "/api/v1/terminal/sessions"} {
 		if rec := get(all, path); rec.Code != http.StatusOK {
 			t.Errorf("%s answered %d with its subsystem enabled, want 200", path, rec.Code)
 		}
-		if rec := get(Config{}, path); rec.Code != http.StatusNotFound {
+		if rec := get(config{}, path); rec.Code != http.StatusNotFound {
 			t.Errorf("%s answered %d with its subsystem disabled, want 404", path, rec.Code)
 		}
 	}
-	post := func(cfg Config, path string) int {
+	post := func(cfg config, path string) int {
 		rec := httptest.NewRecorder()
 		routes(cfg).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, nil))
 		return rec.Code
 	}
-	if post(all, "/api/v1/filesystem/mount") != http.StatusNotImplemented || post(Config{}, "/api/v1/filesystem/mount") != http.StatusNotFound {
+	if post(all, "/api/v1/filesystem/mount") != http.StatusNotImplemented || post(config{}, "/api/v1/filesystem/mount") != http.StatusNotFound {
 		t.Error("a filesystem route must answer 501 when enabled and 404 when disabled")
 	}
 }
@@ -172,7 +172,7 @@ func TestArchiveName(t *testing.T) {
 }
 
 func TestExampleWorkflowLoads(t *testing.T) {
-	all := Config{"vscode": true, "jupyter": true, "terminal": true, "filesystem": true}
+	all := config{"vscode": true, "jupyter": true, "terminal": true, "filesystem": true}
 	if err := workflow.Load("examples/workflow.yml", commands(all)); err != nil {
 		t.Fatal(err)
 	}

@@ -38,7 +38,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   a terminal's port still needs the tunnel owner's sign-in.
 - `metrics`, `sshd` and `tunnel` moved to `internal/` as primitives.
 - `subsystems/` now holds `workflow`, `vscode`, `terminal`, `jupyter` and `filesystem`.
-- A `Config` in `main.go` to turn subsystems on/off.
+- Subsystems are turned on and off by a `config` map in `main.go`.
 - `internal/tasks` is one registry: a `Task` is a `Run` under a context with a state, listed until
   stopped even after `Run` ends. The launch gate, published stop and liveness probe are removed; a panic
   in a task is its error. `Start` is the one way in and binds the address a task names; a task's

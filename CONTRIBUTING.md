@@ -51,7 +51,7 @@ linkspan
 are the capabilities a client drives: each exports `Commands`, its actions by name, and `Router`, a
 `router.Router` at its own prefix whose every route names a `Commands` entry, so one function answers a
 request and a workflow step. `TestRoutesCoverCommands` checks that every command a
-subsystem exports is behind one of its routes. `main.go` mounts the ones its `Config` enables into the
+subsystem exports is behind one of its routes. `main.go` mounts the ones its `config` enables into the
 `/api/v1` root, and is the only file that reads flags. The README's
 [Architecture](README.md#architecture) section states the three ideas the code is built on.
 
