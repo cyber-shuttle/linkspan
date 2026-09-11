@@ -5,12 +5,13 @@
 [![Go](https://img.shields.io/github/go-mod/go-version/cyber-shuttle/linkspan)](go.mod)
 [![License](https://img.shields.io/github/license/cyber-shuttle/linkspan?color=blue)](LICENSE)
 
-**Linkspan turns an HPC batch job into a workspace you can reach from your laptop.** It has a subsystem
-for each tool researchers usually set up by hand, and for the data and process chores that come with
-research on HPC.
+**Linkspan turns an HPC batch job into a workspace you can reach from your laptop.** It has subsystems
+for the common tools researchers set up by hand, and for the data and process management chores that
+come with research on HPC.
 
 - **Jupyter IDE.** A Jupyter server in a folder of the job. Linkspan builds the Python environment for it.
-- **VS Code IDE.** An SSH server for one public key. VS Code connects to it with Remote-SSH.
+- **VS Code IDE.** An SSH server for one keypair, identified by its public key. VS Code connects to it
+  with Remote-SSH.
 - **Metrics.** How much CPU, GPU and memory the job is using, from one URL.
 - **Terminals.** A shell inside the job, opened from a browser tab.
 - **Filesystem (WIP).** Datasets mounted or synced into the job.
@@ -21,8 +22,7 @@ research on HPC.
 
 Compute nodes sit behind a login node and a firewall. To get through, the client creates a
 [Dev Tunnel](https://learn.microsoft.com/en-us/azure/developer/dev-tunnels/overview) and Linkspan hosts
-it from inside the job. The tunnel decides who may connect. Without a tunnel, an ssh port forward through
-the login node reaches the same servers.
+it from inside the job. The tunnel decides who may connect.
 
 Most people use Linkspan through a client. [cs-bridge](https://github.com/cyber-shuttle/cs-bridge) is our
 VS Code extension. [cs-jupyter](https://github.com/cyber-shuttle/cs-jupyter) is our JupyterLite
@@ -57,32 +57,36 @@ versions. [CONTRIBUTING.md](CONTRIBUTING.md#development-setup) explains how to b
 
 ## Quick start
 
-Getting Jupyter on a compute node takes three commands. Run them from an interactive allocation or any
-node where you have a shell.
+Create a Dev Tunnel on your laptop with `devtunnel create`, and mint a host token for it with
+`devtunnel token <id> --scopes host`. Then start Linkspan inside the job, hosting that tunnel.
 
 ```bash
-./linkspan --port 8080 &
+./linkspan --port 8080 --tunnel-enable \
+  --tunnel-id <id> --tunnel-cluster <cluster> --tunnel-host-token <token> &
+```
+
+Start a Jupyter server on a folder of the job.
+
+```bash
 curl -X POST http://127.0.0.1:8080/api/v1/jupyter/sessions \
   -H 'Content-Type: application/json' -d '{"root_dir": "/home/me/project"}'
 ```
 
-The reply gives you the server's `addr` and `token`. The first server builds its Python environment under
-`~/.cybershuttle/`, which takes a few minutes. Later servers reuse it. From your laptop, forward the port
-through the login node, then open the URL with the token.
+The reply gives you the server's `url` on the tunnel and its `token`. Open the URL in a browser with the
+token, from anywhere. The first server builds its Python environment under `~/.cybershuttle/`, which
+takes a few minutes. Later servers reuse it.
 
-```bash
-ssh -J login.example.edu -L 8888:127.0.0.1:<port> <node>
-# then open http://127.0.0.1:8888/?token=<token>
-```
-
-VS Code works the same way. Post your public key, then point Remote-SSH at the port in the reply, through
-the same jump host.
+Start an SSH server for your public key.
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/v1/vscode/sessions \
   -H 'Content-Type: application/json' \
   -d "{\"authorized_key\": \"$(cat ~/.ssh/id_ed25519.pub)\"}"
 ```
+
+The reply gives you the server's `bind_port`. Add that port to the tunnel with `devtunnel port create <id>
+-p <bind_port>`, forward it to your laptop with `devtunnel connect <id>`, and point VS Code Remote-SSH at
+`127.0.0.1:<bind_port>`.
 
 Every server Linkspan starts stops when Linkspan stops. So when a batch job runs Linkspan as its main
 process, the whole workspace ends at the job's time limit.
@@ -248,10 +252,10 @@ the model.
 Every POST reports an error as `{"error": "<message>"}`. The status is `400` when the body cannot be
 parsed and `413` when it is over 64KB. A route of a subsystem that is off answers `404`.
 
-A VS Code session is one SSH server. It listens on loopback, accepts one public key, and runs commands
-through `sh`. The POST takes `{"authorized_key": "<ssh public key>"}`. The key must be bare, with no
-`authorized_keys` options, or it is refused with `400`. The port is already accepting when the reply
-arrives.
+A VS Code session is one SSH server. It listens on loopback, accepts one keypair identified by its public
+key, and runs commands through `sh`. The POST takes `{"authorized_key": "<ssh public key>"}`. The key
+must be bare, with no `authorized_keys` options, or it is refused with `400`. The port is already
+accepting when the reply arrives.
 
 A Jupyter server or terminal starts in state `starting`. It becomes `running` once its port accepts, no
 matter how long that takes. It becomes `failed`, with `error` set, if it exits first. It becomes `exited`
