@@ -2,7 +2,8 @@
 // publishes ports on it for the servers the subsystems start. A relay that dies ends the task and is not
 // restarted.
 //
-//	apiVersion, readyLine  What the relay prints once it is hosting.
+//	apiVersion     The Dev Tunnels REST API version portRequest sends.
+//	readyLine      What the relay prints once it is hosting.
 //	output         The last 64KB of the relay's stdout and stderr; onReady runs once the ready line has appeared.
 //	Tunnel
 //	assets, cliBase, apiBase, active, none  cliBase and apiBase are test seams; none is closed, for no tunnel.

@@ -5,7 +5,8 @@
 //	TestErrorShape
 //	TestParams          The body is the params, the path id joins them, no body is no params, and bad or oversize
 //	                    bodies are refused before the command runs.
-//	TestNestedPrefixes  A leaf-first chain of many levels, each with siblings, and one subtree mounted twice.
+//	TestNestedPrefixes  A leaf-first chain of many levels, each with siblings, and one subtree mounted at every
+//	                    level and again at the root.
 package router
 
 import (

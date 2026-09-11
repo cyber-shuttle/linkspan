@@ -7,8 +7,8 @@
 //	TestPanicIsolation                    A panic in any handler New installs must be recovered.
 //	TestStreamLocalForwardAndTeardown     The socket directory avoids t.TempDir because macOS caps socket paths at 104
 //	                                      characters.
-//	TestRunCommand*                       Without an explicit Exit gliderlabs reports 0, and a client that never
-//	                                      closes stdin must not delay it.
+//	TestRunCommand*                       The status is the child's own code, 255 when signalled and 127 when it
+//	                                      never ran, and a client that never closes stdin must not delay it.
 //	TestExecRequestRunsTheCommand, TestRejectsOtherKeys, TestLocalForwardOnly, TestPtyIsRefused
 package sshd
 
