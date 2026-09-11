@@ -109,7 +109,7 @@ Documentation only. Source comments and project notes were corrected; nothing th
 
 ### Fixed
 
-- A workflow step that daemonises no longer stalls the workflow, and step output is written as it happens
+- A workflow step that daemonizes no longer stalls the workflow, and step output is written as it happens
   rather than buffered until the step ends.
 - The devtunnel relay is no longer left running when Linkspan exits during bring-up or after a failed
   attempt.
@@ -154,7 +154,7 @@ Documentation only. Source comments and project notes were corrected; nothing th
 - A failed devtunnel attempt kills its relay, so a retry no longer starts a second one on the same tunnel.
 - Shutdown runs on every exit path, so a failing workflow or an exhausted tunnel still stops the relay and
   the SSH sessions.
-- The devtunnel CLI download is bounded and cancellable.
+- The devtunnel CLI download is bounded and cancelable.
 - A dead HTTP server exits 1 rather than 0.
 - `--help` prints `-socket string` instead of mis-rendering the flag's usage text.
 
