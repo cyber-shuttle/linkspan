@@ -5,6 +5,73 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `/api/v1/jupyter/sessions`: Jupyter sessions created, listed and stopped by Linkspan, in an
+  environment it builds with `uv` under `~/.cybershuttle`, with a token it mints. This replaces the
+  workflow cs-control shipped for the same purpose.
+- `/api/v1/terminal/sessions`: web terminals served by `ttyd`, fetched on first use.
+- Workflow triggers: a step's `on` is `start`, `ready`, `stop`, or `SIGUSR1`, `SIGUSR2` or `SIGHUP`, so a
+  workflow bootstraps a workspace once the tunnel is hosting, checkpoints before Slurm's time limit and
+  syncs on exit. A step without `on` runs on `start`, as before.
+- Workflow actions beyond `shell.exec`: `vscode.sessions.start`, `jupyter.setup`,
+  `jupyter.sessions.start` and `.stop`, `terminal.sessions.start` and `.stop`, with `params` as the
+  request body, so VS Code and Jupyter are bootstrapped from the file. A step's `tasks` is a list of
+  them under one `on`.
+- `examples/workflow.yml`, a workflow that exercises every trigger against a local Linkspan.
+- Every subsystem command is a route, so `POST /api/v1/jupyter/setup` builds the environment ahead of
+  the first server and the `/filesystem` placeholders answer `501`.
+- `jupyter.sessions.start` takes `addr` and `token`, and takes the token from `JUPYTER_TOKEN` when given
+  none, so cs-control's workflow is one step that reuses Linkspan's server.
+- Every listed process is one object: `id`, `addr`, `state`, `error` and its own fields. A VS Code
+  session therefore also carries `error`.
+- A Jupyter server or terminal created while a tunnel is hosted is added to the tunnel, with the
+  `--tunnel-host-token`, for as long as it runs, and answered with its public URL. The port is
+  non-anonymous.
+- `make check`: format, vet, lint, vulnerability scan and race tests, as CI runs them.
+- `TestLayout` enforces the declaration order and outline that `CONTRIBUTING.md` describes.
+- `docs/COMPATIBILITY.md` states the exit status an SSH session reports.
+
+### Changed
+
+- A Jupyter server's tunnel port is anonymous, its token being the credential, so a browser reaches it;
+  a terminal's port still needs the tunnel owner's sign-in.
+- `metrics`, `sshd` and `tunnel` moved to `internal/` as primitives.
+- `subsystems/` now holds `workflow`, `vscode`, `terminal`, `jupyter` and `filesystem`.
+- A `Config` in `main.go` to turn subsystems on/off.
+- `internal/tasks` is one registry: a `Task` is a `Run` under a context with a state, listed until
+  stopped even after `Run` ends. The launch gate, published stop and liveness probe are removed; a panic
+  in a task is its error. `Start` is the one way in and binds the address a task names; a task's
+  `Server` is an in-process server on that listener, and its `Spawn` step an external one.
+- `internal/router` is routers only; a `tasks.Task` binds and serves the tree. Each subsystem
+  exports `Commands`, one table of the commands behind its routes and the workflow's actions.
+- Every server, the relay and the workflow are tasks started by `Start`; every child process is forked
+  through `tasks.Exec`.
+- A child process runs in its own process group, killed with it; a `setsid` daemon is left alone. Its
+  pipes close two seconds after it exits, so an orphan cannot hold an SSH session or the probe open.
+- Metrics are sampled whole by the `metrics` task, one `nvidia-smi` at a time with a 5s pause between;
+  `/metrics` answers the last sample and never waits on anything.
+- Waits have no deadlines: the relay runs until it exits, a server is `starting` until its port accepts,
+  and a download runs to completion. Cancellation ends each.
+- A malformed workflow is refused before any listener binds.
+- Log lines carry a package prefix; a fatal error names its process once.
+- An SSH session runs its command, and the commands on its stdin, through `sh`; the stdin path ran
+  `$SHELL`.
+- `POST /api/v1/vscode/sessions` refuses a key line with `authorized_keys` options, once ignored, and
+  answers `413` over 64KB, once `400`.
+- `GET /api/v1/vscode/sessions` orders by id.
+- `--socket` unlinks a stale socket only; a regular file at the path fails the bind, once deleted.
+- The README lists every response body; `SECURITY.md` states which listener assumes an exclusive node.
+- The README introduces Linkspan, shows its architecture, and describes the control plane it provides.
+
+### Fixed
+
+- A relay that exited with status zero was reported with a nil cause.
+- A relay killed for not reporting ready was reported as exited.
+- A relay printing more than 64KB before its ready line was killed at the timeout.
+- The router and `sshd` packages had no package documentation, a blank line detaching the comment;
+  `TestLayout` now checks attachment.
+
 ## [0.17.5] - 2026-09-07
 
 ### Added
@@ -42,7 +109,7 @@ Documentation only. Source comments and project notes were corrected; nothing th
 
 ### Fixed
 
-- A workflow step that daemonises no longer stalls the workflow, and step output is written as it happens
+- A workflow step that daemonizes no longer stalls the workflow, and step output is written as it happens
   rather than buffered until the step ends.
 - The devtunnel relay is no longer left running when Linkspan exits during bring-up or after a failed
   attempt.
@@ -87,7 +154,7 @@ Documentation only. Source comments and project notes were corrected; nothing th
 - A failed devtunnel attempt kills its relay, so a retry no longer starts a second one on the same tunnel.
 - Shutdown runs on every exit path, so a failing workflow or an exhausted tunnel still stops the relay and
   the SSH sessions.
-- The devtunnel CLI download is bounded and cancellable.
+- The devtunnel CLI download is bounded and cancelable.
 - A dead HTTP server exits 1 rather than 0.
 - `--help` prints `-socket string` instead of mis-rendering the flag's usage text.
 

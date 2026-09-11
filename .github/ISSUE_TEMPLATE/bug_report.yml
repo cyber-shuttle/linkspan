@@ -21,7 +21,7 @@ body:
     attributes:
       label: Version
       description: The output of `linkspan --version`.
-      placeholder: 0.17.4
+      placeholder: 0.17.5
     validations:
       required: true
   - type: input

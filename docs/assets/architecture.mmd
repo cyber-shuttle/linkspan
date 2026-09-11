@@ -1,0 +1,38 @@
+%%{init: {"theme": "base", "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 70, "padding": 18, "wrappingWidth": 320},
+  "themeVariables": {"fontFamily": "Helvetica", "fontSize": "20px",
+  "primaryColor": "#f4f6fb", "primaryBorderColor": "#5b6b8c", "primaryTextColor": "#1f2937",
+  "lineColor": "#5b6b8c", "clusterBkg": "#fbfbfd", "clusterBorder": "#c7cdd9", "edgeLabelBackground": "#ffffff"}}}%%
+flowchart LR
+    classDef outside fill:#fff7e6,stroke:#c98a1b,stroke-width:2px,color:#3b2f0b,rx:10,ry:10
+    classDef entry fill:#e8f1ff,stroke:#2f6fd6,stroke-width:2px,color:#0f2a5a,rx:10,ry:10
+    classDef core fill:#f4f6fb,stroke:#5b6b8c,stroke-width:2px,color:#1f2937,rx:10,ry:10
+    classDef server fill:#e9f8ef,stroke:#2e8b57,stroke-width:2px,color:#0f3d24,rx:10,ry:10
+
+    clients["<b>Clients</b><br/>VSCode<br/>Jupyter<br/>Terminal"]:::outside
+    relay["<b>Tunnel relay</b>, secured<br/>the access point<br/>hosted outbound"]:::entry
+    subgraph ls[" Linkspan, the job's main process "]
+        direction LR
+        api["<b>HTTP API</b><br/>/api/v1 on loopback<br/>and a unix socket"]:::core
+        wf["<b>Workflow</b><br/>start · ready · stop · SIGUSR1"]:::core
+        cmd["<b>Commands</b><br/>a route and a<br/>workflow action alike"]:::core
+        reg["<b>Task registry</b>"]:::core
+        sshd["<b>SSH server</b><br/>one per key"]:::server
+        jup["<b>Jupyter server</b>"]:::server
+        ttyd["<b>Web terminal</b>"]:::server
+        met["<b>Metrics</b><br/>cgroup v2 · nvidia-smi"]:::server
+        fs["<b>Filesystem</b><br/>mount · unmount · copy · sync"]:::server
+        api --> cmd
+        wf --> cmd
+        cmd --> reg
+        reg --> sshd
+        reg --> jup
+        reg --> ttyd
+        reg --> met
+        cmd --> fs
+        reg ~~~ fs
+    end
+    clients ==> relay
+    relay --> api
+    relay --> sshd
+    relay --> jup
+    relay --> ttyd
