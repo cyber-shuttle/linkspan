@@ -2,7 +2,7 @@
 // its own steps, a task list shares its trigger, and a command step reaches its command.
 //
 //	step, shell, loadDoc, names, loadSteps
-//	TestForkingStepDoesNotBlock  A daemon forked as cs-control's setsid --fork does must not hold the workflow open.
+//	TestForkingStepDoesNotBlock  A step that forks a child and exits must not hold the workflow open.
 //	TestStopsAtFirstFailure
 //	TestTriggers                 A signal task runs its steps on the signal; Start runs start then ready at once
 //	                             with no tunnel; an unknown trigger is refused at load.

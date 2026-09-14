@@ -13,9 +13,11 @@ Adding to it needs a client.
 - cs-control, the Jupyter runtime service, launches it with `--port --tunnel-enable --tunnel-id --tunnel-cluster
   --tunnel-host-token --workflow`, exports `JUPYTER_TOKEN`, and makes no HTTP calls. Its document is one
   `jupyter.sessions.start` step naming `root_dir` and `addr`, the port it declared on the tunnel ahead.
-- A browser opens `/terminal/sessions` URLs after the tunnel owner signs in at the Dev Tunnels page.
-- The `/filesystem` routes and commands answer `501` and have no client yet, so they are not contracts.
-  Nor is `POST /jupyter/setup`, which is a route because every command is one.
+- A browser opens `/terminal/sessions` URLs after the tunnel owner signs in at the Dev Tunnels page. The
+  subsystem is off as shipped, so the route is not yet a contract.
+- The `/filesystem` routes and commands answer `501` when the subsystem is on, are absent as shipped, and
+  have no client yet, so they are not contracts. Nor is `POST /jupyter/setup`, which is a route because
+  every command is one.
 
 Both clients run `--version`.
 

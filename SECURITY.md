@@ -19,9 +19,9 @@ A report is most useful when it shows one of these boundaries failing.
   is set to mode `0600` immediately after bind, and remote callers arrive over the tunnel the client
   created and controls. Requests carry no credential because those three boundaries are the check. The
   port admits every process on the node, so Linkspan assumes the job holds its node exclusively, as the
-  CyberShuttle clients request. The socket admits the job's user alone. On a shared node only the socket is
-  bound, because over the port another user can start an SSH server for their own key that runs commands
-  as the job's user.
+  CyberShuttle clients request. The socket admits the job's user alone. The port is always bound, so on a
+  shared node another user can start an SSH server for their own key that runs commands as the job's
+  user; Linkspan is not for a shared node.
 - **The tunnel is client-owned.** The client creates it, registers its own ports and mints the host-scoped
   token. Linkspan passes that token to `devtunnel host`, adds a port for each Jupyter server or
   terminal it starts and removes it when the server ends, and never creates, refreshes or deletes a

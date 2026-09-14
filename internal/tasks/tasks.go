@@ -20,9 +20,10 @@
 //	Port         0 for a unix socket.
 //	MarshalJSON  The wire object: id, addr, state and error, then the attrs.
 //	Start        Binds Addr when set; a failed bind is the error and registers nothing. The id defaults to the
-//	             kind's initial with the port or socket path, else to the kind; the state to running; a repeated id
-//	             cancels and replaces the earlier task. Run goes on its own goroutine; the listener closes on
-//	             cancellation, and a Server after it. A returned error sets failed and is fatal unless the task is
+//	             kind's initial with the port or socket path, else to the kind; the state to running unless a Spawn
+//	             set it to starting; a repeated id cancels and replaces the earlier task. Run goes on its own
+//	             goroutine; the listener closes on cancellation, and a Server after it. A returned error sets
+//	             failed and is fatal unless the task is
 //	             a Spawn; a panic is an error; a cancelled Run's error is dropped; a nil return is exited. The
 //	             context is cancelled after Run returns, so every AfterFunc fires. The returned copy is the
 //	             caller's; the registry entry changes under the lock.
