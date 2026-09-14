@@ -5,6 +5,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-09-14
+
 ### Added
 
 - `/api/v1/jupyter/sessions`: Jupyter sessions created, listed and stopped by Linkspan, in an
@@ -522,7 +524,8 @@ No change. The tag points at the same commit as 0.14.8.
   tunnel routes, and opens a dev tunnel at startup unless `--tunnel-enable=false`.
 - GoReleaser archives for Linux, macOS and Windows.
 
-[Unreleased]: https://github.com/cyber-shuttle/linkspan/compare/v0.17.5...HEAD
+[Unreleased]: https://github.com/cyber-shuttle/linkspan/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/cyber-shuttle/linkspan/compare/v0.17.5...v0.18.0
 [0.17.5]: https://github.com/cyber-shuttle/linkspan/compare/v0.17.4...v0.17.5
 [0.17.4]: https://github.com/cyber-shuttle/linkspan/compare/v0.17.3...v0.17.4
 [0.17.3]: https://github.com/cyber-shuttle/linkspan/compare/v0.17.2...v0.17.3
