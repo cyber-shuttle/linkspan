@@ -1,190 +1,195 @@
+// Package main is the entry point. It parses the flags, serves the HTTP API on loopback and on the optional unix
+// socket, and starts the tunnel and the workflow's triggers, all as tasks, so one StopAll ends everything and the
+// first fatal error reaches main.
+//
+//	version                 Set by the linker; "dev" otherwise.
+//	config                  Which subsystems publish their routes and actions, by name; main passes a literal until
+//	                        a file loader does.
+//	subsystem, subsystems   The one table of what each subsystem offers.
+//	options, registerFlags  Flag spellings are frozen by docs/COMPATIBILITY.md; a test passes its own FlagSet.
+//	routes                  The tree: /api/v1 with health and metrics, then only enabled subsystems.
+//	commands                The workflow's actions: its own unprefixed, and each enabled subsystem's behind its name.
+//	startAll                Validates every input before binding anything, then starts every task in one pass, the
+//	                        listeners first: each as h-<port> or h-<socket path>, metrics, the tunnel and the
+//	                        workflow by kind, and the workflow's signal tasks as workflow-<signal>.
+//	main                    os.Exit is the first defer, so StopAll runs before it; the workflow's stop steps run
+//	                        first, with the API still up.
 package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
-	"net"
+	"maps"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
-	"github.com/cyber-shuttle/linkspan/internal/config"
-	"github.com/cyber-shuttle/linkspan/internal/controller"
-	"github.com/cyber-shuttle/linkspan/internal/logstream"
-	ops "github.com/cyber-shuttle/linkspan/internal/operations"
-	"github.com/cyber-shuttle/linkspan/subsystems/checkpoint"
-	"github.com/cyber-shuttle/linkspan/subsystems/vfs"
-	"github.com/gorilla/mux"
+	"github.com/cyber-shuttle/linkspan/internal/metrics"
+	"github.com/cyber-shuttle/linkspan/internal/router"
+	"github.com/cyber-shuttle/linkspan/internal/tasks"
+	"github.com/cyber-shuttle/linkspan/internal/tunnel"
+	"github.com/cyber-shuttle/linkspan/subsystems/filesystem"
+	"github.com/cyber-shuttle/linkspan/subsystems/jupyter"
+	"github.com/cyber-shuttle/linkspan/subsystems/process"
+	"github.com/cyber-shuttle/linkspan/subsystems/terminal"
+	"github.com/cyber-shuttle/linkspan/subsystems/vscode"
+	"github.com/cyber-shuttle/linkspan/subsystems/workflow"
 )
 
-// Version information set via ldflags at build time.
-var (
-	version = "dev"
-	commit  = "none"
-	date    = "unknown"
-	builtBy = "unknown"
-)
+var version = "dev"
 
-// VFS providers initialized at startup, cleaned up on shutdown.
-var (
-	vfsSyncProvider  *vfs.SyncProvider
-	vfsMountProvider *vfs.MountProvider
-)
+type config map[string]bool
+
+type subsystem struct {
+	router   *router.Router
+	commands map[string]router.Command
+}
+
+var subsystems = map[string]subsystem{
+	"workflow":   {workflow.Router, nil},
+	"vscode":     {vscode.Router, vscode.Commands},
+	"jupyter":    {jupyter.Router, jupyter.Commands},
+	"terminal":   {terminal.Router, terminal.Commands},
+	"filesystem": {filesystem.Router, filesystem.Commands},
+	"process":    {process.Router, process.Commands},
+}
+
+type options struct {
+	printVersion    bool
+	tunnelEnable    bool
+	tunnelID        string
+	tunnelCluster   string
+	tunnelHostToken string
+	port            int
+	socket          string
+	workflow        string
+}
+
+func registerFlags(fs *flag.FlagSet) *options {
+	var o options
+	fs.BoolVar(&o.printVersion, "version", false, "print the version and exit")
+	fs.BoolVar(&o.tunnelEnable, "tunnel-enable", false, "host the tunnel named by --tunnel-id")
+	fs.StringVar(&o.tunnelID, "tunnel-id", "", "id of the client-created tunnel to host")
+	fs.StringVar(&o.tunnelCluster, "tunnel-cluster", "", "cluster id of --tunnel-id")
+	fs.StringVar(&o.tunnelHostToken, "tunnel-host-token", "", "host-scoped access token for --tunnel-id")
+	fs.IntVar(&o.port, "port", 8080, "loopback port for the HTTP API; 0 picks a free one")
+	fs.StringVar(&o.socket, "socket", "", "also serve on this unix socket path")
+	fs.StringVar(&o.workflow, "workflow", "", "workflow YAML file")
+	return &o
+}
+
+func routes(cfg config) *router.Router {
+	root := router.New("/api/v1", map[string]router.Command{
+		"GET /health": func(context.Context, map[string]any) (int, any, string) {
+			return http.StatusOK, map[string]string{"status": "ok"}, ""
+		},
+		"GET /metrics": func(context.Context, map[string]any) (int, any, string) { return http.StatusOK, metrics.Latest(), "" },
+	})
+	for name, sub := range subsystems {
+		if cfg[name] {
+			root.Mount(sub.router)
+		}
+	}
+	return root
+}
+
+func commands(cfg config) map[string]router.Command {
+	out := maps.Clone(workflow.Commands)
+	for name, sub := range subsystems {
+		if !cfg[name] {
+			continue
+		}
+		for command, c := range sub.commands {
+			out[name+"."+command] = c
+		}
+	}
+	return out
+}
+
+func startAll(opts *options, cfg config) error {
+	var (
+		tn  *tunnel.Tunnel
+		err error
+	)
+	if opts.tunnelEnable {
+		if tn, err = tunnel.New(opts.tunnelID, opts.tunnelCluster, opts.tunnelHostToken); err != nil {
+			return err
+		}
+	}
+	if opts.workflow != "" {
+		if err := workflow.Load(opts.workflow, commands(cfg)); err != nil {
+			return err
+		}
+	}
+	addrs := []string{fmt.Sprintf("127.0.0.1:%d", opts.port)}
+	if opts.socket != "" {
+		addrs = append(addrs, opts.socket)
+	}
+	h := routes(cfg).Handler()
+	var all []*tasks.Task
+	for _, addr := range addrs {
+		all = append(all, &tasks.Task{Kind: "http", Addr: addr, Server: &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}})
+	}
+	all = append(all, &tasks.Task{Kind: "metrics", Run: metrics.Poll})
+	if tn != nil {
+		all = append(all, &tasks.Task{Kind: "tunnel", Run: tn.Relay})
+	}
+	if opts.workflow != "" {
+		all = append(all, &tasks.Task{Kind: "workflow", Run: workflow.Start})
+		for _, name := range workflow.Signals() {
+			all = append(all, &tasks.Task{ID: "workflow-" + name, Kind: "workflow", Run: workflow.WatchSignal(name)})
+		}
+	}
+	for _, t := range all {
+		created, err := t.Start()
+		if err != nil {
+			return err
+		}
+		if t.Kind == "http" {
+			log.Printf("api: listening on %s", created.Addr)
+		}
+	}
+	return nil
+}
 
 func main() {
+	code := 0
+	defer func() { os.Exit(code) }()
 
-	c := config.NewDefaultLinkspanConfig()
-	c.Commit = commit
-	c.BuiltBy = builtBy
-	c.Date = date
-	c.Version = version
-	ops.ProcessCommandArguments(c)
+	opts := registerFlags(flag.CommandLine)
+	flag.Parse()
 
-	// Install log broadcaster so connected clients receive log output in
-	// real time.  Must happen before any log.* calls.
-	logBroadcaster := logstream.New(os.Stderr)
-	logBroadcaster.Install()
-
-	// Support users passing `--tunnel-api=devtunnels` by trimming leading '='
-	apiTunnelType := strings.TrimLeft(c.TunnelApi, "=")
-
-	ctx, stop := signal.NotifyContext(context.Background(),
-		os.Interrupt,    // Ctrl+C
-		syscall.SIGTERM, // termination (reliable on Linux/macOS)
-	)
-	defer stop()
-
-	r := mux.NewRouter()
-	api := r.PathPrefix("/api/v1").Subrouter()
-	RegisterRoutes(api)
-
-	// Use the configured server host and port from CLI flags.
-	// Port 0 means "let the OS pick a free port".
-	if c.ServerPort < 0 || c.ServerPort > 65535 {
-		log.Fatalf("invalid server port: %d", c.ServerPort)
-	}
-	addr := fmt.Sprintf("%s:%d", c.ServerHost, c.ServerPort)
-
-	srv := &http.Server{
-		Addr:    addr,
-		Handler: r,
-	}
-
-	// Create listener first so the port is bound before starting any
-	// external tunnel process that expects the port to be open.
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Fatalf("failed to listen on %s: %v", addr, err)
-	}
-
-	// When port 0 was requested, update serverPort to the actual bound port.
-	if c.ServerPort == 0 {
-		c.ServerPort = listener.Addr().(*net.TCPAddr).Port
-	}
-	log.Printf("listening on %s:%d", c.ServerHost, c.ServerPort)
-
-	if apiTunnelType == "devtunnels" && c.EnableAPITunnelAtStartup {
-		ops.StartAPIDevTunnel(c.TunnelAuthToken, c.TunnelId, c.TunnelRetries,
-			c.TunnelRetryDelay, c.TunnelAttemptTimeout, c.TunnelCluster,
-			c.ServerPort, ctx)
-	} else if apiTunnelType == "devtunnels" {
-		log.Println("devtunnel startup skipped (disabled via flag)")
-	}
-
-	if c.SocketPath != "" {
-		if _, err := listenUnix(srv, c.SocketPath); err != nil {
-			log.Fatalf("failed to listen on unix socket %s: %v", c.SocketPath, err)
-		}
-		log.Printf("also listening on unix socket %s", c.SocketPath)
-	}
-
-	if c.RestorePath != "" && c.ForkCommand != "" {
-		log.Fatalf("Can not perform restore and fork execution at same time")
-	}
-
-	if c.RestorePath != "" {
-		log.Printf("Restoring from path %s", c.RestorePath)
-		cp := &checkpoint.CriuCheckpointer{CriuPath: c.CRIUPath, SupportGpuCheckpoint: c.SupportGpuCheckpoint,
-			AdditionalCriuOpts: c.AdditionalCriuOpts, DumpDirRoot: c.DumpDirRoot}
-		intProcess, err := cp.RestoreProcess(c.RestorePath, c.ShutdownOnForkCompletion)
-
-		if err != nil {
-			log.Fatalf("Failed to restore process from path %s: %v", c.RestorePath, err)
-		}
-
-		if c.CheckpointForkAfterDelay > 0 {
-			log.Printf("waiting %d seconds before checkpointing restored process %s", c.CheckpointForkAfterDelay, intProcess)
-			cp.CheckpointProcessAfterDelay(intProcess, c.CheckpointForkAfterDelay)
-		}
-		log.Printf("Restore completed successfully")
-	}
-
-	// Start fork process if specified
-	if c.ForkCommand != "" {
-		internalProcessId, err := ops.StartForkProcess(*c)
-		if err != nil {
-			log.Fatalf("Failed to start fork process: %v", err)
-		}
-
-		if c.CheckpointForkAfterDelay > 0 && c.CRIUPath != "" {
-			log.Printf("waiting %d seconds before checkpointing fork process %s", c.CheckpointForkAfterDelay, internalProcessId)
-			cp := &checkpoint.CriuCheckpointer{CriuPath: c.CRIUPath, SupportGpuCheckpoint: c.SupportGpuCheckpoint,
-				AdditionalCriuOpts: c.AdditionalCriuOpts, DumpDirRoot: c.DumpDirRoot}
-			cp.CheckpointProcessAfterDelay(internalProcessId, c.CheckpointForkAfterDelay)
-		}
-	}
-
-	// Run server
-	serverErr := make(chan error, 1)
-	go func() {
-		err := srv.Serve(listener)
-		serverErr <- err
-	}()
-
-	select {
-	case <-ctx.Done():
-		log.Println("Shutdown signal received...")
-	case reason := <-controller.ExternalShutdownChannel:
-		log.Printf("Shutdown triggered: %s", reason)
-	case err := <-serverErr:
-		if err != nil && err != http.ErrServerClosed {
-			log.Printf("server error: %v", err)
-		}
+	if opts.printVersion {
+		fmt.Println(version)
 		return
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Printf("server shutdown error: %v — forcing close", err)
-		// Shutdown did not complete within the deadline; force-close all
-		// remaining connections so the process does not hang indefinitely.
-		if closeErr := srv.Close(); closeErr != nil {
-			log.Printf("server force-close error: %v", closeErr)
-		}
-	}
-
-	ops.CleanupResources(*c)
-
-	log.Println("Server gracefully stopped.")
-}
-
-// listenUnix serves srv on a unix socket in a background goroutine.
-func listenUnix(srv *http.Server, path string) (net.Listener, error) {
-	os.Remove(path) // clear a stale socket; bind fails if the path exists
-	ln, err := net.Listen("unix", path)
-	if err != nil {
-		return nil, err
-	}
-	go func() {
-		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-			log.Printf("unix socket server error: %v", err)
-		}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer func() {
+		tasks.StopAll()
+		stop()
+		log.Println("stopped")
 	}()
-	return ln, nil
+
+	if err := startAll(opts, config{"workflow": true, "vscode": true, "jupyter": true, "terminal": false, "filesystem": false, "process": true}); err != nil {
+		log.Printf("fatal: %v", err)
+		code = 1
+		return
+	}
+
+	select {
+	case <-ctx.Done():
+		log.Println("signal received, stopping")
+	case err := <-tasks.Failed:
+		log.Printf("fatal: %v", err)
+		code = 1
+	}
+	if err := workflow.Run(context.Background(), "stop"); err != nil {
+		log.Printf("fatal: workflow: %v", err)
+		code = 1
+	}
 }

@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/cyber-shuttle/linkspan/security/policy
+    about: Security problems go through GitHub private vulnerability reporting, never a public issue.
