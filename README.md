@@ -15,7 +15,8 @@ come with research on HPC.
 - **Metrics.** How much CPU, GPU and memory the job is using, from one URL.
 - **Terminals.** A shell inside the job, opened from a browser tab.
 - **Filesystem (WIP).** Datasets mounted or synced into the job.
-- **Checkpoint/Restore (WIP).** A snapshot of the job's running processes, so a later job can resume them.
+- **Checkpoint/Restore.** A command run as a process session, dumped with CRIU before the time limit, so a
+  later job resumes it.
 - **Workflows (WIP).** Steps that run at set points in the job's life, from a file. Each action is also a
   route of the HTTP API.
 
@@ -145,6 +146,11 @@ exits Linkspan with status 1.
 | `terminal.sessions.start` | Starts a web terminal | `cwd` |
 | `terminal.sessions.stop` | Stops one | `id` |
 | `filesystem.mount`, `.unmount`, `.copy`, `.sync` | Declared, not yet implemented; answer `501` | |
+| `checkpoint.sessions.select` | Lists the process sessions | |
+| `checkpoint.sessions.start` | Runs a command under `sh` as a session | `command`, `stop_on_exit` |
+| `checkpoint.sessions.stop` | Stops one | `id` |
+| `checkpoint.dump` | Dumps one running session, or all, with CRIU | `id`, `images_dir`, `criu` |
+| `checkpoint.restore` | Runs a dumped tree as a new session | `images_dir`, `stop_on_exit`, `criu` |
 
 ```yaml
 name: workspace
@@ -183,7 +189,9 @@ A command runs without a shell, so there are no globs, variables, pipes or redir
 is looked up on Linkspan's `PATH`. An action from a disabled subsystem, or an unknown trigger, is refused
 before anything starts. [`examples/workflow.yml`](examples/workflow.yml) tries each kind of trigger against a
 local Linkspan. Run it, list `/api/v1/jupyter/sessions`, send `SIGUSR1`, then send `SIGTERM`. Each
-`shell.exec` step prints a line.
+`shell.exec` step prints a line. [`examples/checkpoint.yml`](examples/checkpoint.yml) runs a payload as a
+process session and dumps it on `SIGUSR1`, which ends the payload and, with `stop_on_exit`, Linkspan;
+[`examples/restore.yml`](examples/restore.yml) is the next job, resuming it from the dump.
 
 ### Reaching a job from inside the cluster
 
@@ -227,6 +235,7 @@ it.
 | `jupyter` | on | Jupyter servers in a `uv`-built environment |
 | `terminal` | off | `ttyd` web terminals, Linux only |
 | `filesystem` | off | Mount, unmount, copy and sync, declared and not yet implemented |
+| `checkpoint` | on | Commands run as sessions, checkpointed and restored with CRIU |
 
 ## HTTP API
 
@@ -250,6 +259,11 @@ the model.
 | POST | `/api/v1/terminal/sessions` | `201` with one session object; takes `{"cwd": "<dir>"}`, default Linkspan's own directory |
 | DELETE | `/api/v1/terminal/sessions/{id}` | `{"id":"t-<port>","state":"stopped"}`, `404` for an unknown id |
 | POST | `/api/v1/filesystem/{mount,unmount,copy,sync}` | `501` when the subsystem is on: declared, not yet implemented. Off as shipped, so `404` |
+| GET | `/api/v1/checkpoint/sessions` | `[{"id":"p-<n>","addr":"","state":"<state>","error":"","pid":<pid>,"command":"<command>","stop_on_exit":"<bool>"}]`, ordered by id; `pid` once the command has started |
+| POST | `/api/v1/checkpoint/sessions` | `201` with one session object; takes `{"command": "<shell command>", "stop_on_exit": <bool>}` |
+| DELETE | `/api/v1/checkpoint/sessions/{id}` | `{"id":"p-<n>","state":"stopped"}`, `404` for an unknown id |
+| POST | `/api/v1/checkpoint/dump` | `200` with `[{"id":"p-<n>","images_dir":"<dir>"}]` once CRIU has dumped each; takes `{"id": "<one session>", "images_dir": "<root>", "criu": "<binary>"}`, all optional; `404` for an id that is not running, `501` without CRIU |
+| POST | `/api/v1/checkpoint/restore` | `201` with one session object running `criu restore`; takes `{"images_dir": "<dir>", "stop_on_exit": <bool>, "criu": "<binary>"}`; `501` without CRIU |
 
 Every POST reports an error as `{"error": "<message>"}`. The status is `400` when the body cannot be
 parsed and `413` when it is over 64KB. A route of a subsystem that is off answers `404`.
@@ -269,6 +283,17 @@ alone. A terminal's port is not anonymous. A browser signs in as the tunnel's ow
 sends `X-Tunnel-Authorization: tunnel <connect token>`. `addr` pins a Jupyter server to a loopback port of
 your choice, and `token` sets its token. Without them, Linkspan picks a free port and takes the token from
 `JUPYTER_TOKEN` in its own environment, or makes one up. Terminals answer `501` on anything but Linux.
+
+A process session runs its command under `sh -c` with Linkspan's stdout and stderr, so it may use the
+shell, and is `starting` until the command has started, then `running` with its `pid`. It becomes `exited`
+when the command ends and `failed`, with `error`, when it is killed or exits non-zero; either way it stays
+listed until stopped. With `stop_on_exit`, an end the session reached on its own stops Linkspan as
+`SIGTERM` would, so the `stop` steps of the workflow still run. A checkpoint runs `criu dump` on the
+session's process tree as a shell job, unprivileged, with its TCP connections, into `<images_dir>/<id>`,
+where `images_dir` defaults to `~/.cybershuttle/checkpoints`; CRIU kills the tree, so the session ends. A
+restore runs `criu restore` on one such directory as a new session, whose tree lives as CRIU's child. `criu`
+is looked up on Linkspan's `PATH` unless the request names a binary. The kernel must allow unprivileged
+dumps, which the CRIU documentation covers.
 
 ## Architecture
 

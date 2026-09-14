@@ -7,9 +7,11 @@
 //	stdioGrace    Bounds the wait for a child's pipes after it exits, which an orphan holding them would otherwise
 //	              keep open.
 //	pollInterval
+//	start         What Exec and child share: the start, and the kill on cancellation.
 //	Exec          Runs the command in its own process group, kills the group on cancellation so helpers die with
 //	              the child, and waits for the child. A setsid daemon leaves the group and survives.
-//	Task          The receiver of spawn.
+//	Task          The receiver of spawn and child.
+//	child         Publishes the pid under the registry lock, as the state.
 //	spawn         Releases the port to the command and dials it until it accepts.
 package tasks
 
@@ -26,15 +28,38 @@ var stdioGrace = 2 * time.Second
 
 var pollInterval = 500 * time.Millisecond
 
-func Exec(ctx context.Context, cmd *exec.Cmd) error {
+func start(ctx context.Context, cmd *exec.Cmd) (func() bool, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = stdioGrace
 	if err := cmd.Start(); err != nil {
-		return err
+		return nil, err
 	}
 	// A negative pid addresses the process group
-	stop := context.AfterFunc(ctx, func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
+	return context.AfterFunc(ctx, func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }), nil
+}
+
+func Exec(ctx context.Context, cmd *exec.Cmd) error {
+	stop, err := start(ctx, cmd)
+	if err != nil {
+		return err
+	}
 	defer stop()
+	return cmd.Wait()
+}
+
+func (t *Task) child(ctx context.Context) error {
+	cmd, err := t.Child(ctx)
+	if err != nil {
+		return err
+	}
+	stop, err := start(ctx, cmd)
+	if err != nil {
+		return err
+	}
+	defer stop()
+	registry.mu.Lock()
+	t.Pid, t.State = cmd.Process.Pid, StateRunning
+	registry.mu.Unlock()
 	return cmd.Wait()
 }
 

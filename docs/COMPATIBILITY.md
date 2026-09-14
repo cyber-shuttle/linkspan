@@ -18,6 +18,8 @@ Adding to it needs a client.
 - The `/filesystem` routes and commands answer `501` when the subsystem is on, are absent as shipped, and
   have no client yet, so they are not contracts. Nor is `POST /jupyter/setup`, which is a route because
   every command is one.
+- The `/checkpoint` routes and commands are driven from a workflow file and have no client yet, so they are
+  not contracts.
 
 Both clients run `--version`.
 

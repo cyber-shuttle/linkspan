@@ -1,7 +1,7 @@
 // Package tasks is the registry of Linkspan's background work: every goroutine, server and child process that
 // outlives a request. A Task is a Run under its own context, with an id, a kind, an address, a state and an error.
 // Its work is one of three things: a Run, Linkspan's own code, whose error is fatal; a Server, served on the bound
-// listener; or a Spawn, a child process on the bound port, whose life Linkspan only observes, so its end is
+// listener; or a Spawn or Child, a child process on the bound port or none, whose life Linkspan observes, so its end is
 // recorded and never fatal. Start is the one entry: it binds the address, if any, registers the task and runs it
 // on its own goroutine. A task stays listed after its work ends, as failed or exited, until Stop removes it;
 // StopAll cancels every task, waits for each and empties the registry. Nothing restarts. exec.go holds the fork.
@@ -9,22 +9,22 @@
 //	Kind         Declared by whoever starts the task.
 //	State*       Starting until the port accepts, then running; failed carries the error; exited is a nil return.
 //	Server       What an http.Server and a gliderlabs Server share.
-//	Task         Exactly one of Run, Server and Spawn is set. Run must return once its context is done, or StopAll
-//	             hangs. Server and Spawn default Addr to loopback on any port. Attrs are the caller's wire fields,
-//	             computed from the bound task.
+//	Task         Exactly one of Run, Server, Spawn and Child is set. Run must return once its context is done, or
+//	             StopAll hangs. Server and Spawn default Addr to loopback on any port. Attrs are the caller's wire
+//	             fields, computed from the bound task.
 //	registry     One lock, which also guards each task's state.
 //	Failed       The first fatal error; main exits on it.
 //	listen       An Addr that is not host:port is a unix path: a stale socket there is unlinked, any other file
 //	             fails the bind, and the socket is created with mode 0600.
 //	setState     The one writer of State and Error.
 //	Port         0 for a unix socket.
-//	MarshalJSON  The wire object: id, addr, state and error, then the attrs.
+//	MarshalJSON  The wire object: id, addr, state and error, pid once a Child has one, then the attrs.
 //	Start        Binds Addr when set; a failed bind is the error and registers nothing. The id defaults to the
 //	             kind's initial with the port or socket path, else to the kind; the state to running unless a Spawn
 //	             set it to starting; a repeated id cancels and replaces the earlier task. Run goes on its own
 //	             goroutine; the listener closes on cancellation, and a Server after it. A returned error sets
 //	             failed and is fatal unless the task is
-//	             a Spawn; a panic is an error; a cancelled Run's error is dropped; a nil return is exited. The
+//	             a Spawn or a Child; a panic is an error; a cancelled Run's error is dropped; a nil return is exited. The
 //	             context is cancelled after Run returns, so every AfterFunc fires. The returned copy is the
 //	             caller's; the registry entry changes under the lock.
 //	Select       Copies of one kind, ordered by id.
@@ -74,6 +74,8 @@ type Task struct {
 	Run    func(ctx context.Context) error
 	Server Server
 	Spawn  func(ctx context.Context, port int) (*exec.Cmd, error)
+	Child  func(ctx context.Context) (*exec.Cmd, error)
+	Pid    int
 	ln     net.Listener
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -119,6 +121,9 @@ func (t Task) Port() int {
 
 func (t Task) MarshalJSON() ([]byte, error) {
 	out := map[string]any{"id": t.ID, "addr": t.Addr, "state": t.State, "error": t.Error}
+	if t.Pid != 0 {
+		out["pid"] = t.Pid
+	}
 	if t.Attrs != nil {
 		for k, v := range t.Attrs(t) {
 			out[k] = v
@@ -136,6 +141,8 @@ func (t *Task) Start() (Task, error) {
 		}
 	case t.Spawn != nil:
 		t.Addr, t.State, t.Run = cmp.Or(t.Addr, "127.0.0.1:0"), StateStarting, t.spawn
+	case t.Child != nil:
+		t.State, t.Run = StateStarting, t.child
 	}
 	if t.Addr != "" {
 		ln, err := listen(t.Addr)
@@ -166,7 +173,7 @@ func (t *Task) Start() (Task, error) {
 			} else {
 				t.setState(StateExited, nil)
 			}
-			if err != nil && ctx.Err() == nil && t.Spawn == nil {
+			if err != nil && ctx.Err() == nil && t.Spawn == nil && t.Child == nil {
 				select {
 				case Failed <- fmt.Errorf("%s: %w", t.ID, err):
 				default:

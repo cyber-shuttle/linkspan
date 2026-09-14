@@ -32,6 +32,7 @@ import (
 	"github.com/cyber-shuttle/linkspan/internal/router"
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
 	"github.com/cyber-shuttle/linkspan/internal/tunnel"
+	"github.com/cyber-shuttle/linkspan/subsystems/checkpoint"
 	"github.com/cyber-shuttle/linkspan/subsystems/filesystem"
 	"github.com/cyber-shuttle/linkspan/subsystems/jupyter"
 	"github.com/cyber-shuttle/linkspan/subsystems/terminal"
@@ -54,6 +55,7 @@ var subsystems = map[string]subsystem{
 	"jupyter":    {jupyter.Router, jupyter.Commands},
 	"terminal":   {terminal.Router, terminal.Commands},
 	"filesystem": {filesystem.Router, filesystem.Commands},
+	"checkpoint": {checkpoint.Router, checkpoint.Commands},
 }
 
 type options struct {
@@ -173,7 +175,7 @@ func main() {
 		log.Println("stopped")
 	}()
 
-	if err := startAll(opts, config{"workflow": true, "vscode": true, "jupyter": true, "terminal": false, "filesystem": false}); err != nil {
+	if err := startAll(opts, config{"workflow": true, "vscode": true, "jupyter": true, "terminal": false, "filesystem": false, "checkpoint": true}); err != nil {
 		log.Printf("fatal: %v", err)
 		code = 1
 		return

@@ -41,6 +41,10 @@ linters:
       - path: subsystems/(jupyter/jupyter|terminal/terminal)\.go
         linters: [gosec]
         text: "G204|G702"
+      # Runs the command a request or workflow step names, and the user's criu (G204, G702).
+      - path: subsystems/checkpoint/checkpoint\.go
+        linters: [gosec]
+        text: "G204|G702"
       # Runs the command the authenticated client sends (G204, G702).
       - path: internal/sshd/sshd\.go
         linters: [gosec]

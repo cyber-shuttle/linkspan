@@ -5,6 +5,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `/api/v1/checkpoint/sessions`: a command run under `sh` as a session, listed with its `pid`, which with
+  `stop_on_exit` stops Linkspan when it ends, so a batch job ends with its payload.
+- `/api/v1/checkpoint/dump` and `/api/v1/checkpoint/restore`: a running session's process tree dumped
+  with the user's CRIU under `~/.cybershuttle/checkpoints/<id>`, and a dump resumed as a new session. The
+  same commands as workflow actions, so a step on `SIGUSR1` checkpoints ahead of Slurm's time limit.
+- `examples/checkpoint.yml` and `examples/restore.yml`, one job checkpointing a payload and the next
+  resuming it.
+- A listed process carries `pid` once its command has started, for the process sessions.
+
 ## [0.18.0] - 2026-09-14
 
 ### Added

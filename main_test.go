@@ -81,8 +81,8 @@ func TestRoutesFollowConfig(t *testing.T) {
 	if rec := get(config{}, "/api/v1/metrics"); rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &snap) != nil {
 		t.Fatalf("metrics answered %d %s, want an object", rec.Code, rec.Body)
 	}
-	all := config{"workflow": true, "vscode": true, "jupyter": true, "terminal": true, "filesystem": true}
-	for _, path := range []string{"/api/v1/vscode/sessions", "/api/v1/jupyter/sessions", "/api/v1/terminal/sessions"} {
+	all := config{"workflow": true, "vscode": true, "jupyter": true, "terminal": true, "filesystem": true, "checkpoint": true}
+	for _, path := range []string{"/api/v1/vscode/sessions", "/api/v1/jupyter/sessions", "/api/v1/terminal/sessions", "/api/v1/checkpoint/sessions"} {
 		if rec := get(all, path); rec.Code != http.StatusOK {
 			t.Errorf("%s answered %d with its subsystem enabled, want 200", path, rec.Code)
 		}
@@ -175,12 +175,14 @@ func TestArchiveName(t *testing.T) {
 }
 
 func TestExampleWorkflowLoads(t *testing.T) {
-	all := config{"vscode": true, "jupyter": true, "terminal": true, "filesystem": true}
-	if err := workflow.Load("examples/workflow.yml", commands(all)); err != nil {
-		t.Fatal(err)
-	}
-	if sigs := workflow.Signals(); !slices.Equal(sigs, []string{"SIGUSR1"}) {
-		t.Fatalf("the example watches %v, want SIGUSR1", sigs)
+	all := config{"vscode": true, "jupyter": true, "terminal": true, "filesystem": true, "checkpoint": true}
+	for _, example := range []string{"examples/workflow.yml", "examples/checkpoint.yml", "examples/restore.yml"} {
+		if err := workflow.Load(example, commands(all)); err != nil {
+			t.Fatal(err)
+		}
+		if sigs := workflow.Signals(); !slices.Equal(sigs, []string{"SIGUSR1"}) {
+			t.Fatalf("%s watches %v, want SIGUSR1", example, sigs)
+		}
 	}
 }
 
