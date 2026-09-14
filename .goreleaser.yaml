@@ -1,11 +1,10 @@
 version: 2
 
-before:
-  hooks:
-    - go mod tidy
+project_name: linkspan
 
 builds:
-  - env:
+  - binary: linkspan
+    env:
       - CGO_ENABLED=0
     goos:
       - linux
@@ -16,32 +15,11 @@ builds:
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
-      - -X main.commit={{.Commit}}
-      - -X main.date={{.Date}}
-      - -X main.builtBy={{ if index .Env "BUILT_BY" }}{{ .Env.BUILT_BY }}{{ else }}goreleaser{{ end }}
 
 archives:
   - formats: [tar.gz]
-    # this name template makes the OS and Arch compatible with the results of `uname`.
-    name_template: >-
-      {{ .ProjectName }}_
-      {{- title .Os }}_
-      {{- if eq .Arch "amd64" }}x86_64
-      {{- else if eq .Arch "386" }}i386
-      {{- else }}{{ .Arch }}{{ end }}
-      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    name_template: '{{ .ProjectName }}_{{ title .Os }}_{{ if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}'
 
-
-changelog:
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-
+# The release is published by hand with its notes before this runs, so no changelog is generated.
 release:
-  footer: >-
-
-    ---
-
-    Released by [GoReleaser](https://github.com/goreleaser/goreleaser).
+  mode: keep-existing
