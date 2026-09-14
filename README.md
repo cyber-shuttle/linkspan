@@ -27,7 +27,7 @@ it from inside the job. The tunnel decides who may connect.
 
 Most people use Linkspan through a client. [cs-bridge](https://github.com/cyber-shuttle/cs-bridge) is our
 VS Code extension. [cs-jupyter](https://github.com/cyber-shuttle/cs-jupyter) is our JupyterLite
-distribution. cs-bridge and cs-control submit the job, reach it through the tunnel and connect the IDE.
+distribution. [cs-control](https://github.com/cyber-shuttle/cs-control) is our backend to submit linkspan-as-a-job and create tunnels so IDEs can connect.
 This document is about running Linkspan yourself.
 
 There are four ways to use Linkspan, and they mix. Run it as the main process of a batch job. Drive it
