@@ -33,7 +33,7 @@ func startSession(_ context.Context, params map[string]any) (int, any, string) {
 	if len(options) > 0 {
 		return http.StatusBadRequest, nil, "authorized_key options are not supported"
 	}
-	created, err := (&tasks.Task{Kind: kind, Server: sshd.New(key)}).Start()
+	created, err := (&tasks.Task{ID: sessions.Ref(params), Kind: kind, Server: sshd.New(key)}).Start()
 	if err != nil {
 		return http.StatusInternalServerError, nil, err.Error()
 	}

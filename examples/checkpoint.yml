@@ -8,12 +8,17 @@
 #          ~/.cybershuttle/checkpoints/<id>, the payload dies with it, and Linkspan stops as it would at the
 #          payload's end. examples/restore.yml resumes it from that directory.
 name: checkpoint
-steps:
-  - name: Run the payload
-    action: checkpoint.sessions.start
-    params:
-      command: for i in $(seq 1 100); do echo $i; sleep 1; done
-      stop_on_exit: true
-  - name: Checkpoint before the time limit
-    on: SIGUSR1
-    action: checkpoint.dump
+tasks:
+  - on: start
+    steps:
+      - name: Run the payload
+        ref: payload
+        action: shell.exec
+        params:
+          command: for i in $(seq 1 30); do echo $i; sleep 1; done
+  - on: SIGUSR1
+    steps:
+      - name: Pause before the time limit
+        action: checkpoint.pause
+        params:
+          ids: [payload]

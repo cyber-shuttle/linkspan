@@ -47,7 +47,7 @@ func startSession(_ context.Context, params map[string]any) (int, any, string) {
 		return http.StatusNotImplemented, nil, err.Error()
 	}
 	cwd, _ := params["cwd"].(string)
-	created, err := (&tasks.Task{Kind: kind, Attrs: func(t tasks.Task) map[string]string {
+	created, err := (&tasks.Task{ID: sessions.Ref(params), Kind: kind, Attrs: func(t tasks.Task) map[string]string {
 		return map[string]string{"cwd": cwd, "url": tunnel.URL(t.Port())}
 	}, Spawn: func(ctx context.Context, port int) (*exec.Cmd, error) {
 		bin := filepath.Join(install.Dir(), "bin", "ttyd")

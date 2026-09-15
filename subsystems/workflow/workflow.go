@@ -23,22 +23,25 @@
 package workflow
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
-	"slices"
 	"strings"
 	"syscall"
 
 	"github.com/cyber-shuttle/linkspan/internal/router"
+	"github.com/cyber-shuttle/linkspan/internal/sessions"
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
 	"github.com/cyber-shuttle/linkspan/internal/tunnel"
+	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
 )
 
@@ -46,85 +49,111 @@ var signals = map[string]os.Signal{"SIGUSR1": syscall.SIGUSR1, "SIGUSR2": syscal
 
 type Step struct {
 	Name    string         `yaml:"name"`
-	On      string         `yaml:"on"`
+	Ref     string         `yaml:"ref"`
 	Action  string         `yaml:"action"`
 	Params  map[string]any `yaml:"params"`
-	Tasks   []Step         `yaml:"tasks"`
 	command router.Command
 }
 
-var steps []Step
+type Task struct {
+	Step  `yaml:",inline"`
+	On    string `yaml:"on"`
+	Steps []Step `yaml:"steps"`
+}
 
-func execute(ctx context.Context, params map[string]any) (int, any, string) {
+var loaded []Task
+
+func exec(_ context.Context, params map[string]any) (int, any, string) {
 	command, _ := params["command"].(string)
-	argv := strings.Fields(command)
-	if len(argv) == 0 {
+	if strings.TrimSpace(command) == "" {
 		return http.StatusBadRequest, nil, "command is required"
 	}
-	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if err := tasks.Exec(ctx, cmd); err != nil {
+	created, err := sessions.Start(tasks.Task{Kind: sessions.Process, ID: sessions.Ref(params)}, "sh", "-c", command)
+	if err != nil {
 		return http.StatusInternalServerError, nil, err.Error()
 	}
-	return http.StatusOK, nil, ""
+	ended, paused := sessions.Wait(created.ID)
+	switch {
+	case paused:
+		return http.StatusAccepted, ended, ""
+	case ended.State != tasks.StateExited:
+		return http.StatusInternalServerError, nil, ended.Error
+	}
+	return http.StatusOK, ended, ""
 }
 
 func Run(ctx context.Context, trigger string) error {
-	for i, step := range steps {
-		if step.On != trigger {
+	var started []string
+run:
+	for _, task := range loaded {
+		if task.On != trigger {
 			continue
 		}
-		log.Printf("workflow: [%d/%d] %q on %s", i+1, len(steps), step.Name, trigger)
-		status, out, msg := step.command(ctx, step.Params)
-		if status < 200 || status >= 300 {
-			return fmt.Errorf("step %d (%s): %s: %d %s", i+1, step.Name, step.Action, status, msg)
+		for i, step := range task.Steps {
+			log.Printf("workflow: [%d/%d] %q on %s", i+1, len(task.Steps), step.Name, trigger)
+			status, out, msg := step.command(ctx, step.Params)
+			if status < 200 || status >= 300 {
+				return fmt.Errorf("step %d (%s): %s: %d %s", i+1, step.Name, step.Action, status, msg)
+			}
+			if out != nil {
+				encoded, _ := json.Marshal(out)
+				log.Printf("workflow: %s: %s", step.Action, encoded)
+				var created struct{ ID string }
+				if json.Unmarshal(encoded, &created) == nil && created.ID != "" {
+					started = append(started, created.ID)
+				}
+			}
+			if status == http.StatusAccepted {
+				log.Printf("workflow: %q paused; no more %s steps", step.Name, trigger)
+				break run
+			}
 		}
-		if out != nil {
-			encoded, _ := json.Marshal(out)
-			log.Printf("workflow: %s: %s", step.Action, encoded)
-		}
+	}
+	for _, id := range started {
+		tasks.Wait(id)
 	}
 	return nil
 }
 
-func Start(ctx context.Context) error {
-	if err := Run(ctx, "start"); err != nil {
-		return err
-	}
-	select {
-	case <-ctx.Done():
-		return nil
-	case <-tunnel.Ready():
-	}
-	return Run(ctx, "ready")
-}
-
-func WatchSignal(name string) func(context.Context) error {
+func Start() func(context.Context) error {
 	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, signals[name])
+	for _, task := range loaded {
+		if sig, ok := signals[task.On]; ok {
+			signal.Notify(ch, sig)
+		}
+	}
 	return func(ctx context.Context) error {
 		defer signal.Stop(ch)
+		setup := make(chan error, 1)
+		go func() {
+			if err := Run(ctx, "start"); err != nil {
+				setup <- err
+				return
+			}
+			select {
+			case <-ctx.Done():
+			case <-tunnel.Ready():
+				setup <- Run(ctx, "ready")
+			}
+		}()
 		for {
 			select {
 			case <-ctx.Done():
 				return nil
-			case <-ch:
-				if err := Run(ctx, name); err != nil {
+			case err := <-setup:
+				if err != nil {
+					return err
+				}
+				log.Print("workflow: start and ready done, ending the job")
+				_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+				setup = nil
+			case sig := <-ch:
+				if err := Run(ctx, unix.SignalName(sig.(syscall.Signal))); err != nil {
 					return err
 				}
 			}
 		}
 	}
-}
-
-func Signals() []string {
-	var out []string
-	for _, step := range steps {
-		if _, ok := signals[step.On]; ok && !slices.Contains(out, step.On) {
-			out = append(out, step.On)
-		}
-	}
-	return out
 }
 
 func Load(path string, commands map[string]router.Command) error {
@@ -133,35 +162,45 @@ func Load(path string, commands map[string]router.Command) error {
 		return fmt.Errorf("workflow: read: %w", err)
 	}
 	var doc struct {
-		Steps []Step `yaml:"steps"`
+		Name  string `yaml:"name"`
+		Tasks []Task `yaml:"tasks"`
 	}
-	if err := yaml.Unmarshal(data, &doc); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&doc); err != nil {
 		return fmt.Errorf("workflow: parse: %w", err)
 	}
-	var flat []Step
-	for i, step := range doc.Steps {
-		on := cmp.Or(step.On, "start")
-		if _, ok := signals[on]; !ok && on != "start" && on != "ready" && on != "stop" {
-			return fmt.Errorf("workflow: step %d (%s): unknown trigger %q", i+1, step.Name, on)
-		}
-		list := step.Tasks
-		if list == nil {
-			list = []Step{step}
-		}
-		for _, task := range list {
-			task.On, task.command = on, commands[task.Action]
-			if task.command == nil {
-				return fmt.Errorf("workflow: step %d (%s): unknown action %q", i+1, task.Name, task.Action)
-			}
-			flat = append(flat, task)
-		}
+	if len(doc.Tasks) == 0 {
+		return errors.New("workflow: no tasks")
 	}
-	steps = flat
+	var all []Task
+	for i, task := range doc.Tasks {
+		task.On = cmp.Or(task.On, "start")
+		if _, ok := signals[task.On]; !ok && task.On != "start" && task.On != "ready" && task.On != "stop" {
+			return fmt.Errorf("workflow: task %d (%s): unknown trigger %q", i+1, task.Name, task.On)
+		}
+		if task.Steps == nil {
+			task.Steps = []Step{task.Step}
+		}
+		for j := range task.Steps {
+			step := &task.Steps[j]
+			if step.command = commands[step.Action]; step.command == nil {
+				return fmt.Errorf("workflow: task %d (%s): unknown action %q", i+1, step.Name, step.Action)
+			}
+			if step.Ref != "" {
+				params := map[string]any{}
+				maps.Copy(params, step.Params)
+				params["ref"], step.Params = step.Ref, params
+			}
+		}
+		all = append(all, task)
+	}
+	loaded = all
 	return nil
 }
 
 var Commands = map[string]router.Command{
-	"shell.exec": execute,
+	"shell.exec": exec,
 }
 
 var Router = router.New("/workflow", map[string]router.Command{

@@ -16,6 +16,7 @@
 package tasks
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net"
@@ -57,8 +58,11 @@ func (t *Task) child(ctx context.Context) error {
 		return err
 	}
 	defer stop()
+	if pid := t.Pid; pid != 0 {
+		defer context.AfterFunc(ctx, func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })()
+	}
 	registry.mu.Lock()
-	t.Pid, t.State = cmd.Process.Pid, StateRunning
+	t.Pid, t.State = cmp.Or(t.Pid, cmd.Process.Pid), StateRunning
 	registry.mu.Unlock()
 	return cmd.Wait()
 }

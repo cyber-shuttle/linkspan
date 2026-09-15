@@ -3,12 +3,16 @@
 #
 #   linkspan --port 8080 --workflow examples/restore.yml
 name: restore
-steps:
-  - name: Resume the payload
-    action: checkpoint.restore
-    params:
-      images_dir: /home/me/.cybershuttle/checkpoints/p-1784476530131977038
-      stop_on_exit: true
-  - name: Checkpoint before the time limit
-    on: SIGUSR1
-    action: checkpoint.dump
+tasks:
+  - on: start
+    steps:
+      - name: Resume the payload
+        action: checkpoint.resume
+        params:
+          ids: [payload]
+  - on: SIGUSR1
+    steps:
+      - name: Pause before the time limit
+        action: checkpoint.pause
+        params:
+          ids: [payload]

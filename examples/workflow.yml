@@ -7,10 +7,10 @@
 #        curl http://127.0.0.1:8080/api/v1/jupyter/sessions shows it running with its token.
 # SIGUSR1: kill -USR1 <pid>, as Slurm's --signal would: a line on stdout.
 # stop: Ctrl-C or SIGTERM: a line on stdout before anything is torn down, then exit 0.
-name: example
-steps:
+name: jupyter
+tasks:
   - on: start
-    tasks:
+    steps:
       - name: Announce
         action: shell.exec
         params:
@@ -18,20 +18,22 @@ steps:
       - name: Build the Jupyter environment
         action: jupyter.setup
   - on: ready
-    tasks:
+    steps:
       - name: Jupyter
         action: jupyter.sessions.start
         params:
           root_dir: /tmp
       - name: List sessions
         action: jupyter.sessions.select
-  - name: Checkpoint before the time limit
-    on: SIGUSR1
-    action: shell.exec
-    params:
-      command: echo time limit near, checkpointing
-  - name: Sync results
-    on: stop
-    action: shell.exec
-    params:
-      command: echo stopping, syncing results
+  - on: SIGUSR1
+    steps:
+      - name: Checkpoint before the time limit
+        action: shell.exec
+        params:
+          command: echo time limit near, checkpointing
+  - on: stop
+    steps:
+      - name: Sync results
+        action: shell.exec
+        params:
+          command: echo stopping, syncing results

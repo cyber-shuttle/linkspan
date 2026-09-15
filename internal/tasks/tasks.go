@@ -202,6 +202,22 @@ func Select(kind Kind) []Task {
 	return out
 }
 
+func Wait(id string) Task {
+	registry.mu.Lock()
+	t := registry.m[id]
+	registry.mu.Unlock()
+	if t == nil {
+		return Task{}
+	}
+	<-t.done
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	if registry.m[id] == t {
+		delete(registry.m, id)
+	}
+	return *t
+}
+
 func Stop(id string) bool {
 	registry.mu.Lock()
 	t := registry.m[id]

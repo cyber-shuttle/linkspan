@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 )
@@ -61,4 +62,9 @@ func Fetch(ctx context.Context, dst, src string) error {
 		return err
 	}
 	return os.Rename(part, dst)
+}
+
+func Which(name string) string {
+	path, _ := exec.LookPath(name)
+	return path
 }

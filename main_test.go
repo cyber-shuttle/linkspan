@@ -82,7 +82,7 @@ func TestRoutesFollowConfig(t *testing.T) {
 		t.Fatalf("metrics answered %d %s, want an object", rec.Code, rec.Body)
 	}
 	all := config{"workflow": true, "vscode": true, "jupyter": true, "terminal": true, "filesystem": true, "checkpoint": true}
-	for _, path := range []string{"/api/v1/vscode/sessions", "/api/v1/jupyter/sessions", "/api/v1/terminal/sessions", "/api/v1/checkpoint/sessions"} {
+	for _, path := range []string{"/api/v1/vscode/sessions", "/api/v1/jupyter/sessions", "/api/v1/terminal/sessions"} {
 		if rec := get(all, path); rec.Code != http.StatusOK {
 			t.Errorf("%s answered %d with its subsystem enabled, want 200", path, rec.Code)
 		}
@@ -95,8 +95,8 @@ func TestRoutesFollowConfig(t *testing.T) {
 		routes(cfg).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, nil))
 		return rec.Code
 	}
-	if post(all, "/api/v1/filesystem/mount") != http.StatusNotImplemented || post(config{}, "/api/v1/filesystem/mount") != http.StatusNotFound {
-		t.Error("a filesystem route must answer 501 when enabled and 404 when disabled")
+	if post(all, "/api/v1/filesystem/mount") != http.StatusBadRequest || post(config{}, "/api/v1/filesystem/mount") != http.StatusNotFound {
+		t.Error("a filesystem route must want its params when enabled and answer 404 when disabled")
 	}
 	if post(all, "/api/v1/workflow/shell/exec") != http.StatusBadRequest || post(config{}, "/api/v1/workflow/shell/exec") != http.StatusNotFound {
 		t.Error("the workflow route must refuse an empty command when enabled and answer 404 when disabled")
@@ -179,9 +179,6 @@ func TestExampleWorkflowLoads(t *testing.T) {
 	for _, example := range []string{"examples/workflow.yml", "examples/checkpoint.yml", "examples/restore.yml"} {
 		if err := workflow.Load(example, commands(all)); err != nil {
 			t.Fatal(err)
-		}
-		if sigs := workflow.Signals(); !slices.Equal(sigs, []string{"SIGUSR1"}) {
-			t.Fatalf("%s watches %v, want SIGUSR1", example, sigs)
 		}
 	}
 }
