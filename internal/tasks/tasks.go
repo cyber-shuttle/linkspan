@@ -11,7 +11,7 @@
 //	Server       What an http.Server and a gliderlabs Server share.
 //	Task         Exactly one of Run, Server, Spawn and Child is set. Run must return once its context is done, or
 //	             StopAll hangs. Server and Spawn default Addr to loopback on any port. Attrs are the caller's wire
-//	             fields, computed from the bound task.
+//	             fields, computed from the bound task. Pid is the Child's process, or one preset in its stead.
 //	registry     One lock, which also guards each task's state.
 //	Failed       The first fatal error; main exits on it.
 //	listen       An Addr that is not host:port is a unix path: a stale socket there is unlinked, any other file
@@ -28,6 +28,8 @@
 //	             context is cancelled after Run returns, so every AfterFunc fires. The returned copy is the
 //	             caller's; the registry entry changes under the lock.
 //	Select       Copies of one kind, ordered by id.
+//	Wait         Blocks until the task's work has ended, unlists it unless a repeated id replaced it, and answers
+//	             its final copy; the zero Task for an id not held.
 //	Stop         Cancels one task, waits for it and forgets it; an unknown id is false.
 //	StopAll      Waits on a copy of the registry, so no wait holds the lock.
 package tasks

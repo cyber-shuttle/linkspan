@@ -11,7 +11,7 @@
 //	commands                The workflow's actions: its own unprefixed, and each enabled subsystem's behind its name.
 //	startAll                Validates every input before binding anything, then starts every task in one pass, the
 //	                        listeners first: each as h-<port> or h-<socket path>, metrics, the tunnel and the
-//	                        workflow by kind, and the workflow's signal tasks as workflow-<signal>.
+//	                        workflow by kind.
 //	main                    os.Exit is the first defer, so StopAll runs before it; the workflow's stop steps run
 //	                        first, with the API still up.
 package main

@@ -11,7 +11,8 @@
 //	Exec          Runs the command in its own process group, kills the group on cancellation so helpers die with
 //	              the child, and waits for the child. A setsid daemon leaves the group and survives.
 //	Task          The receiver of spawn and child.
-//	child         Publishes the pid under the registry lock, as the state.
+//	child         Publishes the pid under the registry lock, as the state; a preset Pid is the process the task
+//	              stands for, killed with the command on cancellation.
 //	spawn         Releases the port to the command and dials it until it accepts.
 package tasks
 

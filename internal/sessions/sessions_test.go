@@ -1,3 +1,7 @@
+// Tests for a plain-process session's life. Each test stops what it starts.
+//
+//	TestWait         An ended session is forgotten, its final copy answered.
+//	TestPausedEnd    A session a pause ends is not a failure to the waiter.
 package sessions
 
 import (

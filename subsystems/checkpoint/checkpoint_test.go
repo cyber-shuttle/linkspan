@@ -1,18 +1,10 @@
-// Tests for the session's life and the CRIU wiring, with a fake criu so no kernel support is needed. Each test
-// stops what it starts.
+// Tests for the CRIU wiring, against a fake criu that records its argv and kills what it dumps, with HOME in a
+// temp dir so the snapshots land there. Each test stops what it starts.
 //
-//	exited      What exit sends, so a test sees Linkspan asked to stop without a signal.
-//	init
-//	fakeCriu    An executable that records its argv and exits 0.
-//	await       The session by id once it reaches state, within 5s.
-//	startOne
-//	TestSessionRunsAndStopsLinkspan   A command that ends on its own is listed exited with its pid, and asks Linkspan to
-//	                                   stop only with stop_on_exit.
-//	TestStopDoesNotStopLinkspan        A session Stop ends did so at the caller's request, so nothing stops Linkspan.
-//	TestDumpWithoutCRIU          501 when the binary is absent, for dump and restore alike.
-//	TestDumpTakesTheRunning      The running session's pid reaches criu dump under the images root; an unknown
-//	                                   id is 404 and an empty registry dumps nothing.
-//	TestRestoreIsASession              The restore runs as a session whose command is the criu invocation.
+//	fakeCriu   Also HOME; without a fake, criu is unset.
+//	await
+//	TestPause   Every branch in one flow, a failed dump among them.
+//	TestResume
 package checkpoint
 
 import (

@@ -28,7 +28,7 @@ linkspan
 ├── layout_test.go             # the file-layout rules below
 ├── docs/COMPATIBILITY.md      # what clients depend on
 ├── docs/assets/               # the README's architecture diagram, architecture.mmd rendered to .png
-├── examples/workflow.yml      # a workflow that exercises each kind of trigger
+├── examples/                  # workflow.yml; checkpoint.yml, restore.yml and checkpoint.sh, which runs them
 ├── Makefile                   # make check, make tools, and the tagged cross-compile
 ├── .golangci.yml              # the linters and the one place suppressions live
 ├── internal/
@@ -38,13 +38,14 @@ linkspan
 │   ├── sshd/                  # SSH server (gliderlabs/ssh)
 │   ├── tunnel/                # relay hosting and tunnel port publishing
 │   ├── install/               # ~/.cybershuttle: fetched binaries, uv, Python, the Jupyter environment
-│   └── sessions/              # the list and stop commands the session subsystems share
+│   └── sessions/              # what the session subsystems share, and a process session's life
 └── subsystems/
-    ├── workflow/              # /api/v1/workflow/shell/exec, and YAML steps on lifecycle triggers
+    ├── workflow/              # /api/v1/workflow/shell/exec, and the --workflow document
     ├── vscode/                # /api/v1/vscode/sessions: SSH servers for VS Code Remote-SSH
     ├── jupyter/               # /api/v1/jupyter/sessions: Jupyter sessions in a uv-built environment
     ├── terminal/              # /api/v1/terminal/sessions: ttyd web terminals
-    └── filesystem/            # /api/v1/filesystem: mount, unmount, copy and sync, 501 placeholders
+    ├── checkpoint/            # /api/v1/checkpoint/pause and /resume: CRIU over process sessions
+    └── filesystem/            # /api/v1/filesystem: mount, unmount, copy and sync, declared, answering 501
 ```
 
 `internal/` is Linkspan's own infrastructure and its primitives, with no route of their own. `subsystems/`

@@ -1,23 +1,27 @@
-// Package workflow runs the steps a YAML document names at the moments of the job's life it chooses: start, once
+// Package workflow runs the tasks a YAML document names at the moments of the job's life it chooses: start, once
 // the API is up; ready, once the tunnel is hosting, or at once without one; stop, when Linkspan is told to exit;
-// or a signal such as SIGUSR1, which Slurm sends ahead of the time limit. A step is one action with its params
-// or a list of tasks under one trigger; they run in order, and the first failure stops them. shell.exec runs a
-// command without a shell, so nothing expands and a forking command cannot hold the workflow open. Any other
-// action is one a subsystem offers, such as vscode.sessions.start, with the params it takes, so a workspace is
-// set up from the file. One document is loaded per job.
+// or a signal such as SIGUSR1, which Slurm sends ahead of the time limit. A task is a list of steps under one
+// trigger, each an action with its params; they run in order, and the first failure stops them. shell.exec runs a
+// command under sh as a process session named by the step's ref, which checkpoint.pause can end; a paused step
+// ends its trigger's run, so the rest waits for a resume. A run then waits on the sessions its steps started, and
+// the job ends once start and ready are complete, so a batch job ends with its payload and a workspace with its
+// servers. Any other action is one a subsystem offers, such as vscode.sessions.start, with the params it takes,
+// so a workspace is set up from the file. One document is loaded per job.
 //
 //	signals          The triggers beyond start, ready and stop, by name.
-//	Step             On defaults to start; Tasks, when given, are the actions under it, else Action and Params are
-//	                 the one.
-//	steps            The loaded document, one entry per task, its trigger and its command bound at load.
-//	execute          The shell.exec command.
-//	Run              The tasks of one trigger in order, each failing on a status outside 2xx; nothing when no
+//	Step             One action with its params; Ref names what the action creates.
+//	Task             On defaults to start; Steps are the steps under it, one at least.
+//	loaded           The document's tasks, each with its trigger and its steps' commands bound at load.
+//	exec             The shell.exec command.
+//	Run              The steps of each task on one trigger, in order, each failing on a status outside 2xx and
+//	                 ending the run on 202, then a wait on every session a step answered with. Nothing when no
 //	                 document is loaded.
-//	Start            The task main starts: the start tasks, then the ready tasks once tunnel.Ready is closed.
-//	WatchSignal      The task of one signal: its tasks on each arrival.
-//	Signals          The signal triggers the document names, each once, so main watches each.
+//	Start            The task main starts, built after Load: the start steps, then the ready steps once tunnel.Ready
+//	                 is closed, then SIGTERM to Linkspan, the job being done; beside them each signal's steps as it
+//	                 arrives, so one reaches a running step, and the job's end waits for a signal's steps.
 //	Load             Reads and validates the document against the commands main enables, so an invalid one is
-//	                 refused at startup.
+//	                 refused at startup, as is one without tasks or with a field it does not know; a step's ref
+//	                 goes to its command as the ref param.
 //	Commands         shell.exec, the package's own action, which main adds unprefixed.
 //	Router           POST /workflow/shell/exec, the same command as a route.
 package workflow

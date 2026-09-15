@@ -43,13 +43,12 @@ A report is most useful when it shows one of these boundaries failing.
   `uv` through Astral's installer script, all over HTTPS into `~/.cybershuttle/bin/`, and runs them as the
   job's user, and `uv` in turn fetches a Python and packages from PyPI. There is no checksum or signature
   check, so the transport is the only integrity guarantee.
-- **A Jupyter server and a terminal are shells.** A Jupyter server accepts its token in the query and
-  runs kernels and terminals as the job's user, and a web terminal is a login shell. Both bind loopback and
+- **A Jupyter server and a terminal run commands.** A Jupyter server accepts its token in the query and
+  runs kernels and terminals as the job's user, and a web terminal is a PTY. Both bind loopback and
   are reachable only over the tunnel port, a Jupyter server's with its token and a terminal's after the
   owner's sign-in, or by a process on the node.
-- **Workflow commands run without a shell.** They are split on whitespace with no expansion, so a workflow
-  file cannot smuggle a glob, a variable or a pipe into the command it names. The file is trusted input from
-  the client that submitted the job and runs commands as the job's user by design.
+- **Workflow commands run under `sh`.** A workflow file is trusted input from the client that submitted the
+  job, and its commands run as the job's user by design, with the shell's globs, variables and pipes.
 
 A finding that depends on already holding the job's credentials, an account on the compute node as
 that user, or another account on a node the job was meant to hold exclusively, describes one of these

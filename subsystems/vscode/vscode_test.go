@@ -4,6 +4,7 @@
 //	marshal, create
 //	TestCreateSessionServesOnReturn, TestCreateSessionRejectsBadKey
 //	TestSelectShape  Only the SSH kind may be listed, with the state literal cs-bridge compares.
+//	TestRefNamesTheSession
 package vscode
 
 import (

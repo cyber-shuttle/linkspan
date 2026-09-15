@@ -1,8 +1,9 @@
 // Package filesystem is reserved for mounting datasets and moving files between the job and elsewhere. Each
-// operation is a route and a workflow command alike, declared and answering 501 until it does something.
+// operation is a route and a workflow command alike, declared with the params it will take and answering 501
+// until it does something, so a document naming one is refused for a missing param today as it will be then.
 //
-//	notImplemented  The placeholder every operation is, naming itself.
-//	Commands        mount, unmount, copy and sync.
+//	notImplemented  The placeholder every operation is: 400 without each of its params, else 501 naming itself.
+//	Commands        mount, copy and sync take source and target; unmount takes target.
 //	Router          POST /filesystem/mount, /unmount, /copy and /sync, each a Commands entry.
 package filesystem
 

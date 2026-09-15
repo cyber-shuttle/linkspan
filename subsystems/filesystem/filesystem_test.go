@@ -1,3 +1,6 @@
+// Tests that each declared operation refuses a missing param and otherwise answers 501.
+//
+//	TestDeclared
 package filesystem
 
 import (

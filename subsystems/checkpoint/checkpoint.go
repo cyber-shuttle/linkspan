@@ -1,25 +1,23 @@
-// Package checkpoint runs a command as a session and checkpoints it with CRIU. A command posted to
-// /api/v1/checkpoint/sessions runs under sh with Linkspan's stdio and is listed until it ends; with stop_on_exit its
-// end stops Linkspan, so a batch job ends with its payload and the workflow's stop steps run. A checkpoint dumps
-// a running session's process tree to an images directory, which ends the session, and a restore runs a dumped
-// tree as a new session, so a workflow checkpoints ahead of Slurm's time limit and the next job resumes. CRIU is
-// the user's, on PATH or named per request; it runs unprivileged, so the kernel must allow that.
+// Package checkpoint is a sidecar over running process sessions: pause writes one into a snapshot with CRIU
+// under ~/.cybershuttle/checkpoints, and resume runs the snapshot as a new session, in this job or a later one,
+// via the API or a workflow step. A paused session ends, and the step waiting on it answers 202, so a workflow
+// pauses its payload under a signal and goes on with the steps after the pause. CRIU is the user's, on PATH,
+// allowed to run unprivileged.
 //
-//	kind
-//	criuArgs      What dump and restore share: a shell job, since the tree leads a process group on Linkspan's
-//	              stdio, with its TCP connections, and no root.
-//	exit          Stops Linkspan as a signal does; a test swaps it.
-//	start         A session running argv, listed as command, with the id p-<nanoseconds> since it binds no port.
-//	              Stop removes a task before cancelling it, so a task still listed when its context ends ended on
-//	              its own, and that is when stop_on_exit acts.
-//	criu          The binary params.criu names, else criu on PATH; absent, the route answers 501.
-//	startSession  params.command under sh -c, so it may use the shell.
-//	dump          Dumps params.id, or every running session without one, to <params.images_dir>/<id>, the root
-//	              defaulting to ~/.cybershuttle/checkpoints, and answers the ids and directories dumped. CRIU
-//	              kills what it dumped, so the session ends and stop_on_exit acts.
-//	restore       A session running criu restore on params.images_dir; the tree lives as criu's child.
-//	Commands      sessions.select and sessions.stop from sessions.
-//	Router        /checkpoint/sessions, and dump and restore beside it.
+//	criu       Resolved once; absent, pause and resume answer 501.
+//	serial     One pause at a time, since two dumps of one tree would race.
+//	criuArgs   A shell job on Linkspan's stdio with its TCP connections; --unprivileged unless root, since the
+//	           flag needs CRIU 3.18.
+//	snapshots  By ref, from each folder's snapshot file: the folder, the pid, and the stdout and stderr names a
+//	           resume hands CRIU, so the tree writes to this job's stdio.
+//	check      What pause and resume refuse: no criu, or a ref over more or fewer than one id.
+//	pause      The selected running sessions, or all, none unless every selected one is running. The ref defaults
+//	           to the session id; a repeated ref replaces the earlier snapshot. The record is written before the
+//	           dump, so a failed pause leaves nothing behind. The session ends unless leave_running.
+//	resume     The selected snapshots by ref, or all, none unless every one exists. Runs criu as the session, its id
+//	           defaulting to the ref and its pid to the tree's, and like shell.exec answers once they end: 202 when
+//	           paused again.
+//	Commands, Router  pause and resume, each a route.
 package checkpoint
 
 import (

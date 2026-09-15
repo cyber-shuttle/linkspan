@@ -1,14 +1,18 @@
 // Tests for step execution: the first failure stops it, a forking step does not block it, a trigger runs only
-// its own steps, a task list shares its trigger, and a command step reaches its command.
+// its own steps, a task's steps share its trigger, and a command step reaches its command.
 //
 //	step, shell, loadDoc, names, loadSteps
 //	TestForkingStepDoesNotBlock  A step that forks a child and exits must not hold the workflow open.
+//	TestExecIsASession           A paused step ends the run; the false after it never runs.
+//	TestJobEndsAfterReady        Start sends Linkspan SIGTERM once start and ready are run and the sessions their
+//	                             steps started have ended.
 //	TestStopsAtFirstFailure
-//	TestTriggers                 A signal task runs its steps on the signal; Start runs start then ready at once
-//	                             with no tunnel; an unknown trigger is refused at load.
-//	TestTaskList                 Every task under one on runs on that trigger, in order.
+//	TestTriggers                 Start runs start then ready at once with no tunnel, then a signal's steps on the
+//	                             signal; an unknown trigger is refused at load.
+//	TestTaskList                 Every step under one task runs on its trigger, in order; a document with no tasks,
+//	                             or a field it does not know, such as a top-level steps list, is refused.
 //	TestCommands                 An action no enabled subsystem offers is refused at load; a command sees the step's
-//	                             params and fails the step outside 2xx.
+//	                             params, its ref among them, and fails the step outside 2xx.
 package workflow
 
 import (

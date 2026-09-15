@@ -21,10 +21,11 @@ linters:
       - path: _test\.go
         linters: [gosec]
         text: "G204|G304|G306|G702"
-      # Reads the --workflow file (G304) and runs its commands (G204).
+      # Reads the --workflow file (G304).
       - path: subsystems/workflow/workflow\.go
         linters: [gosec]
         text: "G304"
+      # Runs a process session's command (G204).
       - path: internal/sessions/sessions\.go
         linters: [gosec]
         text: "G204"
@@ -40,11 +41,11 @@ linters:
       - path: internal/tunnel/tunnel\.go
         linters: [gosec]
         text: "G204"
-      # Run the uv, python and ttyd binaries they installed, and the user's shell (G204, G702).
+      # Run the uv, python and ttyd binaries they installed, and $SHELL on a PTY (G204, G702).
       - path: subsystems/(jupyter/jupyter|terminal/terminal)\.go
         linters: [gosec]
         text: "G204|G702"
-      # Runs the command a request or workflow step names, and the user's criu (G204, G702).
+      # Runs the user's criu (G204, G702) and reads the snapshot file beside its images (G304).
       - path: subsystems/checkpoint/checkpoint\.go
         linters: [gosec]
         text: "G204|G304|G702"
