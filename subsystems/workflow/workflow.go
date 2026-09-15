@@ -56,7 +56,6 @@ type Step struct {
 }
 
 type Task struct {
-	Step  `yaml:",inline"`
 	On    string `yaml:"on"`
 	Steps []Step `yaml:"steps"`
 }
@@ -177,10 +176,10 @@ func Load(path string, commands map[string]router.Command) error {
 	for i, task := range doc.Tasks {
 		task.On = cmp.Or(task.On, "start")
 		if _, ok := signals[task.On]; !ok && task.On != "start" && task.On != "ready" && task.On != "stop" {
-			return fmt.Errorf("workflow: task %d (%s): unknown trigger %q", i+1, task.Name, task.On)
+			return fmt.Errorf("workflow: task %d: unknown trigger %q", i+1, task.On)
 		}
-		if task.Steps == nil {
-			task.Steps = []Step{task.Step}
+		if len(task.Steps) == 0 {
+			return fmt.Errorf("workflow: task %d: no steps", i+1)
 		}
 		for j := range task.Steps {
 			step := &task.Steps[j]

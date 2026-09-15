@@ -59,7 +59,7 @@ func loadSteps(t *testing.T, steps ...step) error {
 	t.Helper()
 	doc := "name: t\ntasks:\n"
 	for i, s := range steps {
-		doc += fmt.Sprintf("  - action: %s\n    name: s%d\n    on: %q\n    params:\n      command: %q\n", s.action, i+1, s.on, s.command)
+		doc += fmt.Sprintf("  - on: %q\n    steps:\n      - action: %s\n        name: s%d\n        params:\n          command: %q\n", s.on, s.action, i+1, s.command)
 	}
 	return loadDoc(t, doc, Commands)
 }
@@ -122,7 +122,7 @@ func TestJobEndsAfterReady(t *testing.T) {
 		}
 		return http.StatusCreated, created, ""
 	}
-	doc := "name: t\ntasks:\n  - action: shell.exec\n    params: {command: \"true\"}\n  - {on: ready, ref: j, action: jupyter.sessions.start}\n"
+	doc := "name: t\ntasks:\n  - steps: [{action: shell.exec, params: {command: \"true\"}}]\n  - {on: ready, steps: [{ref: j, action: jupyter.sessions.start}]}\n"
 	if err := loadDoc(t, doc, map[string]router.Command{"shell.exec": exec, "jupyter.sessions.start": serve}); err != nil {
 		t.Fatal(err)
 	}
@@ -212,6 +212,9 @@ tasks:
 	if err := loadDoc(t, doc+"steps:\n  - action: shell.exec\n    params: {command: true}\n", Commands); err == nil || !strings.Contains(err.Error(), "steps") {
 		t.Fatalf("a top-level steps list must be refused, got %v", err)
 	}
+	if err := loadDoc(t, "name: t\ntasks: [{on: stop}]\n", Commands); err == nil || !strings.Contains(err.Error(), "no steps") {
+		t.Fatalf("a task is one or more steps, got %v", err)
+	}
 	if err := loadDoc(t, "name: t\n", Commands); err == nil || !strings.Contains(err.Error(), "no tasks") {
 		t.Fatalf("a workflow is one or more tasks, got %v", err)
 	}
@@ -240,13 +243,14 @@ func TestCommands(t *testing.T) {
 	commands := map[string]router.Command{"vscode.sessions.start": command(http.StatusCreated), "jupyter.sessions.stop": command(http.StatusNotFound)}
 	doc := `name: t
 tasks:
-  - name: create
-    ref: laptop
-    action: vscode.sessions.start
-    params: {authorized_key: k}
-  - name: missing
-    action: jupyter.sessions.stop
-    params: {id: j-9}
+  - steps:
+      - name: create
+        ref: laptop
+        action: vscode.sessions.start
+        params: {authorized_key: k}
+      - name: missing
+        action: jupyter.sessions.stop
+        params: {id: j-9}
 `
 	if err := loadDoc(t, doc, nil); err == nil || !strings.Contains(err.Error(), "unknown action") {
 		t.Fatalf("a command no enabled subsystem offers must be refused at load, got %v", err)
