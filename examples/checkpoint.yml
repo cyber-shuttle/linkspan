@@ -5,7 +5,7 @@
 #
 # start: the payload counts on stdout; when it ends, so does the job.
 # SIGUSR1: kill -USR1 <pid>, as sbatch --signal=USR1@60 would: the tree is written to a snapshot under
-#          ~/.cybershuttle/checkpoints as payload, its step ends with no more start steps, and the job ends.
+#          ~/.cybershuttle/checkpoints/payload, its step ends with no more start steps, and the job ends.
 #          examples/restore.yml resumes it from that snapshot.
 name: checkpoint
 tasks:
@@ -21,4 +21,4 @@ tasks:
       - name: Pause before the time limit
         action: checkpoint.pause
         params:
-          ids: [payload]
+          id: payload

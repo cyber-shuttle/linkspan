@@ -14,10 +14,7 @@ import (
 )
 
 func TestWait(t *testing.T) {
-	created, err := Start(tasks.Task{Kind: "test"}, "true")
-	if err != nil {
-		t.Fatal(err)
-	}
+	created := Start(tasks.Task{Kind: "test"}, "true")
 	if !strings.HasPrefix(created.ID, "t-") || created.Attrs(created)["command"] != "true" {
 		t.Fatalf("created %+v, want a t- session running true", created)
 	}
@@ -28,10 +25,7 @@ func TestWait(t *testing.T) {
 }
 
 func TestPausedEnd(t *testing.T) {
-	_, err := Start(tasks.Task{Kind: "test", ID: "named"}, "sleep", "30")
-	if err != nil {
-		t.Fatal(err)
-	}
+	Start(tasks.Task{Kind: "test", ID: "named"}, "sleep", "30")
 	Pausing("named", true)
 	Pausing("named", false)
 	Pausing("named", true)

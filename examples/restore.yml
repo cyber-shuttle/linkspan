@@ -1,4 +1,4 @@
-# The next job after examples/checkpoint.yml: resume the payload from its snapshot under the same ref, pause it
+# The next job after examples/checkpoint.yml: resume the payload from its snapshot under the same id, pause it
 # again ahead of the time limit, and shut Linkspan down once it ends.
 #
 #   linkspan --port 8080 --workflow examples/restore.yml
@@ -9,10 +9,10 @@ tasks:
       - name: Resume the payload
         action: checkpoint.resume
         params:
-          ids: [payload]
+          id: payload
   - on: SIGUSR1
     steps:
       - name: Pause before the time limit
         action: checkpoint.pause
         params:
-          ids: [payload]
+          id: payload

@@ -71,10 +71,7 @@ func exec(_ context.Context, params map[string]any) (int, any, string) {
 	if strings.TrimSpace(command) == "" {
 		return http.StatusBadRequest, nil, "command is required"
 	}
-	created, err := sessions.Start(tasks.Task{Kind: sessions.Process, ID: sessions.Ref(params)}, "sh", "-c", command)
-	if err != nil {
-		return http.StatusInternalServerError, nil, err.Error()
-	}
+	created := sessions.Start(tasks.Task{Kind: sessions.Process, ID: sessions.Ref(params)}, "sh", "-c", command)
 	ended, paused := sessions.Wait(created.ID)
 	switch {
 	case paused:

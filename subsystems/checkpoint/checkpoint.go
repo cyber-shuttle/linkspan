@@ -1,32 +1,26 @@
 // Package checkpoint is a sidecar over running process sessions: pause writes one into a snapshot with CRIU
-// under ~/.cybershuttle/checkpoints, and resume runs the snapshot as a new session, in this job or a later one,
-// via the API or a workflow step. A paused session ends, and the step waiting on it answers 202, so a workflow
-// pauses its payload under a signal and goes on with the steps after the pause. CRIU is the user's, on PATH,
-// allowed to run unprivileged.
+// under ~/.cybershuttle/checkpoints/<id>, and resume runs the snapshot as a session under the same id, in this
+// job or a later one, via the API or a workflow step. A paused session ends, and the step waiting on it answers
+// 202, so a workflow pauses its payload under a signal and goes on with the steps after the pause. CRIU is the
+// user's, on PATH, allowed to run unprivileged.
 //
-//	criu       Resolved once; absent, pause and resume answer 501.
-//	serial     One pause at a time, since two dumps of one tree would race.
-//	criuArgs   A shell job on Linkspan's stdio with its TCP connections; --unprivileged unless root, since the
-//	           flag needs CRIU 3.18.
-//	snapshots  By ref, from each folder's snapshot file: the folder, the pid, and the stdout and stderr names a
-//	           resume hands CRIU, so the tree writes to this job's stdio.
-//	check      What pause and resume refuse: no criu, or a ref over more or fewer than one id.
-//	pause      The selected running sessions, or all, none unless every selected one is running. The ref defaults
-//	           to the session id; a repeated ref replaces the earlier snapshot. The record is written before the
-//	           dump, so a failed pause leaves nothing behind. The session ends unless leave_running.
-//	resume     The selected snapshots by ref, or all, none unless every one exists. Runs criu as the session, its id
-//	           defaulting to the ref and its pid to the tree's, and like shell.exec answers once they end: 202 when
-//	           paused again.
+//	criu      Resolved once; absent, pause and resume answer 501.
+//	criuArgs  A shell job on Linkspan's stdio with its TCP connections; --unprivileged unless root, since the
+//	          flag needs CRIU 3.18.
+//	record    What a resume needs beside the images: the tree's pid, and the names of the stdout and stderr CRIU
+//	          dumped, so it hands the tree this job's in their stead.
+//	pause     Dumps the running session id into a .part folder, so a failed dump leaves the earlier snapshot, and
+//	          the session ends with it.
+//	resume    Runs criu as the session, its pid the tree's, and like shell.exec answers once it ends: 202 when
+//	          paused again.
 //	Commands, Router  pause and resume, each a route.
 package checkpoint
 
 import (
-	"cmp"
 	"context"
-	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"log"
-	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -34,7 +28,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/cyber-shuttle/linkspan/internal/install"
 	"github.com/cyber-shuttle/linkspan/internal/router"
@@ -44,8 +37,6 @@ import (
 
 var criu = install.Which("criu")
 
-var serial sync.Mutex
-
 var criuArgs = func() []string {
 	args := []string{"--shell-job", "--tcp-established"}
 	if os.Geteuid() != 0 {
@@ -54,126 +45,80 @@ var criuArgs = func() []string {
 	return args
 }()
 
-func snapshots() map[string][]string {
-	out := map[string][]string{}
-	files, _ := filepath.Glob(filepath.Join(install.Dir(), "checkpoints", "ckpt-*", "snapshot"))
-	for _, file := range files {
-		if data, err := os.ReadFile(file); err == nil {
-			lines := append(strings.Split(string(data), "\n"), "", "", "")
-			out[lines[0]] = append([]string{filepath.Dir(file)}, lines[1:4]...)
-		}
-	}
-	return out
-}
-
-func check(params map[string]any, ids []string) (int, string) {
-	switch {
-	case criu == "":
-		return http.StatusNotImplemented, "criu is not on PATH"
-	case sessions.Ref(params) != "" && len(ids) != 1:
-		return http.StatusBadRequest, "ref names one thing; select one id"
-	}
-	return 0, ""
+type record struct {
+	Pid    int    `json:"pid"`
+	Stdout string `json:"stdout"`
+	Stderr string `json:"stderr"`
 }
 
 func pause(ctx context.Context, params map[string]any) (int, any, string) {
-	serial.Lock()
-	defer serial.Unlock()
-	ids := sessions.Selected(params)
-	if status, msg := check(params, ids); status != 0 {
-		return status, nil, msg
+	id, _ := params["id"].(string)
+	if criu == "" {
+		return http.StatusNotImplemented, nil, "criu is not on PATH"
 	}
-	args := criuArgs
-	keep, _ := params["leave_running"].(bool)
-	if keep {
-		args = slices.Concat(args, []string{"--leave-running"})
+	listed := tasks.Select(sessions.Process)
+	i := slices.IndexFunc(listed, func(t tasks.Task) bool { return t.ID == id && t.State == tasks.StateRunning })
+	if i < 0 {
+		return http.StatusNotFound, nil, "no running session " + id
 	}
-	running := slices.DeleteFunc(tasks.Select(sessions.Process), func(t tasks.Task) bool {
-		return t.State != tasks.StateRunning || (len(ids) > 0 && !slices.Contains(ids, t.ID))
-	})
-	if len(running) < len(ids) {
-		return http.StatusNotFound, nil, fmt.Sprintf("%d of %d selected sessions are not running", len(ids)-len(running), len(ids))
+	t := listed[i]
+	var r record
+	for fd, name := range []*string{&r.Stdout, &r.Stderr} {
+		target, _ := os.Readlink(fmt.Sprintf("/proc/%d/fd/%d", t.Pid, fd+1))
+		*name = strings.TrimPrefix(target, "/")
 	}
-	all, out := snapshots(), []map[string]string{}
-	for _, t := range running {
-		ref := cmp.Or(sessions.Ref(params), t.ID)
-		images := filepath.Join(install.Dir(), "checkpoints", "ckpt-"+strings.ToLower(rand.Text()))
-		lines := []string{ref, strconv.Itoa(t.Pid), "", ""}
-		for fd := 1; fd <= 2; fd++ {
-			if target, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%d", t.Pid, fd)); err == nil {
-				lines[fd+1] = strings.TrimPrefix(target, "/")
-			}
-		}
-		earlier := all[ref]
-		cmd := exec.Command(criu, append([]string{"dump", "-t", strconv.Itoa(t.Pid), "--images-dir", images}, args...)...)
-		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-		log.Printf("checkpoint: pausing %s to %s as %s", t.ID, images, ref)
-		err := os.MkdirAll(images, 0o700)
-		if err == nil {
-			err = os.WriteFile(filepath.Join(images, "snapshot"), []byte(strings.Join(lines, "\n")), 0o600)
-		}
-		if err == nil {
-			sessions.Pausing(t.ID, !keep)
-			err = tasks.Exec(ctx, cmd)
-		}
-		if err != nil {
-			sessions.Pausing(t.ID, false)
-			_ = os.RemoveAll(images)
-			return http.StatusInternalServerError, nil, fmt.Sprintf("%s: %v; paused %d of %d", t.ID, err, len(out), len(running))
-		}
-		if earlier != nil {
-			_ = os.RemoveAll(earlier[0])
-		}
-		out = append(out, map[string]string{"id": t.ID, "snapshot": ref, "dir": images})
+	r.Pid = t.Pid
+	images := filepath.Join(install.Dir(), "checkpoints", id)
+	part := images + ".part"
+	cmd := exec.Command(criu, append([]string{"dump", "-t", strconv.Itoa(t.Pid), "--images-dir", part}, criuArgs...)...)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	log.Printf("checkpoint: pausing %s to %s", id, images)
+	sessions.Pausing(id, true)
+	err := os.MkdirAll(part, 0o700)
+	if err == nil {
+		err = tasks.Exec(ctx, cmd)
 	}
-	return http.StatusOK, out, ""
+	if err == nil {
+		data, _ := json.Marshal(r)
+		err = os.WriteFile(filepath.Join(part, "snapshot"), data, 0o600)
+	}
+	if err == nil {
+		_ = os.RemoveAll(images)
+		err = os.Rename(part, images)
+	}
+	if err != nil {
+		sessions.Pausing(id, false)
+		_ = os.RemoveAll(part)
+		return http.StatusInternalServerError, nil, err.Error()
+	}
+	return http.StatusOK, map[string]string{"id": id, "dir": images}, ""
 }
 
 func resume(_ context.Context, params map[string]any) (int, any, string) {
-	all := snapshots()
-	ids := sessions.Selected(params)
-	if len(ids) == 0 {
-		ids = slices.Sorted(maps.Keys(all))
+	id, _ := params["id"].(string)
+	if criu == "" {
+		return http.StatusNotImplemented, nil, "criu is not on PATH"
 	}
-	if status, msg := check(params, ids); status != 0 {
-		return status, nil, msg
+	images := filepath.Join(install.Dir(), "checkpoints", id)
+	var r record
+	if data, err := os.ReadFile(filepath.Join(images, "snapshot")); err != nil || json.Unmarshal(data, &r) != nil {
+		return http.StatusNotFound, nil, "no snapshot " + id
 	}
-	for _, ref := range ids {
-		if all[ref] == nil {
-			return http.StatusNotFound, nil, "no snapshot " + ref
+	argv := append([]string{criu, "restore", "--images-dir", images}, criuArgs...)
+	for fd, name := range []string{r.Stdout, r.Stderr} {
+		if name != "" {
+			argv = append(argv, "--inherit-fd", fmt.Sprintf("fd[%d]:%s", fd+1, name))
 		}
 	}
-	resumed := []tasks.Task{}
-	for _, ref := range ids {
-		snapshot := all[ref]
-		argv := append([]string{criu, "restore", "--images-dir", snapshot[0]}, criuArgs...)
-		for fd := 1; fd <= 2; fd++ {
-			if snapshot[fd+1] != "" {
-				argv = append(argv, "--inherit-fd", fmt.Sprintf("fd[%d]:%s", fd, snapshot[fd+1]))
-			}
-		}
-		pid, _ := strconv.Atoi(snapshot[1])
-		created, err := sessions.Start(tasks.Task{Kind: sessions.Process, ID: cmp.Or(sessions.Ref(params), ref), Pid: pid}, argv...)
-		if err != nil {
-			return http.StatusInternalServerError, nil, err.Error()
-		}
-		resumed = append(resumed, created)
+	created := sessions.Start(tasks.Task{Kind: sessions.Process, ID: id, Pid: r.Pid}, argv...)
+	ended, paused := sessions.Wait(created.ID)
+	switch {
+	case paused:
+		return http.StatusAccepted, ended, ""
+	case ended.State != tasks.StateExited:
+		return http.StatusInternalServerError, nil, ended.Error
 	}
-	status, failed := http.StatusOK, ""
-	for i, t := range resumed {
-		ended, paused := sessions.Wait(t.ID)
-		resumed[i] = ended
-		switch {
-		case paused:
-			status = http.StatusAccepted
-		case ended.State != tasks.StateExited:
-			failed = cmp.Or(failed, t.ID+": "+ended.Error)
-		}
-	}
-	if failed != "" {
-		return http.StatusInternalServerError, nil, fmt.Sprintf("%s; %d resumed", failed, len(resumed))
-	}
-	return status, resumed, ""
+	return http.StatusOK, ended, ""
 }
 
 var Commands = map[string]router.Command{

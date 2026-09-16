@@ -148,8 +148,8 @@ and a workspace with its servers.
 | `terminal.sessions.start` | Starts a web terminal | `cwd` |
 | `terminal.sessions.stop` | Stops one | `id` |
 | `filesystem.mount`, `.unmount`, `.copy`, `.sync` | Declared, not yet implemented; a missing param is `400`, else `501` | `source`, `target`; `unmount` only `target` |
-| `checkpoint.pause` | Pauses the selected process sessions, or all, into snapshots with CRIU, ending them unless `leave_running`; the step waiting on a paused one ends its trigger's run | `ids`, `leave_running` |
-| `checkpoint.resume` | Resumes the selected snapshots by ref, or all, each as a process session under its ref, and answers when they end | `ids` |
+| `checkpoint.pause` | Pauses one running process session into a snapshot with CRIU, ending it; the step waiting on it ends its trigger's run | `id` |
+| `checkpoint.resume` | Resumes one snapshot as a process session under the same id, and answers when it ends | `id` |
 
 ```yaml
 name: workspace
@@ -186,7 +186,7 @@ tasks:
           command: /usr/bin/rsync -a /scratch/me/out/ /home/me/out/
 ```
 
-A step's `ref` names what its action creates, a session or a snapshot, so later steps can name it. Without
+A step's `ref` names the session its action creates, so later steps can name it. Without
 one, Linkspan assigns the id and answers with it. A ref names one thing, so a step giving one must create
 one, and a repeated ref replaces what held it before. Over the API, `"ref"` is a field of the request body.
 
@@ -265,10 +265,10 @@ the model.
 | POST | `/api/v1/terminal/sessions` | `201` with one session object; takes `{"cwd": "<dir>"}`, default Linkspan's own directory |
 | DELETE | `/api/v1/terminal/sessions/{id}` | `{"id":"t-<port>","state":"stopped"}`, `404` for an unknown id |
 | POST | `/api/v1/filesystem/{mount,unmount,copy,sync}` | `400` for a missing param, else `501`: declared, not yet implemented; takes `{"source": "<path or URL>", "target": "<path>"}`, `unmount` only `target` |
-| POST | `/api/v1/checkpoint/pause` | `200` with `[{"id":"p-<n>","snapshot":"<ref>","dir":"<folder>"}]` once CRIU has written each; takes `{"ids": ["p-<n>", …], "ref": "<the one snapshot's ref>", "leave_running": <bool>}`, all optional; `404` when a selected id is not running, `500` naming the session CRIU failed on and how many were paused before it, `501` without CRIU |
-| POST | `/api/v1/checkpoint/resume` | `200` with `[<session object>]`, one per snapshot resumed, once each has ended, `202` once a pause ended one; takes `{"ids": ["<snapshot ref>", …], "ref": "<id for the one resumed>"}`, all optional; `404` for a missing snapshot, `500` naming the first that failed, `501` without CRIU |
+| POST | `/api/v1/checkpoint/pause` | `200` with `{"id":"<id>","dir":"<folder>"}` once CRIU has written the snapshot; takes `{"id": "<session id>"}`; `404` when the id is not a running session, `500` with CRIU's error, `501` without CRIU |
+| POST | `/api/v1/checkpoint/resume` | `200` with the process session object once it has ended, `202` once a pause ended it; takes `{"id": "<snapshot id>"}`; `404` for a missing snapshot, `500` with its error, `501` without CRIU |
 
-Every creating POST takes `"ref"`, the id the created session or snapshot will carry.
+Every creating POST takes `"ref"`, the id the created session will carry.
 
 Every POST reports an error as `{"error": "<message>"}`. The status is `400` when the body cannot be
 parsed and `413` when it is over 64KB. A route of a subsystem that is off answers `404`.
@@ -291,14 +291,13 @@ your choice, and `token` sets its token. Without them, Linkspan picks a free por
 
 A process session is a `shell.exec` command: run under `sh -c`, with Linkspan's stdout and stderr,
 listed with its `pid` under `ref`, or `p-<n>` without one, until it ends, when the step answers. A pause
-runs `criu dump` on its process tree into a folder of its own under `~/.cybershuttle/checkpoints`,
-recording the snapshot's ref, `ref` or the session id; a repeated ref replaces the earlier snapshot, so any
-Linkspan as the same user finds the latest by ref. The session ends unless `leave_running`, and the step
-waiting on it answers `202` and ends its trigger's run, so a payload paused under `SIGUSR1` leaves the
-rest of `start` for the next job. A resume runs `criu restore` on a snapshot as a new process
-session, the tree CRIU's child writing to the new job's stdout and stderr, and answers when it ends. `ids`
-select the sessions to pause or the refs to resume, else all. `criu` is looked up on `PATH` and must be
-allowed to run unprivileged, which its documentation covers.
+runs `criu dump` on its process tree into `~/.cybershuttle/checkpoints/<id>`, replacing an earlier snapshot
+of the id only once the dump has succeeded, so any Linkspan as the same user finds the latest by id. The
+session ends, and the step waiting on it answers `202` and ends its trigger's run, so a payload paused
+under `SIGUSR1` leaves the rest of `start` for the next job. A resume runs `criu restore` on the snapshot as
+a new process session under the same id, the tree CRIU's child writing to the new job's stdout and stderr,
+and answers when it ends. `criu` is looked up on `PATH` and must be allowed to run unprivileged, which its
+documentation covers.
 
 ## Architecture
 

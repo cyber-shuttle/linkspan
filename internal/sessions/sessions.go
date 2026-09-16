@@ -4,10 +4,10 @@
 //
 //	Process   The kind of a plain-process session: a shell.exec command, or a resumed one.
 //	pausing   The sessions a pause is ending, so the end is not a failure to whoever waits.
-//	Ref, Selected  The ref and the ids a request names.
+//	Ref       The id a request names for what it creates.
 //	Select    The list command of one kind, ordered by id, [] when none.
 //	Start     Runs argv as the given task, its id defaulting to the kind's initial and the time; a repeated id
-//	          replaces the earlier session.
+//	          replaces the earlier session. It cannot fail, since a process binds no address.
 //	Stop      Answers 404 for an id the registry does not hold, else the id with state stopped.
 //	Pausing   Whether a pause is about to end the session.
 //	Wait      Blocks until the session ends and is unlisted, and says whether a pause ended it.
@@ -20,7 +20,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -38,24 +37,13 @@ func Ref(params map[string]any) string {
 	return ref
 }
 
-func Selected(params map[string]any) []string {
-	ids, _ := params["ids"].([]any)
-	out := []string{}
-	for _, v := range ids {
-		if id, ok := v.(string); ok {
-			out = append(out, id)
-		}
-	}
-	return slices.Compact(slices.Sorted(slices.Values(out)))
-}
-
 func Select(kind tasks.Kind) router.Command {
 	return func(context.Context, map[string]any) (int, any, string) {
 		return http.StatusOK, tasks.Select(kind), ""
 	}
 }
 
-func Start(t tasks.Task, argv ...string) (tasks.Task, error) {
+func Start(t tasks.Task, argv ...string) tasks.Task {
 	t.ID = cmp.Or(t.ID, fmt.Sprintf("%c-%d", t.Kind[0], time.Now().UnixNano()))
 	t.Attrs = func(tasks.Task) map[string]string { return map[string]string{"command": strings.Join(argv, " ")} }
 	t.Child = func(context.Context) (*exec.Cmd, error) {
@@ -63,7 +51,8 @@ func Start(t tasks.Task, argv ...string) (tasks.Task, error) {
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		return cmd, nil
 	}
-	return t.Start()
+	created, _ := t.Start()
+	return created
 }
 
 func Stop(_ context.Context, params map[string]any) (int, any, string) {

@@ -8,8 +8,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 ### Added
 
 - Pause/Resume: any `shell.exec` command can be paused by its `ref` and resumed, via API or from a
-  workflow step. `checkpoint.pause` snapshots it with CRIU by `ref` under `~/.cybershuttle/checkpoints`,
-  and `checkpoint.resume` brings it back in the same job or a later one; a paused step ends its trigger's run.
+  workflow step. `checkpoint.pause` snapshots it with CRIU under `~/.cybershuttle/checkpoints/<id>`, and
+  `checkpoint.resume` brings it back under the same id in the same job or a later one; a paused step ends its
+  trigger's run.
   `examples/checkpoint.sh` runs `checkpoint.yml` and `restore.yml` and checks the payload's count is whole.
 - A workflow is `tasks`, each `on` a trigger with `steps`. A run waits on the sessions its steps started,
   and the job ends once `start` and `ready` are complete. A document with no tasks, a task with no steps, or
