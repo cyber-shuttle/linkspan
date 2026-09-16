@@ -160,10 +160,10 @@ tasks:
         action: jupyter.setup
   - on: ready
     steps:
-      - name: VS Code
-        action: vscode.sessions.start
+      - name: Jupyter
+        action: jupyter.sessions.start
         params:
-          authorized_key: ssh-ed25519 AAAA... me@laptop
+          root_dir: /home/me/project
       - name: Training loop
         ref: trainloop
         action: shell.exec
