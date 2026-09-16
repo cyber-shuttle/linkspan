@@ -1,30 +1,24 @@
-// Package checkpoint runs a command as a session and checkpoints it with CRIU. A command posted to
-// /api/v1/checkpoint/sessions runs under sh with Linkspan's stdio and is listed until it ends; with stop_on_exit its
-// end stops Linkspan, so a batch job ends with its payload and the workflow's stop steps run. A checkpoint dumps
-// a running session's process tree to an images directory, which ends the session, and a restore runs a dumped
-// tree as a new session, so a workflow checkpoints ahead of Slurm's time limit and the next job resumes. CRIU is
-// the user's, on PATH or named per request; it runs unprivileged, so the kernel must allow that.
+// Package checkpoint is a sidecar over running process sessions: pause writes one into a snapshot with CRIU
+// under ~/.cybershuttle/checkpoints/<id>, and resume runs the snapshot as a session under the same id, in this
+// job or a later one, via the API or a workflow step. A paused session ends, and the step waiting on it answers
+// 202, so a workflow pauses its payload under a signal and goes on with the steps after the pause. CRIU is the
+// user's, on PATH, allowed to run unprivileged.
 //
-//	kind
-//	criuArgs      What dump and restore share: a shell job, since the tree leads a process group on Linkspan's
-//	              stdio, with its TCP connections, and no root.
-//	exit          Stops Linkspan as a signal does; a test swaps it.
-//	start         A session running argv, listed as command, with the id p-<nanoseconds> since it binds no port.
-//	              Stop removes a task before cancelling it, so a task still listed when its context ends ended on
-//	              its own, and that is when stop_on_exit acts.
-//	criu          The binary params.criu names, else criu on PATH; absent, the route answers 501.
-//	startSession  params.command under sh -c, so it may use the shell.
-//	dump          Dumps params.id, or every running session without one, to <params.images_dir>/<id>, the root
-//	              defaulting to ~/.cybershuttle/checkpoints, and answers the ids and directories dumped. CRIU
-//	              kills what it dumped, so the session ends and stop_on_exit acts.
-//	restore       A session running criu restore on params.images_dir; the tree lives as criu's child.
-//	Commands      sessions.select and sessions.stop from sessions.
-//	Router        /checkpoint/sessions, and dump and restore beside it.
+//	criu      Resolved once; absent, pause and resume answer 501.
+//	criuArgs  A shell job on Linkspan's stdio with its TCP connections; --unprivileged unless root, since the
+//	          flag needs CRIU 3.18.
+//	record    What a resume needs beside the images: the tree's pid, and the names of the stdout and stderr CRIU
+//	          dumped, so it hands the tree this job's in their stead.
+//	pause     Dumps the running session id into a .part folder, so a failed dump leaves the earlier snapshot, and
+//	          the session ends with it.
+//	resume    Runs criu as the session, its pid the tree's, and like shell.exec answers once it ends: 202 when
+//	          paused again.
+//	Commands, Router  pause and resume, each a route.
 package checkpoint
 
 import (
-	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -34,8 +28,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
-	"time"
 
 	"github.com/cyber-shuttle/linkspan/internal/install"
 	"github.com/cyber-shuttle/linkspan/internal/router"
@@ -43,103 +35,98 @@ import (
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
 )
 
-const kind tasks.Kind = "process"
+var criu = install.Which("criu")
 
-var criuArgs = []string{"--shell-job", "--tcp-established", "--unprivileged"}
-
-var exit = func() { _ = syscall.Kill(os.Getpid(), syscall.SIGTERM) }
-
-func start(command string, stopOnExit bool, argv ...string) (int, any, string) {
-	id := fmt.Sprintf("p-%d", time.Now().UnixNano())
-	created, err := (&tasks.Task{ID: id, Kind: kind, Attrs: func(tasks.Task) map[string]string {
-		return map[string]string{"command": command, "stop_on_exit": strconv.FormatBool(stopOnExit)}
-	}, Child: func(ctx context.Context) (*exec.Cmd, error) {
-		context.AfterFunc(ctx, func() {
-			if stopOnExit && slices.ContainsFunc(tasks.Select(kind), func(t tasks.Task) bool { return t.ID == id }) {
-				log.Printf("checkpoint: %s ended, stopping", id)
-				exit()
-			}
-		})
-		cmd := exec.Command(argv[0], argv[1:]...)
-		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-		return cmd, nil
-	}}).Start()
-	if err != nil {
-		return http.StatusInternalServerError, nil, err.Error()
+var criuArgs = func() []string {
+	args := []string{"--shell-job", "--tcp-established"}
+	if os.Geteuid() != 0 {
+		args = append(args, "--unprivileged")
 	}
-	return http.StatusCreated, created, ""
+	return args
+}()
+
+type record struct {
+	Pid    int    `json:"pid"`
+	Stdout string `json:"stdout"`
+	Stderr string `json:"stderr"`
 }
 
-func criu(params map[string]any) (string, error) {
-	name, _ := params["criu"].(string)
-	return exec.LookPath(cmp.Or(name, "criu"))
-}
-
-func startSession(_ context.Context, params map[string]any) (int, any, string) {
-	command, _ := params["command"].(string)
-	if command == "" {
-		return http.StatusBadRequest, nil, "command is required"
-	}
-	stopOnExit, _ := params["stop_on_exit"].(bool)
-	return start(command, stopOnExit, "sh", "-c", command)
-}
-
-func dump(ctx context.Context, params map[string]any) (int, any, string) {
-	bin, err := criu(params)
-	if err != nil {
-		return http.StatusNotImplemented, nil, err.Error()
-	}
+func pause(ctx context.Context, params map[string]any) (int, any, string) {
 	id, _ := params["id"].(string)
-	root, _ := params["images_dir"].(string)
-	dumped := []map[string]string{}
-	for _, t := range tasks.Select(kind) {
-		if t.State != tasks.StateRunning || (id != "" && t.ID != id) {
-			continue
-		}
-		images := filepath.Join(cmp.Or(root, filepath.Join(install.Dir(), "checkpoints")), t.ID)
-		if err := os.MkdirAll(images, 0o700); err != nil {
-			return http.StatusInternalServerError, nil, err.Error()
-		}
-		cmd := exec.Command(bin, append([]string{"dump", "-t", strconv.Itoa(t.Pid), "--images-dir", images}, criuArgs...)...)
-		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-		log.Printf("checkpoint: dumping %s to %s", t.ID, images)
-		if err := tasks.Exec(ctx, cmd); err != nil {
-			return http.StatusInternalServerError, nil, fmt.Sprintf("%s: %v", t.ID, err)
-		}
-		dumped = append(dumped, map[string]string{"id": t.ID, "images_dir": images})
+	if criu == "" {
+		return http.StatusNotImplemented, nil, "criu is not on PATH"
 	}
-	if id != "" && len(dumped) == 0 {
+	listed := tasks.Select(sessions.Process)
+	i := slices.IndexFunc(listed, func(t tasks.Task) bool { return t.ID == id && t.State == tasks.StateRunning })
+	if i < 0 {
 		return http.StatusNotFound, nil, "no running session " + id
 	}
-	return http.StatusOK, dumped, ""
+	t := listed[i]
+	var r record
+	for fd, name := range []*string{&r.Stdout, &r.Stderr} {
+		target, _ := os.Readlink(fmt.Sprintf("/proc/%d/fd/%d", t.Pid, fd+1))
+		*name = strings.TrimPrefix(target, "/")
+	}
+	r.Pid = t.Pid
+	images := filepath.Join(install.Dir(), "checkpoints", id)
+	part := images + ".part"
+	cmd := exec.Command(criu, append([]string{"dump", "-t", strconv.Itoa(t.Pid), "--images-dir", part}, criuArgs...)...)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	log.Printf("checkpoint: pausing %s to %s", id, images)
+	sessions.Pausing(id, true)
+	err := os.MkdirAll(part, 0o700)
+	if err == nil {
+		err = tasks.Exec(ctx, cmd)
+	}
+	if err == nil {
+		data, _ := json.Marshal(r)
+		err = os.WriteFile(filepath.Join(part, "snapshot"), data, 0o600)
+	}
+	if err == nil {
+		_ = os.RemoveAll(images)
+		err = os.Rename(part, images)
+	}
+	if err != nil {
+		sessions.Pausing(id, false)
+		_ = os.RemoveAll(part)
+		return http.StatusInternalServerError, nil, err.Error()
+	}
+	return http.StatusOK, map[string]string{"id": id, "dir": images}, ""
 }
 
-func restore(_ context.Context, params map[string]any) (int, any, string) {
-	bin, err := criu(params)
-	if err != nil {
-		return http.StatusNotImplemented, nil, err.Error()
+func resume(_ context.Context, params map[string]any) (int, any, string) {
+	id, _ := params["id"].(string)
+	if criu == "" {
+		return http.StatusNotImplemented, nil, "criu is not on PATH"
 	}
-	images, _ := params["images_dir"].(string)
-	if images == "" {
-		return http.StatusBadRequest, nil, "images_dir is required"
+	images := filepath.Join(install.Dir(), "checkpoints", id)
+	var r record
+	if data, err := os.ReadFile(filepath.Join(images, "snapshot")); err != nil || json.Unmarshal(data, &r) != nil {
+		return http.StatusNotFound, nil, "no snapshot " + id
 	}
-	stopOnExit, _ := params["stop_on_exit"].(bool)
-	argv := append([]string{bin, "restore", "--images-dir", images}, criuArgs...)
-	return start(strings.Join(argv, " "), stopOnExit, argv...)
+	argv := append([]string{criu, "restore", "--images-dir", images}, criuArgs...)
+	for fd, name := range []string{r.Stdout, r.Stderr} {
+		if name != "" {
+			argv = append(argv, "--inherit-fd", fmt.Sprintf("fd[%d]:%s", fd+1, name))
+		}
+	}
+	created := sessions.Start(tasks.Task{Kind: sessions.Process, ID: id, Pid: r.Pid}, argv...)
+	ended, paused := sessions.Wait(created.ID)
+	switch {
+	case paused:
+		return http.StatusAccepted, ended, ""
+	case ended.State != tasks.StateExited:
+		return http.StatusInternalServerError, nil, ended.Error
+	}
+	return http.StatusOK, ended, ""
 }
 
 var Commands = map[string]router.Command{
-	"sessions.select": sessions.Select(kind),
-	"sessions.start":  startSession,
-	"sessions.stop":   sessions.Stop,
-	"dump":            dump,
-	"restore":         restore,
+	"pause":  pause,
+	"resume": resume,
 }
 
 var Router = router.New("/checkpoint", map[string]router.Command{
-	"GET /sessions":         Commands["sessions.select"],
-	"POST /sessions":        Commands["sessions.start"],
-	"DELETE /sessions/{id}": Commands["sessions.stop"],
-	"POST /dump":            Commands["dump"],
-	"POST /restore":         Commands["restore"],
+	"POST /pause":  Commands["pause"],
+	"POST /resume": Commands["resume"],
 })

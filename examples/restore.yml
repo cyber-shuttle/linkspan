@@ -1,14 +1,18 @@
-# The next job after examples/checkpoint.yml: resume the payload from its dump, checkpoint it again ahead of the
-# time limit, and stop Linkspan once it ends. Set images_dir to the directory the checkpoint answered with.
+# The next job after examples/checkpoint.yml: resume the payload from its snapshot under the same id, pause it
+# again ahead of the time limit, and shut Linkspan down once it ends.
 #
 #   linkspan --port 8080 --workflow examples/restore.yml
 name: restore
-steps:
-  - name: Resume the payload
-    action: checkpoint.restore
-    params:
-      images_dir: /home/me/.cybershuttle/checkpoints/p-1784476530131977038
-      stop_on_exit: true
-  - name: Checkpoint before the time limit
-    on: SIGUSR1
-    action: checkpoint.dump
+tasks:
+  - on: start
+    steps:
+      - name: Resume the payload
+        action: checkpoint.resume
+        params:
+          id: payload
+  - on: SIGUSR1
+    steps:
+      - name: Pause before the time limit
+        action: checkpoint.pause
+        params:
+          id: payload

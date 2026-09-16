@@ -4,6 +4,7 @@
 //	marshal, create
 //	TestCreateSessionServesOnReturn, TestCreateSessionRejectsBadKey
 //	TestSelectShape  Only the SSH kind may be listed, with the state literal cs-bridge compares.
+//	TestRefNamesTheSession
 package vscode
 
 import (
@@ -96,5 +97,16 @@ func TestSelectShape(t *testing.T) {
 	}
 	if listed[0].State != "running" {
 		t.Fatalf("state = %q, want %q -- cs-bridge compares against this literal", listed[0].State, "running")
+	}
+}
+
+func TestRefNamesTheSession(t *testing.T) {
+	status, body, msg := startSession(context.Background(), map[string]any{"authorized_key": authorizedKey, "ref": "laptop"})
+	if status != http.StatusCreated {
+		t.Fatalf("create answered %d %q", status, msg)
+	}
+	t.Cleanup(func() { tasks.Stop("laptop") })
+	if id := body.(map[string]any)["id"]; id != "laptop" {
+		t.Fatalf("id = %v, want the ref", id)
 	}
 }

@@ -13,10 +13,10 @@ come with research on HPC.
 - **VS Code IDE.** An SSH server for one keypair, identified by its public key. VS Code connects to it
   with Remote-SSH.
 - **Metrics.** How much CPU, GPU and memory the job is using, from one URL.
-- **Terminals.** A shell inside the job, opened from a browser tab.
+- **Terminals.** A PTY inside the job, opened from a browser tab.
 - **Filesystem (WIP).** Datasets mounted or synced into the job.
-- **Checkpoint/Restore.** A command run as a process session, dumped with CRIU before the time limit, so a
-  later job resumes it.
+- **Pause/Resume (WIP).** Any `shell.exec` command can be paused by its `ref` and resumed, via API or from a
+  workflow step, in this job or a later one.
 - **Workflows (WIP).** Steps that run at set points in the job's life, from a file. Each action is also a
   route of the HTTP API.
 
@@ -122,22 +122,24 @@ URL. If the relay fails or exits, Linkspan exits with a failure status. `--signa
 A workflow sets up a workspace and tears it down, all from one file. A job can checkpoint before its time
 limit and sync its results on exit, with no trap handlers in the batch script.
 
-A workflow is a list of steps. Each step names a trigger with `on`, and `start` is the default. Each step
-has one action with its `params`, or a `tasks` list of several. `shell.exec` runs a command. Any other
+A workflow is one or more tasks. Each task names a trigger with `on`, and `start` is the default, and holds
+one or more `steps`, each an action with its `params`. `shell.exec` runs a command. Any other
 action is one Linkspan offers, named by subsystem and verb, and its `params` are the same as the request
-body of the matching route. A trigger's tasks run in order and stop at the first failure. That failure
-exits Linkspan with status 1.
+body of the matching route. A task's steps run in order and stop at the first failure. That failure
+exits Linkspan with status 1. A trigger's run then waits on the sessions its steps started, and the job
+ends, with its `stop` steps run, once `start` and `ready` are complete: a batch job ends with its payload
+and a workspace with its servers.
 
 | Trigger | When |
 |---|---|
 | `start` | The listeners are up. |
-| `ready` | After the `start` steps, once the tunnel relay is hosting; at once when no tunnel is hosted. |
+| `ready` | After the `start` steps, once the tunnel relay is hosting; at once when no tunnel is hosted. A server's port is published through the management API, so a server may start on `start` too. |
 | `stop` | Linkspan was told to exit, before anything is torn down, so the API still answers. |
 | `SIGUSR1`, `SIGUSR2`, `SIGHUP` | The signal arrived, as Slurm's `--signal` sends it before the time limit. |
 
 | Action | Does | `params` |
 |---|---|---|
-| `shell.exec` | Runs `command`, split on whitespace, without a shell | `command` |
+| `shell.exec` | Runs `command` under `sh` as a process session, and answers when it ends | `command` |
 | `vscode.sessions.select`, `jupyter.sessions.select`, `terminal.sessions.select` | Lists that subsystem's sessions | |
 | `vscode.sessions.start` | Starts an SSH server for a key | `authorized_key` |
 | `jupyter.setup` | Builds the Jupyter environment ahead of the first server | |
@@ -145,18 +147,15 @@ exits Linkspan with status 1.
 | `jupyter.sessions.stop` | Stops one | `id` |
 | `terminal.sessions.start` | Starts a web terminal | `cwd` |
 | `terminal.sessions.stop` | Stops one | `id` |
-| `filesystem.mount`, `.unmount`, `.copy`, `.sync` | Declared, not yet implemented; answer `501` | |
-| `checkpoint.sessions.select` | Lists the process sessions | |
-| `checkpoint.sessions.start` | Runs a command under `sh` as a session | `command`, `stop_on_exit` |
-| `checkpoint.sessions.stop` | Stops one | `id` |
-| `checkpoint.dump` | Dumps one running session, or all, with CRIU | `id`, `images_dir`, `criu` |
-| `checkpoint.restore` | Runs a dumped tree as a new session | `images_dir`, `stop_on_exit`, `criu` |
+| `filesystem.mount`, `.unmount`, `.copy`, `.sync` | Declared, not yet implemented; a missing param is `400`, else `501` | `source`, `target`; `unmount` only `target` |
+| `checkpoint.pause` | Pauses one running process session into a snapshot with CRIU, ending it; the step waiting on it ends its trigger's run | `id` |
+| `checkpoint.resume` | Resumes one snapshot as a process session under the same id, and answers when it ends | `id` |
 
 ```yaml
 name: workspace
-steps:
+tasks:
   - on: start
-    tasks:
+    steps:
       - name: Warm the cache
         action: shell.exec
         params:
@@ -164,7 +163,7 @@ steps:
       - name: Build the Jupyter environment
         action: jupyter.setup
   - on: ready
-    tasks:
+    steps:
       - name: VS Code
         action: vscode.sessions.start
         params:
@@ -173,25 +172,32 @@ steps:
         action: jupyter.sessions.start
         params:
           root_dir: /home/me/project
-  - name: Checkpoint before the time limit
-    on: SIGUSR1
-    action: shell.exec
-    params:
-      command: /home/me/checkpoint.sh
-  - name: Sync results
-    on: stop
-    action: shell.exec
-    params:
-      command: /usr/bin/rsync -a /scratch/me/out/ /home/me/out/
+  - on: SIGUSR1
+    steps:
+      - name: Checkpoint before the time limit
+        action: shell.exec
+        params:
+          command: /home/me/checkpoint.sh
+  - on: stop
+    steps:
+      - name: Sync results
+        action: shell.exec
+        params:
+          command: /usr/bin/rsync -a /scratch/me/out/ /home/me/out/
 ```
 
-A command runs without a shell, so there are no globs, variables, pipes or redirects. A bare command name
+A step's `ref` names the session its action creates, so later steps can name it. Without
+one, Linkspan assigns the id and answers with it. A ref names one thing, so a step giving one must create
+one, and a repeated ref replaces what held it before. Over the API, `"ref"` is a field of the request body.
+
+A command runs under `sh`, with its globs, variables, pipes and redirects. A bare command name
 is looked up on Linkspan's `PATH`. An action from a disabled subsystem, or an unknown trigger, is refused
 before anything starts. [`examples/workflow.yml`](examples/workflow.yml) tries each kind of trigger against a
 local Linkspan. Run it, list `/api/v1/jupyter/sessions`, send `SIGUSR1`, then send `SIGTERM`. Each
 `shell.exec` step prints a line. [`examples/checkpoint.yml`](examples/checkpoint.yml) runs a payload as a
-process session and dumps it on `SIGUSR1`, which ends the payload and, with `stop_on_exit`, Linkspan;
-[`examples/restore.yml`](examples/restore.yml) is the next job, resuming it from the dump.
+process session and pauses it on `SIGUSR1`; [`examples/restore.yml`](examples/restore.yml) is the next job,
+resuming it from the snapshot. Both end the job with the payload; [`examples/checkpoint.sh`](examples/checkpoint.sh)
+runs the pair and checks the count is whole.
 
 ### Reaching a job from inside the cluster
 
@@ -225,17 +231,17 @@ srun --jobid=<id> --overlap --mem=0 curl --unix-socket /tmp/linkspan-<id>/api.so
 | `--tunnel-host-token` | | Access token scoped to hosting; required with `--tunnel-enable` |
 | `--version` | | Print the version and exit |
 
-Each capability is a subsystem that can be on or off. A subsystem that is off has no routes, answers
-`404`, and offers no workflow action. The on/off set is written into `main.go` until a config file replaces
-it.
+Each capability is a subsystem that can be on or off, and all are on. A subsystem that is off has no
+routes, answers `404`, and offers no workflow action. The on/off set is written into `main.go` until a
+config file replaces it.
 
 | Subsystem | Shipped | Offers |
 |---|---|---|
 | `vscode` | on | SSH servers for VS Code Remote-SSH |
 | `jupyter` | on | Jupyter servers in a `uv`-built environment |
-| `terminal` | off | `ttyd` web terminals, Linux only |
-| `filesystem` | off | Mount, unmount, copy and sync, declared and not yet implemented |
-| `checkpoint` | on | Commands run as sessions, checkpointed and restored with CRIU |
+| `terminal` | on | `ttyd` web terminals, Linux only |
+| `filesystem` | on | Mount, unmount, copy and sync, declared with their params and not yet implemented |
+| `checkpoint` | on | A sidecar that pauses and resumes process sessions with CRIU |
 
 ## HTTP API
 
@@ -248,7 +254,7 @@ the model.
 |---|---|---|
 | GET | `/api/v1/health` | `{"status":"ok"}` |
 | GET | `/api/v1/metrics` | `{"memBytes":<n>,"cpuUsageUsec":<n>,"gpus":[{"index":<n>,"utilPct":<n>,"memUsedMiB":<n>,"memTotalMiB":<n>}]}`; a missing source omits its field, and the object is the last sample of a 5s loop |
-| POST | `/api/v1/workflow/shell/exec` | `200` once the command exits 0; takes `{"command": "<argv>"}`, split on spaces and run without a shell |
+| POST | `/api/v1/workflow/shell/exec` | `200` with the process session object once the command exits 0, `202` once a pause ended it; takes `{"command": "<shell command>", "ref": "<id>"}` |
 | GET | `/api/v1/vscode/sessions` | `[{"id":"s-<port>","addr":"127.0.0.1:<port>","state":"<state>","error":""}]`, ordered by id, `[]` when none |
 | POST | `/api/v1/vscode/sessions` | `201` with `{"id":"s-<port>","bind_port":<port>}` |
 | GET | `/api/v1/jupyter/sessions` | `[{"id":"j-<port>","addr":"127.0.0.1:<port>","state":"<state>","error":"","url":"<public url>","root_dir":"<dir>","token":"<token>"}]`, ordered by id |
@@ -258,12 +264,11 @@ the model.
 | GET | `/api/v1/terminal/sessions` | `[{"id":"t-<port>","addr":"127.0.0.1:<port>","state":"<state>","error":"","url":"<public url>","cwd":"<dir>"}]`, ordered by id |
 | POST | `/api/v1/terminal/sessions` | `201` with one session object; takes `{"cwd": "<dir>"}`, default Linkspan's own directory |
 | DELETE | `/api/v1/terminal/sessions/{id}` | `{"id":"t-<port>","state":"stopped"}`, `404` for an unknown id |
-| POST | `/api/v1/filesystem/{mount,unmount,copy,sync}` | `501` when the subsystem is on: declared, not yet implemented. Off as shipped, so `404` |
-| GET | `/api/v1/checkpoint/sessions` | `[{"id":"p-<n>","addr":"","state":"<state>","error":"","pid":<pid>,"command":"<command>","stop_on_exit":"<bool>"}]`, ordered by id; `pid` once the command has started |
-| POST | `/api/v1/checkpoint/sessions` | `201` with one session object; takes `{"command": "<shell command>", "stop_on_exit": <bool>}` |
-| DELETE | `/api/v1/checkpoint/sessions/{id}` | `{"id":"p-<n>","state":"stopped"}`, `404` for an unknown id |
-| POST | `/api/v1/checkpoint/dump` | `200` with `[{"id":"p-<n>","images_dir":"<dir>"}]` once CRIU has dumped each; takes `{"id": "<one session>", "images_dir": "<root>", "criu": "<binary>"}`, all optional; `404` for an id that is not running, `501` without CRIU |
-| POST | `/api/v1/checkpoint/restore` | `201` with one session object running `criu restore`; takes `{"images_dir": "<dir>", "stop_on_exit": <bool>, "criu": "<binary>"}`; `501` without CRIU |
+| POST | `/api/v1/filesystem/{mount,unmount,copy,sync}` | `400` for a missing param, else `501`: declared, not yet implemented; takes `{"source": "<path or URL>", "target": "<path>"}`, `unmount` only `target` |
+| POST | `/api/v1/checkpoint/pause` | `200` with `{"id":"<id>","dir":"<folder>"}` once CRIU has written the snapshot; takes `{"id": "<session id>"}`; `404` when the id is not a running session, `500` with CRIU's error, `501` without CRIU |
+| POST | `/api/v1/checkpoint/resume` | `200` with the process session object once it has ended, `202` once a pause ended it; takes `{"id": "<snapshot id>"}`; `404` for a missing snapshot, `500` with its error, `501` without CRIU |
+
+Every creating POST takes `"ref"`, the id the created session will carry.
 
 Every POST reports an error as `{"error": "<message>"}`. The status is `400` when the body cannot be
 parsed and `413` when it is over 64KB. A route of a subsystem that is off answers `404`.
@@ -284,16 +289,15 @@ sends `X-Tunnel-Authorization: tunnel <connect token>`. `addr` pins a Jupyter se
 your choice, and `token` sets its token. Without them, Linkspan picks a free port and takes the token from
 `JUPYTER_TOKEN` in its own environment, or makes one up. Terminals answer `501` on anything but Linux.
 
-A process session runs its command under `sh -c` with Linkspan's stdout and stderr, so it may use the
-shell, and is `starting` until the command has started, then `running` with its `pid`. It becomes `exited`
-when the command ends and `failed`, with `error`, when it is killed or exits non-zero; either way it stays
-listed until stopped. With `stop_on_exit`, an end the session reached on its own stops Linkspan as
-`SIGTERM` would, so the `stop` steps of the workflow still run. A checkpoint runs `criu dump` on the
-session's process tree as a shell job, unprivileged, with its TCP connections, into `<images_dir>/<id>`,
-where `images_dir` defaults to `~/.cybershuttle/checkpoints`; CRIU kills the tree, so the session ends. A
-restore runs `criu restore` on one such directory as a new session, whose tree lives as CRIU's child. `criu`
-is looked up on Linkspan's `PATH` unless the request names a binary. The kernel must allow unprivileged
-dumps, which the CRIU documentation covers.
+A process session is a `shell.exec` command: run under `sh -c`, with Linkspan's stdout and stderr,
+listed with its `pid` under `ref`, or `p-<n>` without one, until it ends, when the step answers. A pause
+runs `criu dump` on its process tree into `~/.cybershuttle/checkpoints/<id>`, replacing an earlier snapshot
+of the id only once the dump has succeeded, so any Linkspan as the same user finds the latest by id. The
+session ends, and the step waiting on it answers `202` and ends its trigger's run, so a payload paused
+under `SIGUSR1` leaves the rest of `start` for the next job. A resume runs `criu restore` on the snapshot as
+a new process session under the same id, the tree CRIU's child writing to the new job's stdout and stderr,
+and answers when it ends. `criu` is looked up on `PATH` and must be allowed to run unprivileged, which its
+documentation covers.
 
 ## Architecture
 
@@ -314,18 +318,19 @@ checks that every command is behind a route.
 
 Building blocks are put together where they are used. `internal/` holds the router, the task registry and
 the building blocks: the SSH server, the relay and port publishing, the metrics sampler, the
-`~/.cybershuttle/` installer, and the list and stop commands the session subsystems share. A subsystem
-puts them together into a task at the point where it starts one.
+`~/.cybershuttle/` installer, and what the session subsystems share: the list and stop commands, and a
+process session's life. A subsystem puts them together into a task at the point where it starts one.
 
 ```
 main.go          flags, the subsystem table, startup and shutdown
 internal/
   router/        a tree of routers; every route is a command
-  tasks/         the registry: Start, Select, Stop, StopAll, and Exec, the one fork path
+  tasks/         the registry: Start, Select, Wait, Stop, StopAll, and Exec, the one fork path
   sshd/ tunnel/ metrics/ install/
-  sessions/      the list and stop commands the session subsystems share
+  sessions/      what the session subsystems share, and a process session's life
 subsystems/
-  workflow/      YAML steps on start, ready, stop and signals
+  workflow/      YAML tasks on start, ready, stop and signals
+  checkpoint/    pause and resume, CRIU over process sessions
   vscode/ jupyter/ terminal/ filesystem/
 ```
 
@@ -336,7 +341,7 @@ the checks CI runs. [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) lists what th
 
 Linkspan runs as the user who submitted the job, installs only under `~/.cybershuttle/`, and listens on
 loopback. It runs programs it does not ship: `devtunnel`, `ttyd` and `uv`, fetched over HTTPS on first
-use; the Python that `uv` installs; `nvidia-smi`; `sh` for SSH sessions; the user's shell for terminals;
+use; the Python that `uv` installs; `nvidia-smi`; `sh` for SSH sessions; `$SHELL` on a PTY for terminals;
 and whatever a workflow step names. [SECURITY.md](SECURITY.md) explains the security model and how to
 report a vulnerability.
 
@@ -345,8 +350,8 @@ report a vulnerability.
 - [cs-bridge](https://github.com/cyber-shuttle/cs-bridge) is a VS Code extension. It submits Linkspan as
   a job with a time limit, starts an SSH server for your key over the tunnel, and points VS Code Remote-SSH
   at it.
-- [cs-jupyter](https://github.com/cyber-shuttle/cs-jupyter) is a JupyterLite distribution served by
-  cs-control, a Jupyter runtime service. cs-control submits Linkspan with a one-step workflow that starts a
+- [cs-jupyter](https://github.com/cyber-shuttle/cs-jupyter) is a JupyterLite distribution whose sessions
+  cs-control, its control plane, creates. cs-control submits Linkspan with a one-step workflow that starts a
   Jupyter server on a port it declared ahead, with the token it exported as `JUPYTER_TOKEN`. It then hands
   the URL to cs-jupyter.
 

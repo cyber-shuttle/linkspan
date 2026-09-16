@@ -1,12 +1,12 @@
-// Package terminal serves a login shell in the browser. A working directory posted to /api/v1/terminal/sessions
+// Package terminal serves a PTY in the browser. A working directory posted to /api/v1/terminal/sessions
 // starts ttyd, fetched on first use, publishes its port on the tunnel and answers with the URL, which opens after
-// the tunnel owner signs in. Linux only, one shell per session.
+// the tunnel owner signs in. Linux only, one PTY per session.
 //
 //	kind
 //	ttydVersion, ttydBase, assets  The release Linkspan fetches, by platform.
 //	startSession                   Answers 501 on a platform without a ttyd build; else spawns a terminal for
 //	                               params.cwd: fetches ttyd, publishes the port and runs ttyd writable on loopback
-//	                               with the user's shell, or sh, as a login shell; an empty cwd is Linkspan's own
+//	                               running $SHELL, or sh, with -l on the PTY; an empty cwd is Linkspan's own
 //	                               directory.
 //	Commands                       sessions.start, with sessions.select and sessions.stop from sessions; shapes
 //	                               are frozen by docs/COMPATIBILITY.md.
@@ -47,7 +47,7 @@ func startSession(_ context.Context, params map[string]any) (int, any, string) {
 		return http.StatusNotImplemented, nil, err.Error()
 	}
 	cwd, _ := params["cwd"].(string)
-	created, err := (&tasks.Task{Kind: kind, Attrs: func(t tasks.Task) map[string]string {
+	created, err := (&tasks.Task{ID: sessions.Ref(params), Kind: kind, Attrs: func(t tasks.Task) map[string]string {
 		return map[string]string{"cwd": cwd, "url": tunnel.URL(t.Port())}
 	}, Spawn: func(ctx context.Context, port int) (*exec.Cmd, error) {
 		bin := filepath.Join(install.Dir(), "bin", "ttyd")

@@ -7,13 +7,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
-- `/api/v1/checkpoint/sessions`: a command run under `sh` as a session, listed with its `pid`, which with
-  `stop_on_exit` stops Linkspan when it ends, so a batch job ends with its payload.
-- `/api/v1/checkpoint/dump` and `/api/v1/checkpoint/restore`: a running session's process tree dumped
-  with the user's CRIU under `~/.cybershuttle/checkpoints/<id>`, and a dump resumed as a new session. The
-  same commands as workflow actions, so a step on `SIGUSR1` checkpoints ahead of Slurm's time limit.
-- `examples/checkpoint.yml` and `examples/restore.yml`, one job checkpointing a payload and the next
-  resuming it.
+- Pause/Resume: any `shell.exec` command can be paused by its `ref` and resumed, via API or from a
+  workflow step. `checkpoint.pause` snapshots it with CRIU under `~/.cybershuttle/checkpoints/<id>`, and
+  `checkpoint.resume` brings it back under the same id in the same job or a later one; a paused step ends its
+  trigger's run.
+  `examples/checkpoint.sh` runs `checkpoint.yml` and `restore.yml` and checks the payload's count is whole.
+- A workflow is `tasks`, each `on` a trigger with `steps`. A run waits on the sessions its steps started,
+  and the job ends once `start` and `ready` are complete. A document with no tasks, a task with no steps, or
+  a field it does not know, is refused.
+- A task's `ref`, or a request's, names what it creates.
+- The `filesystem` placeholders declare their params, `source` and `target`, `unmount` only `target`, and
+  refuse a request without them. Every subsystem is on as shipped, `terminal` and `filesystem` included.
 - A listed process carries `pid` once its command has started, for the process sessions.
 
 ## [0.18.0] - 2026-09-14

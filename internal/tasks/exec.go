@@ -11,11 +11,13 @@
 //	Exec          Runs the command in its own process group, kills the group on cancellation so helpers die with
 //	              the child, and waits for the child. A setsid daemon leaves the group and survives.
 //	Task          The receiver of spawn and child.
-//	child         Publishes the pid under the registry lock, as the state.
+//	child         Publishes the pid under the registry lock, as the state; a preset Pid is the process the task
+//	              stands for, killed with the command on cancellation.
 //	spawn         Releases the port to the command and dials it until it accepts.
 package tasks
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net"
@@ -57,8 +59,11 @@ func (t *Task) child(ctx context.Context) error {
 		return err
 	}
 	defer stop()
+	if pid := t.Pid; pid != 0 {
+		defer context.AfterFunc(ctx, func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })()
+	}
 	registry.mu.Lock()
-	t.Pid, t.State = cmd.Process.Pid, StateRunning
+	t.Pid, t.State = cmp.Or(t.Pid, cmd.Process.Pid), StateRunning
 	registry.mu.Unlock()
 	return cmd.Wait()
 }

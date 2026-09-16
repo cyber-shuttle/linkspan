@@ -11,7 +11,7 @@
 //	commands                The workflow's actions: its own unprefixed, and each enabled subsystem's behind its name.
 //	startAll                Validates every input before binding anything, then starts every task in one pass, the
 //	                        listeners first: each as h-<port> or h-<socket path>, metrics, the tunnel and the
-//	                        workflow by kind, and the workflow's signal tasks as workflow-<signal>.
+//	                        workflow by kind.
 //	main                    os.Exit is the first defer, so StopAll runs before it; the workflow's stop steps run
 //	                        first, with the API still up.
 package main
@@ -139,10 +139,7 @@ func startAll(opts *options, cfg config) error {
 		all = append(all, &tasks.Task{Kind: "tunnel", Run: tn.Relay})
 	}
 	if opts.workflow != "" {
-		all = append(all, &tasks.Task{Kind: "workflow", Run: workflow.Start})
-		for _, name := range workflow.Signals() {
-			all = append(all, &tasks.Task{ID: "workflow-" + name, Kind: "workflow", Run: workflow.WatchSignal(name)})
-		}
+		all = append(all, &tasks.Task{Kind: "workflow", Run: workflow.Start()})
 	}
 	for _, t := range all {
 		created, err := t.Start()
@@ -175,7 +172,7 @@ func main() {
 		log.Println("stopped")
 	}()
 
-	if err := startAll(opts, config{"workflow": true, "vscode": true, "jupyter": true, "terminal": false, "filesystem": false, "checkpoint": true}); err != nil {
+	if err := startAll(opts, config{"workflow": true, "vscode": true, "jupyter": true, "terminal": true, "filesystem": true, "checkpoint": true}); err != nil {
 		log.Printf("fatal: %v", err)
 		code = 1
 		return

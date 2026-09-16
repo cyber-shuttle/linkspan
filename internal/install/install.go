@@ -5,6 +5,7 @@
 //	Dir    ~/.cybershuttle.
 //	Fetch  Does nothing when dst is present; otherwise downloads src through a sibling file renamed into place, so a
 //	       failed transfer publishes nothing.
+//	Which  The path of a binary the user installed, found on PATH, or "".
 package install
 
 import (
@@ -14,6 +15,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 )
@@ -61,4 +63,9 @@ func Fetch(ctx context.Context, dst, src string) error {
 		return err
 	}
 	return os.Rename(part, dst)
+}
+
+func Which(name string) string {
+	path, _ := exec.LookPath(name)
+	return path
 }

@@ -86,7 +86,7 @@ func startSession(_ context.Context, params map[string]any) (int, any, string) {
 	addr, _ := params["addr"].(string)
 	token, _ := params["token"].(string)
 	token = cmp.Or(token, os.Getenv("JUPYTER_TOKEN"), newToken())
-	created, err := (&tasks.Task{Kind: kind, Addr: addr, Attrs: func(t tasks.Task) map[string]string {
+	created, err := (&tasks.Task{ID: sessions.Ref(params), Kind: kind, Addr: addr, Attrs: func(t tasks.Task) map[string]string {
 		return map[string]string{"root_dir": rootDir, "token": token, "url": tunnel.URL(t.Port())}
 	}, Spawn: func(ctx context.Context, port int) (*exec.Cmd, error) {
 		if status, _, msg := setup(ctx, nil); status != http.StatusOK {
