@@ -156,10 +156,6 @@ name: workspace
 tasks:
   - on: start
     steps:
-      - name: Warm the cache
-        action: shell.exec
-        params:
-          command: /home/me/warm.sh
       - name: Build the Jupyter environment
         action: jupyter.setup
   - on: ready
@@ -168,22 +164,17 @@ tasks:
         action: vscode.sessions.start
         params:
           authorized_key: ssh-ed25519 AAAA... me@laptop
-      - name: Jupyter
-        action: jupyter.sessions.start
+      - name: Training loop
+        ref: trainloop
+        action: shell.exec
         params:
-          root_dir: /home/me/project
+          command: python /home/me/train.py
   - on: SIGUSR1
     steps:
       - name: Checkpoint before the time limit
-        action: shell.exec
+        action: checkpoint.pause
         params:
-          command: /home/me/checkpoint.sh
-  - on: stop
-    steps:
-      - name: Sync results
-        action: shell.exec
-        params:
-          command: /usr/bin/rsync -a /scratch/me/out/ /home/me/out/
+          id: trainloop
 ```
 
 A step's `ref` names the session its action creates, so later steps can name it. Without
