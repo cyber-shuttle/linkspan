@@ -93,7 +93,7 @@ func startSession(_ context.Context, params map[string]any) (int, any, string) {
 			return nil, errors.New(msg)
 		}
 		cmd := exec.Command(filepath.Join(install.Dir(), "jupyter-env", "bin", "python"), "-m", "jupyter_server",
-			"--no-browser", "--ip=127.0.0.1", "--port="+strconv.Itoa(port), "--port-retries=0", "--ServerApp.allow_origin=*")
+			"--no-browser", "--ip=127.0.0.1", "--port="+strconv.Itoa(port), "--port-retries=0", "--ServerApp.allow_origin=*", "--ContentsManager.allow_hidden=True")
 		cmd.Dir = rootDir
 		cmd.Env = append(os.Environ(), "JUPYTER_TOKEN="+token)
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
