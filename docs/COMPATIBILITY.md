@@ -10,12 +10,12 @@ Adding to it needs a client.
   --tunnel-host-token -tunnel-enable`, the last with one dash as Go's flag package also accepts, and calls
   the health, metrics and `/vscode/sessions` routes, over the tunnel and over the socket. It reads the
   `state` of a listed session only to skip `failed` ones.
-- cs-control, the control plane cs-jupyter talks to, launches it with `--port --tunnel-enable --tunnel-id
+- cs-plane, the control plane cs-jupyter talks to, launches it with `--port --tunnel-enable --tunnel-id
   --tunnel-cluster --tunnel-host-token --workflow`, exports `JUPYTER_TOKEN`, and calls only `/metrics`, over
   the tunnel. Its document is one `start` task whose one step is `jupyter.sessions.start` naming `root_dir`
   and `addr`, the port it declared on the tunnel ahead.
-- The words differ by layer. Linkspan's job is cs-control's and cs-jupyter's session; a Linkspan session is a
-  server or process inside the job; cs-control's snapshot of a session is its own record, not a CRIU
+- The words differ by layer. Linkspan's job is cs-plane's and cs-jupyter's session; a Linkspan session is a
+  server or process inside the job; cs-plane's snapshot of a session is its own record, not a CRIU
   snapshot.
 - A browser opens `/terminal/sessions` URLs after the tunnel owner signs in at the Dev Tunnels page. No
   client drives the route yet, so it is not yet a contract.
@@ -28,10 +28,10 @@ Both clients run `--version`.
 
 ## Contracts
 
-- `--version` prints a bare `X.Y.Z[.commit]` as the only line on stdout. cs-control reads the first line.
+- `--version` prints a bare `X.Y.Z[.commit]` as the only line on stdout. cs-plane reads the first line.
   cs-bridge matches the whole trimmed output against an anchored regex, so a second line makes it reinstall
   Linkspan on every launch.
-- cs-control compares `--version` against 0.19.0 with `sort -V` and does not submit a job to an older
+- cs-plane compares `--version` against 0.19.0 with `sort -V` and does not submit a job to an older
   Linkspan, so the version line stays one `vX.Y.Z` token.
 - The archive is named `linkspan_Linux_${arch}.tar.gz` and holds the `linkspan` member. Both clients curl
   and untar them by those names.
@@ -45,15 +45,15 @@ Both clients run `--version`.
   `state` `running`, and `/metrics` stays a non-array object. A created session answers 2xx with both
   documented fields.
 - The session shell is `sh -c`, for which VS Code's bootstrap is written.
-- The workflow document cs-control ships is `tasks`, each with `on` and `steps`, with the Jupyter token
+- The workflow document cs-plane ships is `tasks`, each with `on` and `steps`, with the Jupyter token
   taken from `JUPYTER_TOKEN` in Linkspan's environment; a top-level `steps` list, the shape before 0.19.0,
   is refused at startup. The job lives as long as its Jupyter server.
 - The tunnel port a Jupyter server or terminal is published on is added with the token from
-  `--tunnel-host-token`, so that token must carry port rights. cs-control mints `host manage:ports`, and
+  `--tunnel-host-token`, so that token must carry port rights. cs-plane mints `host manage:ports`, and
   cs-bridge mints `host`, which the Dev Tunnels contract states includes port updates. A Jupyter server's
-  port is anonymous, so cs-jupyter reaches it with the Jupyter token alone, as it did the port cs-control
-  declared. A terminal's port is not anonymous. Linkspan republishes a port cs-control declared ahead
-  without its description, so cs-control finds that port by number.
+  port is anonymous, so cs-jupyter reaches it with the Jupyter token alone, as it did the port cs-plane
+  declared. A terminal's port is not anonymous. Linkspan republishes a port cs-plane declared ahead
+  without its description, so cs-plane finds that port by number.
 - A Jupyter server's token is the `token` field of its object, minted per server. The server reads it
   from `JUPYTER_TOKEN`, so any Jupyter Server release honors it.
 - An SSH session reports the child's own exit code, `255` when it was signaled, and `127` only when the

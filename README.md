@@ -28,7 +28,7 @@ it from inside the job. The tunnel decides who may connect.
 
 Most people use Linkspan through a client. [cs-bridge](https://github.com/cyber-shuttle/cs-bridge) is our
 VS Code extension. [cs-jupyter](https://github.com/cyber-shuttle/cs-jupyter) is our JupyterLite
-distribution. [cs-control](https://github.com/cyber-shuttle/cs-control) is our backend to submit linkspan-as-a-job and create tunnels so IDEs can connect.
+distribution. [cs-plane](https://github.com/cyber-shuttle/cs-plane) is our backend to submit linkspan-as-a-job and create tunnels so IDEs can connect.
 This document is about running Linkspan yourself.
 
 There are four ways to use Linkspan, and they mix. Run it as the main process of a batch job. Drive it
@@ -342,7 +342,7 @@ report a vulnerability.
   a job with a time limit, starts an SSH server for your key over the tunnel, and points VS Code Remote-SSH
   at it.
 - [cs-jupyter](https://github.com/cyber-shuttle/cs-jupyter) is a JupyterLite distribution whose sessions
-  cs-control, its control plane, creates. cs-control submits Linkspan with a one-step workflow that starts a
+  cs-plane, its control plane, creates. cs-plane submits Linkspan with a one-step workflow that starts a
   Jupyter server on a port it declared ahead, with the token it exported as `JUPYTER_TOKEN`. It then hands
   the URL to cs-jupyter.
 
