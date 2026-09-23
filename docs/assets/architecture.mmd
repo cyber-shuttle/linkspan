@@ -9,7 +9,7 @@ flowchart LR
     classDef server fill:#e9f8ef,stroke:#2e8b57,stroke-width:2px,color:#0f3d24,rx:10,ry:10
 
     clients["<b>Clients</b><br/>VSCode<br/>Jupyter<br/>Terminal"]:::outside
-    relay["<b>Tunnel relay</b>, secured<br/>the access point<br/>hosted outbound"]:::entry
+    relay["<b>CS Plane</b><br/>Control/Data Plane<br/>for CyberShuttle"]:::entry
     subgraph ls[" Linkspan, the job's main process "]
         direction LR
         api["<b>HTTP API</b><br/>/api/v1 on loopback<br/>and a unix socket"]:::core
