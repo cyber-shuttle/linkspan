@@ -1,37 +1,17 @@
 name: goreleaser
 
 on:
-  pull_request:
   release:
     types: [published]
 
 permissions:
-  contents: read
+  contents: write
 
-# A pull request dry-runs a snapshot build; a published release uploads the archives.
 jobs:
-  snapshot:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - uses: goreleaser/goreleaser-action@v7
-        with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: release --snapshot
   release:
-    if: github.event_name == 'release'
-    permissions:
-      contents: write
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/setup-go@v7

@@ -5,13 +5,26 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - run: make tools
+      - id: tools
+        uses: actions/cache@v5
+        with:
+          path: ~/go/bin
+          key: tools-${{ runner.os }}-${{ hashFiles('Makefile', 'go.mod') }}
+      - if: steps.tools.outputs.cache-hit != 'true'
+        run: make tools
       - run: make check
