@@ -2,9 +2,7 @@
 
 Issues and pull requests go through [GitHub](https://github.com/cyber-shuttle/linkspan/issues). Branch off
 `main`, keep CI passing, cover new behavior with a test, and state in the description what was run.
-Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md). A pull request's column on the
-group's project board follows its draft, review and merge state through
-`.github/workflows/status-sync.yml`, which checks out and runs no repository code.
+Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Development Setup
 
