@@ -111,9 +111,9 @@ ssh -o ControlMaster=no -o ControlPath=none -o IdentitiesOnly=yes -o BatchMode=y
 ## Releases
 
 Add the version's entry to [CHANGELOG.md](CHANGELOG.md), push the tag `vX.Y.Z`, then publish the GitHub
-release for that tag. Publishing triggers `.github/workflows/goreleaser.yml`, which builds and uploads the
-archives clients download, and runs only then. `.github/workflows/ci.yml` runs `make check` on every pull request
-and on each push to `main`, and a pull request merges only once it passes.
+release for that tag. Publishing triggers `.github/workflows/on-release.yml`, which builds and uploads the
+archives clients download, and runs only then. `.github/workflows/on-pr-and-main.yml` runs `make check` on
+every pull request and on each push to `main`, and a pull request merges only once it passes.
 
 `make` cross-compiles into `bin/` for Linux and macOS on `amd64` and `arm64`. It refuses to build unless
 HEAD is tagged `vX.Y.Z`, optionally with a `.<commit>` suffix, because the tag is the version the binary

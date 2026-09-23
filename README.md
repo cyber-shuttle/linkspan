@@ -1,6 +1,6 @@
 # Linkspan
 
-[![CI](https://github.com/cyber-shuttle/linkspan/actions/workflows/ci.yml/badge.svg)](https://github.com/cyber-shuttle/linkspan/actions/workflows/ci.yml)
+[![CI](https://github.com/cyber-shuttle/linkspan/actions/workflows/on-pr-and-main.yml/badge.svg)](https://github.com/cyber-shuttle/linkspan/actions/workflows/on-pr-and-main.yml)
 [![Release](https://img.shields.io/github/v/release/cyber-shuttle/linkspan)](https://github.com/cyber-shuttle/linkspan/releases/latest)
 [![Go](https://img.shields.io/github/go-mod/go-version/cyber-shuttle/linkspan)](go.mod)
 [![License](https://img.shields.io/github/license/cyber-shuttle/linkspan?color=blue)](LICENSE)
