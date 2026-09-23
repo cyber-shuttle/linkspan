@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
 	"github.com/gorilla/websocket"
@@ -16,7 +17,7 @@ import (
 
 func TestStreamReachesTaskPorts(t *testing.T) {
 	t.Cleanup(tasks.StopAll)
-	served, err := (&tasks.Task{Kind: "test", Server: &http.Server{Handler: http.NotFoundHandler()}}).Start()
+	served, err := (&tasks.Task{Kind: "test", Server: &http.Server{Handler: http.NotFoundHandler(), ReadHeaderTimeout: time.Second}}).Start()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,13 +27,16 @@ func TestStreamReachesTaskPorts(t *testing.T) {
 	defer server.Close()
 	base := "ws" + strings.TrimPrefix(server.URL, "http") + "/f/"
 
-	if _, response, err := websocket.DefaultDialer.Dial(base+"1", nil); err == nil || response.StatusCode != http.StatusNotFound {
+	_, refused, err := websocket.DefaultDialer.Dial(base+"1", nil)
+	if err == nil || refused.StatusCode != http.StatusNotFound {
 		t.Fatalf("an unbound port was not refused with 404: %v", err)
 	}
-	conn, _, err := websocket.DefaultDialer.Dial(base+strconv.Itoa(served.Port()), nil)
+	_ = refused.Body.Close()
+	conn, upgraded, err := websocket.DefaultDialer.Dial(base+strconv.Itoa(served.Port()), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	_ = upgraded.Body.Close()
 	defer func() { _ = conn.Close() }()
 	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("GET / HTTP/1.0\r\n\r\n")); err != nil {
 		t.Fatal(err)
