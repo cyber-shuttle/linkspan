@@ -6,6 +6,7 @@ toolchain go1.27.1
 
 require (
 	github.com/gliderlabs/ssh v0.3.8
+	github.com/gorilla/websocket v1.5.3
 	github.com/pkg/sftp v1.13.10
 	golang.org/x/crypto v0.57.0
 	golang.org/x/sys v0.48.0

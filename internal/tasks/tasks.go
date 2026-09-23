@@ -28,6 +28,7 @@
 //	             context is cancelled after Run returns, so every AfterFunc fires. The returned copy is the
 //	             caller's; the registry entry changes under the lock.
 //	Select       Copies of one kind, ordered by id.
+//	IsServing    Whether a running task is bound to that TCP port, which is what internal/forward may reach.
 //	Wait         Blocks until the task's work has ended, unlists it unless a repeated id replaced it, and answers
 //	             its final copy; the zero Task for an id not held.
 //	Stop         Cancels one task, waits for it and forgets it; an unknown id is false.
@@ -202,6 +203,17 @@ func Select(kind Kind) []Task {
 		}
 	}
 	return out
+}
+
+func IsServing(port int) bool {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	for _, t := range registry.m {
+		if t.State == StateRunning && port > 0 && t.Port() == port {
+			return true
+		}
+	}
+	return false
 }
 
 func Wait(id string) Task {
