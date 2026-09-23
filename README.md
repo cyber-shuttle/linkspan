@@ -20,7 +20,7 @@ come with research on HPC.
 - **Workflows (WIP).** Steps that run at set points in the job's life, from a file. Each action is also a
   route of the HTTP API.
 
-![Architecture: clients reach the tunnel relay, which reaches the HTTP API and the SSH, Jupyter and terminal servers Linkspan runs as tasks](docs/assets/architecture.png)
+![Architecture: clients reach CS Plane, which reaches the HTTP API and the SSH, Jupyter and terminal servers Linkspan runs as tasks](docs/assets/architecture.png)
 
 Compute nodes sit behind a login node and a firewall. To get through, the client creates a
 [Dev Tunnel](https://learn.microsoft.com/en-us/azure/developer/dev-tunnels/overview) and Linkspan hosts
