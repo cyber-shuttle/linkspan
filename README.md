@@ -90,6 +90,9 @@ The reply gives you the server's `bind_port`. Add that port to the tunnel with `
 -p <bind_port>`, forward it to your laptop with `devtunnel connect <id>`, and point VS Code Remote-SSH at
 `127.0.0.1:<bind_port>`.
 
+Instead of a tunnel port per server, `/api/v1/forward/<bind_port>` reaches it through the control port; cs-plane
+relays that for its sessions, so its clients need no Dev Tunnels client at all.
+
 Every server Linkspan starts stops when Linkspan stops. So when a batch job runs Linkspan as its main
 process, the whole workspace ends at the job's time limit.
 
@@ -244,6 +247,7 @@ the model.
 | Method | Path | Answers |
 |---|---|---|
 | GET | `/api/v1/health` | `{"status":"ok"}` |
+| GET | `/api/v1/forward/{port}` | WebSocket carrying one TCP connection to the server a running task binds on that loopback port, bytes in binary frames; `404` when none does |
 | GET | `/api/v1/metrics` | `{"memBytes":<n>,"cpuUsageUsec":<n>,"gpus":[{"index":<n>,"utilPct":<n>,"memUsedMiB":<n>,"memTotalMiB":<n>}]}`; a missing source omits its field, and the object is the last sample of a 5s loop |
 | POST | `/api/v1/workflow/shell/exec` | `200` with the process session object once the command exits 0, `202` once a pause ended it; takes `{"command": "<shell command>", "ref": "<id>"}` |
 | GET | `/api/v1/vscode/sessions` | `[{"id":"s-<port>","addr":"127.0.0.1:<port>","state":"<state>","error":""}]`, ordered by id, `[]` when none |

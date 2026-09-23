@@ -28,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cyber-shuttle/linkspan/internal/forward"
 	"github.com/cyber-shuttle/linkspan/internal/metrics"
 	"github.com/cyber-shuttle/linkspan/internal/router"
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
@@ -129,7 +130,9 @@ func startAll(opts *options, cfg config) error {
 	if opts.socket != "" {
 		addrs = append(addrs, opts.socket)
 	}
-	h := routes(cfg).Handler()
+	h := http.NewServeMux()
+	h.Handle("/", routes(cfg).Handler())
+	h.HandleFunc("GET /api/v1/forward/{port}", forward.Stream)
 	var all []*tasks.Task
 	for _, addr := range addrs {
 		all = append(all, &tasks.Task{Kind: "http", Addr: addr, Server: &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}})
