@@ -37,6 +37,10 @@ linters:
       - path: internal/install/install\.go
         linters: [gosec]
         text: "G306"
+      # Dials a port only once a running task is bound to it, and only on loopback (G704).
+      - path: internal/forward/forward\.go
+        linters: [gosec]
+        text: "G704"
       # Runs the fetched devtunnel binary (G204).
       - path: internal/tunnel/tunnel\.go
         linters: [gosec]

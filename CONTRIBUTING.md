@@ -2,9 +2,7 @@
 
 Issues and pull requests go through [GitHub](https://github.com/cyber-shuttle/linkspan/issues). Branch off
 `main`, keep CI passing, cover new behavior with a test, and state in the description what was run.
-Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md). A pull request's column on the
-group's project board follows its draft, review and merge state through
-`.github/workflows/status-sync.yml`, which checks out and runs no repository code.
+Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Development Setup
 
@@ -113,8 +111,9 @@ ssh -o ControlMaster=no -o ControlPath=none -o IdentitiesOnly=yes -o BatchMode=y
 ## Releases
 
 Add the version's entry to [CHANGELOG.md](CHANGELOG.md), push the tag `vX.Y.Z`, then publish the GitHub
-release for that tag. Publishing triggers `.github/workflows/goreleaser.yml`, which builds and uploads the
-archives clients download. The same workflow dry-runs a snapshot on every pull request.
+release for that tag. Publishing triggers `.github/workflows/on-release.yml`, which builds and uploads the
+archives clients download, and runs only then. `.github/workflows/on-pr-and-main.yml` runs `make check` on
+every pull request and on each push to `main`, and a pull request merges only once it passes.
 
 `make` cross-compiles into `bin/` for Linux and macOS on `amd64` and `arm64`. It refuses to build unless
 HEAD is tagged `vX.Y.Z`, optionally with a `.<commit>` suffix, because the tag is the version the binary

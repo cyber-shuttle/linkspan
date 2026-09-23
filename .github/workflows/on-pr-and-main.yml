@@ -1,0 +1,30 @@
+name: on-pr-and-main
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: on-pr-and-main-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - id: tools
+        uses: actions/cache@v5
+        with:
+          path: ~/go/bin
+          key: tools-${{ runner.os }}-${{ hashFiles('Makefile', 'go.mod') }}
+      - if: steps.tools.outputs.cache-hit != 'true'
+        run: make tools
+      - run: make check
