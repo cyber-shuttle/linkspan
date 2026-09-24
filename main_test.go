@@ -5,16 +5,14 @@
 //	TestRoutesCoverCommands      Every command a subsystem exports is behind one of its routes.
 //	TestVersionIsOneLine, TestArchiveName
 //	TestExampleWorkflowLoads     examples/workflow.yml must name only commands the subsystems export.
-//	TestBindsLoopbackAndUnwinds  Sends SIGTERM once the socket answers, so every listener is up before the unwind.
+//	TestBindsLoopbackAndUnwinds  Sends SIGTERM once the port answers, and reads stderr to its end before Wait.
 package main
 
 import (
-	"bytes"
+	"bufio"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -53,7 +51,6 @@ func TestFlagSurface(t *testing.T) {
 
 	want := []string{
 		"port",
-		"socket",
 		"tunnel-cluster",
 		"tunnel-enable",
 		"tunnel-host-token",
@@ -128,7 +125,7 @@ func TestVersionIsOneLine(t *testing.T) {
 	}
 
 	if string(out) != "9.9.9\n" {
-		t.Errorf("clients match --version output whole and anchored; got %q", out)
+		t.Errorf("cs-plane reads the first line as one X.Y.Z token; got %q", out)
 	}
 }
 
@@ -184,20 +181,15 @@ func TestExampleWorkflowLoads(t *testing.T) {
 }
 
 func TestBindsLoopbackAndUnwinds(t *testing.T) {
-	dir, err := os.MkdirTemp("", "sd")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	socket := filepath.Join(dir, "sd.sock")
-
 	bin, err := binary()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(bin, "--port", "0", "--socket", socket)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	cmd := exec.Command(bin, "--port", "0")
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -205,40 +197,33 @@ func TestBindsLoopbackAndUnwinds(t *testing.T) {
 	timer := time.AfterFunc(20*time.Second, func() { _ = cmd.Process.Kill() })
 	t.Cleanup(func() { timer.Stop() })
 
-	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		if c, err := net.Dial("unix", socket); err == nil {
-			_, _ = io.WriteString(c, "GET /api/v1/health HTTP/1.0\r\n\r\n")
-			_ = c.SetReadDeadline(time.Now().Add(time.Second))
-			answer, _ := io.ReadAll(c)
-			_ = c.Close()
-			if strings.Contains(string(answer), `"status":"ok"`) {
-				break
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the socket never answered a request, so no listener was up to unwind")
-		}
+	lines := bufio.NewScanner(stderr)
+	var addr string
+	for addr == "" && lines.Scan() {
+		_, addr, _ = strings.Cut(lines.Text(), "listening on ")
+	}
+	if !strings.HasPrefix(addr, "127.0.0.1:") {
+		t.Fatalf("bound %q, want loopback", addr)
+	}
+	resp, err := http.Get("http://" + addr + "/api/v1/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("health answered %d", resp.StatusCode)
 	}
 
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
+	for lines.Scan() {
+	}
 	if err := cmd.Wait(); err != nil {
 		t.Fatalf("a signalled shutdown must exit zero: %v", err)
 	}
-	if _, err := os.Stat(socket); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the socket outlived shutdown, so its listener was never closed: %v", err)
-	}
-	listening := 0
-	for _, line := range strings.Split(stderr.String(), "\n") {
-		if _, addr, ok := strings.Cut(line, "listening on "); ok {
-			listening++
-			if !strings.HasPrefix(addr, "127.0.0.1:") && addr != socket {
-				t.Fatalf("bound somewhere reachable off-node: %q", line)
-			}
-		}
-	}
-	if listening != 2 {
-		t.Fatalf("%d listeners reported, want the port and the socket:\n%s", listening, stderr.String())
+	if c, err := net.Dial("tcp", addr); err == nil {
+		_ = c.Close()
+		t.Fatal("the port outlived shutdown, so its listener was never closed")
 	}
 }

@@ -1,25 +1,18 @@
-// Tests for the relay's lifecycle under StopAll and for port publishing. The heartbeat fake appends to a file named by
-// its tunnel id, so a relay left running is visible.
+// Tests for the relay's lifecycle under StopAll. The heartbeat fake appends to a file named by its tunnel id, so a
+// relay left running is visible.
 //
-//	newTunnel  Installs a fake CLI under a temporary HOME, $2 being the qualified id, and makes it the active tunnel.
+//	newTunnel  Installs a fake CLI under a temporary HOME, $2 being the qualified id.
 //	beatCount
 //	TestOutputKeepsTheTail  The last 64KB must be kept.
 //	TestStopAllKillsTheRelay, TestRelayExitEndsTheTask
-//	TestReadyFollowsTheRelay  Ready is closed by the relay's ready line, and already closed with no tunnel.
-//	TestPublish        A port is PUT with the host token, anonymous when asked, and DELETEd when its context ends; a
-//	                   failure must not name the token.
 package tunnel
 
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -82,7 +75,7 @@ func TestStopAllKillsTheRelay(t *testing.T) {
 }
 
 func TestRelayExitEndsTheTask(t *testing.T) {
-	tn := newTunnel(t, "t", "#!/bin/sh\necho 'Ready to accept connections'\n")
+	tn := newTunnel(t, "t", "#!/bin/sh\necho hosting\n")
 	exited := make(chan error, 1)
 	go func() { exited <- tn.Relay(context.Background()) }()
 	select {
@@ -92,84 +85,5 @@ func TestRelayExitEndsTheTask(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the task never returned after the relay died")
-	}
-}
-
-func TestReadyFollowsTheRelay(t *testing.T) {
-	active.Store(nil)
-	select {
-	case <-Ready():
-	default:
-		t.Fatal("with no tunnel, Ready must be closed")
-	}
-	tn := newTunnel(t, "t", "#!/bin/sh\necho 'Ready to accept connections'\n/bin/sleep 30\n")
-	t.Cleanup(func() { active.Store(nil) })
-	select {
-	case <-Ready():
-		t.Fatal("Ready closed before the relay ran")
-	default:
-	}
-	_, _ = (&tasks.Task{Kind: "tunnel", Run: tn.Relay}).Start()
-	t.Cleanup(tasks.StopAll)
-	select {
-	case <-Ready():
-	case <-time.After(10 * time.Second):
-		t.Fatal("Ready never closed after the relay's ready line")
-	}
-}
-
-func TestPublish(t *testing.T) {
-	type call struct{ method, path, auth string }
-	var mu sync.Mutex
-	var calls []call
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		calls = append(calls, call{r.Method, r.URL.Path + "?" + r.URL.RawQuery, r.Header.Get("Authorization")})
-		mu.Unlock()
-		if r.Method == http.MethodPut && !strings.HasSuffix(r.URL.Path, "/ports/4000") {
-			http.Error(w, "quota", http.StatusForbidden)
-			return
-		}
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body["portNumber"] != float64(4000) || body["protocol"] != "http" {
-			t.Errorf("port body = %v", body)
-		}
-		if _, anonymous := body["accessControl"]; anonymous != (r.Method == http.MethodPut) {
-			t.Errorf("PUT must carry the anonymous entry and DELETE none, got %v", body)
-		}
-	}))
-	t.Cleanup(srv.Close)
-	old := apiBase
-	apiBase = srv.URL + "/{cluster}"
-	t.Cleanup(func() { apiBase = old })
-
-	active.Store(nil)
-	if err := Publish(context.Background(), 4000, true); err != nil || URL(4000) != "" {
-		t.Fatalf("with no active tunnel got %q, %v; want no URL and no error", URL(4000), err)
-	}
-
-	_, _ = New("tid", "c", "secret-token")
-	t.Cleanup(func() { active.Store(nil) })
-	ctx, cancel := context.WithCancel(context.Background())
-	if err := Publish(ctx, 4000, true); err != nil || URL(4000) != "https://tid-4000.c.devtunnels.ms" {
-		t.Fatalf("Publish = %v, URL = %q", err, URL(4000))
-	}
-	if want := (call{"PUT", "/c/tunnels/tid/ports/4000?api-version=" + apiVersion, "tunnel secret-token"}); len(calls) != 1 || calls[0] != want {
-		t.Fatalf("calls = %+v, want %+v", calls, want)
-	}
-	if err := Publish(ctx, 4001, false); err == nil || strings.Contains(err.Error(), "secret-token") || !strings.Contains(err.Error(), "403") {
-		t.Fatalf("a refused port must fail naming the status and not the token, got %v", err)
-	}
-	cancel()
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		mu.Lock()
-		last := calls[len(calls)-1]
-		mu.Unlock()
-		if last.method == http.MethodDelete && strings.HasSuffix(last.path, "/ports/4000?api-version="+apiVersion) {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the port was not removed when its context ended: %+v", calls)
-		}
 	}
 }

@@ -1,13 +1,11 @@
 // Package terminal serves a PTY in the browser. A working directory posted to /api/v1/terminal/sessions
-// starts ttyd, fetched on first use, publishes its port on the tunnel and answers with the URL, which opens after
-// the tunnel owner signs in. Linux only, one PTY per session.
+// starts ttyd on loopback, fetched on first use, and answers with its address. Linux only, one PTY per session.
 //
 //	kind
 //	ttydVersion, ttydBase, assets  The release Linkspan fetches, by platform.
 //	startSession                   Answers 501 on a platform without a ttyd build; else spawns a terminal for
-//	                               params.cwd: fetches ttyd, publishes the port and runs ttyd writable on loopback
-//	                               running $SHELL, or sh, with -l on the PTY; an empty cwd is Linkspan's own
-//	                               directory.
+//	                               params.cwd: fetches ttyd and runs it writable on loopback running $SHELL, or
+//	                               sh, with -l on the PTY; an empty cwd is Linkspan's own directory.
 //	Commands                       sessions.start, with sessions.select and sessions.stop from sessions; shapes
 //	                               are frozen by docs/COMPATIBILITY.md.
 //	Router                         /terminal/sessions, each route a Commands entry.
@@ -26,7 +24,6 @@ import (
 	"github.com/cyber-shuttle/linkspan/internal/router"
 	"github.com/cyber-shuttle/linkspan/internal/sessions"
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
-	"github.com/cyber-shuttle/linkspan/internal/tunnel"
 )
 
 const kind tasks.Kind = "terminal"
@@ -47,8 +44,8 @@ func startSession(_ context.Context, params map[string]any) (int, any, string) {
 		return http.StatusNotImplemented, nil, err.Error()
 	}
 	cwd, _ := params["cwd"].(string)
-	created, err := (&tasks.Task{ID: sessions.Ref(params), Kind: kind, Attrs: func(t tasks.Task) map[string]string {
-		return map[string]string{"cwd": cwd, "url": tunnel.URL(t.Port())}
+	created, err := (&tasks.Task{ID: sessions.Ref(params), Kind: kind, Attrs: func(tasks.Task) map[string]string {
+		return map[string]string{"cwd": cwd}
 	}, Spawn: func(ctx context.Context, port int) (*exec.Cmd, error) {
 		bin := filepath.Join(install.Dir(), "bin", "ttyd")
 		if err := install.Fetch(ctx, bin, ttydBase+ttydVersion+"/"+asset); err != nil {
@@ -57,7 +54,7 @@ func startSession(_ context.Context, params map[string]any) (int, any, string) {
 		cmd := exec.Command(bin, "-p", strconv.Itoa(port), "-i", "127.0.0.1", "-W", cmp.Or(os.Getenv("SHELL"), "sh"), "-l")
 		cmd.Dir = cwd
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-		return cmd, tunnel.Publish(ctx, port, false)
+		return cmd, nil
 	}}).Start()
 	if err != nil {
 		return http.StatusInternalServerError, nil, err.Error()

@@ -1,6 +1,5 @@
-// Package main is the entry point. It parses the flags, serves the HTTP API on loopback and on the optional unix
-// socket, and starts the tunnel and the workflow's triggers, all as tasks, so one StopAll ends everything and the
-// first fatal error reaches main.
+// Package main is the entry point. It parses the flags, serves the HTTP API on loopback, and starts the tunnel and
+// the workflow's triggers, all as tasks, so one StopAll ends everything and the first fatal error reaches main.
 //
 //	version                 Set by the linker; "dev" otherwise.
 //	config                  Which subsystems publish their routes and actions, by name; main passes a literal until
@@ -10,8 +9,7 @@
 //	routes                  The tree: /api/v1 with health and metrics, then only enabled subsystems.
 //	commands                The workflow's actions: its own unprefixed, and each enabled subsystem's behind its name.
 //	startAll                Validates every input before binding anything, then starts every task in one pass, the
-//	                        listeners first: each as h-<port> or h-<socket path>, metrics, the tunnel and the
-//	                        workflow by kind.
+//	                        listener first as h-<port>, then metrics, the tunnel and the workflow by kind.
 //	main                    os.Exit is the first defer, so StopAll runs before it; the workflow's stop steps run
 //	                        first, with the API still up.
 package main
@@ -66,7 +64,6 @@ type options struct {
 	tunnelCluster   string
 	tunnelHostToken string
 	port            int
-	socket          string
 	workflow        string
 }
 
@@ -74,11 +71,10 @@ func registerFlags(fs *flag.FlagSet) *options {
 	var o options
 	fs.BoolVar(&o.printVersion, "version", false, "print the version and exit")
 	fs.BoolVar(&o.tunnelEnable, "tunnel-enable", false, "host the tunnel named by --tunnel-id")
-	fs.StringVar(&o.tunnelID, "tunnel-id", "", "id of the client-created tunnel to host")
-	fs.StringVar(&o.tunnelCluster, "tunnel-cluster", "", "cluster id of --tunnel-id")
-	fs.StringVar(&o.tunnelHostToken, "tunnel-host-token", "", "host-scoped access token for --tunnel-id")
-	fs.IntVar(&o.port, "port", 8080, "loopback port for the HTTP API; 0 picks a free one")
-	fs.StringVar(&o.socket, "socket", "", "also serve on this unix socket path")
+	fs.StringVar(&o.tunnelID, "tunnel-id", "", "id of the client-created tunnel; required with --tunnel-enable")
+	fs.StringVar(&o.tunnelCluster, "tunnel-cluster", "", "cluster id of --tunnel-id; required with --tunnel-enable")
+	fs.StringVar(&o.tunnelHostToken, "tunnel-host-token", "", "host-scoped access token; required with --tunnel-enable")
+	fs.IntVar(&o.port, "port", 8080, "HTTP API port on loopback; 0 picks a free one")
 	fs.StringVar(&o.workflow, "workflow", "", "workflow YAML file")
 	return &o
 }
@@ -126,18 +122,13 @@ func startAll(opts *options, cfg config) error {
 			return err
 		}
 	}
-	addrs := []string{fmt.Sprintf("127.0.0.1:%d", opts.port)}
-	if opts.socket != "" {
-		addrs = append(addrs, opts.socket)
-	}
 	h := http.NewServeMux()
 	h.Handle("/", routes(cfg).Handler())
 	h.HandleFunc("GET /api/v1/forward/{port}", forward.Stream)
-	var all []*tasks.Task
-	for _, addr := range addrs {
-		all = append(all, &tasks.Task{Kind: "http", Addr: addr, Server: &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}})
+	all := []*tasks.Task{
+		{Kind: "http", Addr: fmt.Sprintf("127.0.0.1:%d", opts.port), Server: &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}},
+		{Kind: "metrics", Run: metrics.Poll},
 	}
-	all = append(all, &tasks.Task{Kind: "metrics", Run: metrics.Poll})
 	if tn != nil {
 		all = append(all, &tasks.Task{Kind: "tunnel", Run: tn.Relay})
 	}

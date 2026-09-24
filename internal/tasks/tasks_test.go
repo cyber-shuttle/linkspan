@@ -6,15 +6,12 @@
 //	pollFailed
 //	TestStopAllSwallowsAndDeregisters, TestErrorReachesFailedByID, TestExitStaysListed, TestStopAllWaitsForTheTask
 //	TestRepeatedIDReplaces, TestStopOne, TestStartClosesTheListener
-//	TestSocketIsOwnerOnly      The directory avoids t.TempDir because macOS caps socket paths at 104 characters.
 package tasks
 
 import (
 	"context"
 	"errors"
 	"net"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -163,40 +160,4 @@ func TestStartClosesTheListener(t *testing.T) {
 		t.Fatal("the listener still accepts after StopAll")
 	}
 	<-srv.closed
-}
-
-func TestSocketIsOwnerOnly(t *testing.T) {
-	dir, err := os.MkdirTemp("", "sock")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	sock := filepath.Join(dir, "linkspan.sock")
-	if err := os.WriteFile(sock, []byte("not a socket"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := listen(sock); err == nil {
-		t.Fatal("a regular file at the socket path was unlinked and replaced")
-	}
-	if err := os.Remove(sock); err != nil {
-		t.Fatal(err)
-	}
-	stale, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stale.(*net.UnixListener).SetUnlinkOnClose(false)
-	_ = stale.Close()
-	ln, err := listen(sock)
-	if err != nil {
-		t.Fatalf("a stale socket was not replaced: %v", err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
-	info, err := os.Stat(sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm&0o077 != 0 {
-		t.Fatalf("socket mode %v; group and other must have no access", perm)
-	}
 }

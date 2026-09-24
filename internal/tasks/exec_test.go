@@ -52,6 +52,9 @@ func probe(addr string) bool {
 
 func startFake(t *testing.T, p *Task, run func(context.Context, int) (*exec.Cmd, error)) Task {
 	t.Helper()
+	old := pollInterval
+	pollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { pollInterval = old })
 	p.Kind, p.Spawn = "terminal", run
 	s, err := p.Start()
 	if err != nil {
@@ -158,9 +161,6 @@ func TestExecOutlivesAnOrphanedPipe(t *testing.T) {
 }
 
 func TestServerRunsAndAnswers(t *testing.T) {
-	old := pollInterval
-	pollInterval = 20 * time.Millisecond
-	t.Cleanup(func() { pollInterval = old })
 	s := startFake(t, &Task{Attrs: func(Task) map[string]string { return map[string]string{"k": "v"} }}, self("200ms", ""))
 	wire, _ := json.Marshal(s)
 	if s.State != StateStarting || !strings.Contains(string(wire), `"k":"v"`) || s.Kind != "terminal" || s.Addr != "127.0.0.1:"+strings.TrimPrefix(s.ID, "t-") {
@@ -204,9 +204,6 @@ func TestServerRunFails(t *testing.T) {
 }
 
 func TestServerExitsAfterRunning(t *testing.T) {
-	old := pollInterval
-	pollInterval = 20 * time.Millisecond
-	t.Cleanup(func() { pollInterval = old })
 	s := startFake(t, &Task{}, self("", "400ms"))
 	awaitState(t, s.ID, StateRunning)
 	if exited := awaitState(t, s.ID, StateExited); exited.Error != "" {

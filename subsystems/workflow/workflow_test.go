@@ -7,10 +7,10 @@
 //	TestJobEndsAfterReady        Start sends Linkspan SIGTERM once start and ready are run and the sessions their
 //	                             steps started have ended.
 //	TestStopsAtFirstFailure
-//	TestTriggers                 Start runs start then ready at once with no tunnel, then a signal's steps on the
-//	                             signal; an unknown trigger is refused at load.
+//	TestTriggers                 Start runs start then ready, then a signal's steps on the signal; an unknown trigger
+//	                             is refused at load.
 //	TestTaskList                 Every step under one task runs on its trigger, in order; a document with no tasks,
-//	                             or a field it does not know, such as a top-level steps list, is refused.
+//	                             or a field it does not know, is refused.
 //	TestCommands                 An action no enabled subsystem offers is refused at load; a command sees the step's
 //	                             params, its ref among them, and fails the step outside 2xx.
 package workflow
@@ -94,7 +94,7 @@ func TestExecIsASession(t *testing.T) {
 	if status != http.StatusOK || body.(tasks.Task).ID != "payload" || body.(tasks.Task).Pid == 0 {
 		t.Fatalf("exec answered %d %v %q, want 200 with the ended session payload", status, body, msg)
 	}
-	if err := loadSteps(t, step{"", "shell.exec", "sleep 30"}, shell("/usr/bin/false")); err != nil {
+	if err := loadSteps(t, shell("sleep 30"), shell("/usr/bin/false")); err != nil {
 		t.Fatal(err)
 	}
 	loaded[0].Steps[0].Params["ref"] = "payload"
@@ -191,7 +191,7 @@ func TestTriggers(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := names(t, dir); !slices.Equal(got, []string{"ready", "start", "usr1"}) {
-		t.Fatalf("ran %v; want start and ready at once with no tunnel, then the signal step", got)
+		t.Fatalf("ran %v; want start and ready, then the signal step", got)
 	}
 	if err := loadSteps(t, mark("SIGKILL", "x")); err == nil || !strings.Contains(err.Error(), "unknown trigger") {
 		t.Fatalf("an unknown trigger must be refused at load, got %v", err)
@@ -209,8 +209,8 @@ tasks:
       - action: shell.exec
         params: {command: /usr/bin/touch %[1]s/b}
 `, dir)
-	if err := loadDoc(t, doc+"steps:\n  - action: shell.exec\n    params: {command: true}\n", Commands); err == nil || !strings.Contains(err.Error(), "steps") {
-		t.Fatalf("a top-level steps list must be refused, got %v", err)
+	if err := loadDoc(t, doc+"bogus: 1\n", Commands); err == nil || !strings.Contains(err.Error(), "bogus") {
+		t.Fatalf("an unknown field must be refused, got %v", err)
 	}
 	if err := loadDoc(t, "name: t\ntasks: [{on: stop}]\n", Commands); err == nil || !strings.Contains(err.Error(), "no steps") {
 		t.Fatalf("a task is one or more steps, got %v", err)

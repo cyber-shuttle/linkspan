@@ -1,65 +1,31 @@
 # Compatibility
 
-Clients install and drive Linkspan over its flags, its `--version` and `--help` output, its release archive
-name, and its `/api/v1` routes and response shapes. Changing any of it needs a coordinated client release.
-Adding to it needs a client.
+Clients install and drive Linkspan through its flags, `--version` and `--help` output, release archive name, and
+`/api/v1` routes and response shapes. Changing any of these needs a coordinated client release.
+`main_test.go` pins the flag names, version line, archive name, and health and metrics bodies.
 
 ## Clients
 
-- cs-bridge, the VS Code extension, launches Linkspan with `--port --socket --tunnel-id --tunnel-cluster
-  --tunnel-host-token -tunnel-enable`, the last with one dash as Go's flag package also accepts, and calls
-  the health, metrics and `/vscode/sessions` routes, over the tunnel and over the socket. It reads the
-  `state` of a listed session only to skip `failed` ones.
-- cs-plane, the control plane cs-jupyter talks to, launches it with `--port --tunnel-enable --tunnel-id
-  --tunnel-cluster --tunnel-host-token --workflow`, exports `JUPYTER_TOKEN`, and calls only `/metrics`, over
-  the tunnel. Its document is one `start` task whose one step is `jupyter.sessions.start` naming `root_dir`
-  and `addr`, the port it declared on the tunnel ahead.
-- The words differ by layer. Linkspan's job is cs-plane's and cs-jupyter's session; a Linkspan session is a
-  server or process inside the job; cs-plane's snapshot of a session is its own record, not a CRIU
-  snapshot.
-- A browser opens `/terminal/sessions` URLs after the tunnel owner signs in at the Dev Tunnels page. No
-  client drives the route yet, so it is not yet a contract.
-- The `/filesystem` routes and commands want their params, answer `501`, and have no client yet, so they
-  are not contracts. Nor is `POST /jupyter/setup`, which is a route because every command is one.
-- The `/checkpoint` routes and commands are driven from a workflow file and have no client yet, so they are
-  not contracts.
+cs-plane launches Linkspan with `--port --tunnel-enable --tunnel-id --tunnel-cluster --tunnel-host-token
+--workflow` and exports `JUPYTER_TOKEN`. It calls `/metrics`, and reaches the Jupyter server over the tunnel through
+`/forward`.
 
-Both clients run `--version`.
+Not yet contracts, since no client drives them: `/terminal`, `/filesystem`, `/checkpoint`, `POST /jupyter/setup`.
+
+A "session" differs by layer: to cs-plane and cs-jupyter it is a Linkspan job; to Linkspan it is a server or process
+inside that job.
 
 ## Contracts
 
-- `--version` prints a bare `X.Y.Z[.commit]` as the only line on stdout. cs-plane reads the first line.
-  cs-bridge matches the whole trimmed output against an anchored regex, so a second line makes it reinstall
-  Linkspan on every launch.
-- cs-plane compares `--version` against 0.19.0 with `sort -V` and does not submit a job to an older
-  Linkspan, so the version line stays one `vX.Y.Z` token.
-- The archive is named `linkspan_Linux_${arch}.tar.gz` and holds the `linkspan` member. Both clients curl
-  and untar them by those names.
-- The session id is `s-<port>` and a listed session carries `addr`. cs-bridge takes the port from the last
-  `:`-separated field of `addr`, falling back to the id without its `s-` prefix. A `ref` in the request
-  replaces the id; the clients send none.
-- The response bodies are those in the README's [HTTP API](../README.md#http-api) table, field names
-  included, with metrics in camelCase and sessions in snake_case. cs-bridge requires a GET to answer 2xx
-  with the documented shape, because the tunnel edge answers 200 with an HTML page once hosting stops. So
-  `/health` keeps its status value, `/vscode/sessions` stays an array of `id`, `addr` and the literal
-  `state` `running`, and `/metrics` stays a non-array object. A created session answers 2xx with both
-  documented fields.
-- The session shell is `sh -c`, for which VS Code's bootstrap is written.
-- The workflow document cs-plane ships is `tasks`, each with `on` and `steps`, with the Jupyter token
-  taken from `JUPYTER_TOKEN` in Linkspan's environment; a top-level `steps` list, the shape before 0.19.0,
-  is refused at startup. The job lives as long as its Jupyter server.
-- The tunnel port a Jupyter server or terminal is published on is added with the token from
-  `--tunnel-host-token`, so that token must carry port rights. cs-plane mints `host manage:ports`, and
-  cs-bridge mints `host`, which the Dev Tunnels contract states includes port updates. A Jupyter server's
-  port is anonymous, so cs-jupyter reaches it with the Jupyter token alone, as it did the port cs-plane
-  declared. A terminal's port is not anonymous. Linkspan republishes a port cs-plane declared ahead
-  without its description, so cs-plane finds that port by number.
-- A Jupyter server's token is the `token` field of its object, minted per server. The server reads it
-  from `JUPYTER_TOKEN`, so any Jupyter Server release honors it.
-- An SSH session reports the child's own exit code, `255` when it was signaled, and `127` only when the
-  command could not run at all. VS Code's server bootstrap runs over these sessions and
-  branches on the status. A command that ran and exited zero keeps that status even when its output could
-  not be delivered.
-- The `sftp` subsystem and the `direct-streamlocal@openssh.com` handler are contracts with VS Code itself,
-  since Remote-SSH's bootstrap fallback uses SFTP and `remote.SSH.remoteServerListenOnSocket` uses
-  streamlocal.
+| Surface | Contract |
+|---|---|
+| `--version` | A bare `X.Y.Z[.commit]`, the only line on stdout. cs-plane refuses a Linkspan below `0.19.0` by `sort -V`. |
+| Archive | `linkspan_Linux_${arch}.tar.gz` holding the member `linkspan`; cs-plane curls and untars it by those names. |
+| Response bodies | As in the README's [HTTP API](../README.md#http-api), field names included: metrics camelCase, sessions snake_case. `/metrics` is an object. |
+| `POST /vscode/sessions` | `201` with `bind_port` already accepting. |
+| Workflow document | `tasks`, each with `on` and `steps`. cs-plane ships one `start` task whose one step is `jupyter.sessions.start` with `root_dir` and `addr`, the port it derived ahead, and the token from `JUPYTER_TOKEN`. The job lives as long as that server. |
+| Jupyter token | The object's `token` field, passed to the server as `JUPYTER_TOKEN`, which every Jupyter Server release honors. |
+| Delegated tunnel | Linkspan only hosts the tunnel and publishes no port, so `--tunnel-host-token` needs only the `host` scope. cs-plane declares only the control port and reaches every other port through `/forward`. |
+| SSH session shell | `sh -c`, for which VS Code's server bootstrap is written. |
+| SSH exit status | The child's own code; `255` when signaled; `127` only when the command could not run. A command that exited zero keeps that status even if its output was not delivered. VS Code's bootstrap branches on it. |
+| SSH channels | The `sftp` subsystem and `direct-streamlocal@openssh.com` are contracts with VS Code: Remote-SSH's bootstrap falls back to SFTP, and `remote.SSH.remoteServerListenOnSocket` uses streamlocal. |

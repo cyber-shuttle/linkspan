@@ -12,7 +12,7 @@ flowchart LR
     relay["<b>CS Plane</b><br/>Control/Data Plane<br/>for CyberShuttle"]:::entry
     subgraph ls[" Linkspan, the job's main process "]
         direction LR
-        api["<b>HTTP API</b><br/>/api/v1 on loopback<br/>and a unix socket"]:::core
+        api["<b>HTTP API</b><br/>/api/v1 on loopback"]:::core
         wf["<b>Workflow</b><br/>start · ready · stop · SIGUSR1"]:::core
         cmd["<b>Commands</b><br/>a route and a<br/>workflow action alike"]:::core
         reg["<b>Task registry</b>"]:::core

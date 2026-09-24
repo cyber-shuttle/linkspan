@@ -5,35 +5,24 @@
 [![Go](https://img.shields.io/github/go-mod/go-version/cyber-shuttle/linkspan)](go.mod)
 [![License](https://img.shields.io/github/license/cyber-shuttle/linkspan?color=blue)](LICENSE)
 
-**Linkspan turns an HPC batch job into a workspace you can reach from your laptop.** It has subsystems
-for the common tools researchers set up by hand, and for the data and process management chores that
-come with research on HPC.
+**Linkspan turns an HPC batch job into a workspace you can reach from your laptop.**
 
-- **Jupyter IDE.** A Jupyter server in a folder of the job. Linkspan builds the Python environment for it.
-- **VS Code IDE.** An SSH server for one keypair, identified by its public key. VS Code connects to it
-  with Remote-SSH.
-- **Metrics.** How much CPU, GPU and memory the job is using, from one URL.
-- **Terminals.** A PTY inside the job, opened from a browser tab.
+- **Jupyter IDE.** A Jupyter server in a folder of the job, in a Python environment Linkspan builds.
+- **VS Code IDE.** An SSH server for one public key, for VS Code Remote-SSH.
+- **Metrics.** The job's CPU, GPU and memory use.
+- **Terminals.** A PTY inside the job, in a browser tab.
 - **Filesystem (WIP).** Datasets mounted or synced into the job.
-- **Pause/Resume (WIP).** Any `shell.exec` command can be paused by its `ref` and resumed, via API or from a
-  workflow step, in this job or a later one.
-- **Workflows (WIP).** Steps that run at set points in the job's life, from a file. Each action is also a
-  route of the HTTP API.
+- **Pause/Resume (WIP).** A `shell.exec` command paused by its `ref` and resumed, in this job or a later one.
+- **Workflows (WIP).** Steps run at set points in the job's life, from a file.
 
-![Architecture: clients reach CS Plane, which reaches the HTTP API and the SSH, Jupyter and terminal servers Linkspan runs as tasks](docs/assets/architecture.png)
+![Architecture: clients reach Linkspan's tasks through cs-plane](docs/assets/architecture.png)
 
 Compute nodes sit behind a login node and a firewall. To get through, the client creates a
-[Dev Tunnel](https://learn.microsoft.com/en-us/azure/developer/dev-tunnels/overview) and Linkspan hosts
-it from inside the job. The tunnel decides who may connect.
-
-Most people use Linkspan through a client. [cs-bridge](https://github.com/cyber-shuttle/cs-bridge) is our
-VS Code extension. [cs-jupyter](https://github.com/cyber-shuttle/cs-jupyter) is our JupyterLite
-distribution. [cs-plane](https://github.com/cyber-shuttle/cs-plane) is our backend to submit linkspan-as-a-job and create tunnels so IDEs can connect.
-This document is about running Linkspan yourself.
-
-There are four ways to use Linkspan, and they mix. Run it as the main process of a batch job. Drive it
-with a workflow file. Drive it over the HTTP API. Reach it from another step of the same job. The sections
-below cover them in that order, after installation and a quick start.
+[Dev Tunnel](https://learn.microsoft.com/en-us/azure/developer/dev-tunnels/overview) and Linkspan hosts it from
+inside the job. Most people reach Linkspan through [cs-bridge](https://github.com/cyber-shuttle/cs-bridge), the VS
+Code extension, or [cs-jupyter](https://github.com/cyber-shuttle/cs-jupyter), the JupyterLite distribution, both
+driving [cs-plane](https://github.com/cyber-shuttle/cs-plane), the control plane. This document covers running
+Linkspan yourself.
 
 ## Installation
 
@@ -42,71 +31,55 @@ curl -fsSL https://github.com/cyber-shuttle/linkspan/releases/latest/download/li
   tar -xz linkspan
 ```
 
-Archives exist for Linux and macOS on `x86_64` and `arm64`. [CHANGELOG.md](CHANGELOG.md) lists the
-versions. [CONTRIBUTING.md](CONTRIBUTING.md#development-setup) explains how to build from source.
+Archives exist for `Linux` and `Darwin` on `x86_64` and `arm64`. To build from source, see
+[CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
 
 ### Requirements
 
-- Metrics need Linux with cgroup v2 laid out the way Slurm does it. The macOS builds run but report no
-  metrics.
-- GPU metrics need `nvidia-smi` on `PATH`. Without it, the GPU field is left out.
-- `--tunnel-enable` needs outbound HTTPS to `tunnelsassetsprod.blob.core.windows.net` to fetch the
-  `devtunnel` CLI, and then to the Dev Tunnels service at `devtunnels.ms` and
-  `rel.tunnels.api.visualstudio.com`.
-- Jupyter needs `curl` on `PATH`, and outbound HTTPS to `astral.sh` and `github.com` for `uv` and its
-  Python, and to `pypi.org` for packages. Terminals need `github.com` for `ttyd`, and work on Linux only.
-- The home directory must be writable. Everything Linkspan fetches or builds goes under `~/.cybershuttle/`.
+| Feature | Needs |
+|---|---|
+| Everything | A writable home directory; Linkspan fetches and builds only under `~/.cybershuttle/` |
+| Metrics | Linux, cgroup v2 as Slurm lays it out; macOS builds report none |
+| GPU metrics | `nvidia-smi` on `PATH`; otherwise `gpus` is omitted |
+| `--tunnel-enable` | HTTPS to `tunnelsassetsprod.blob.core.windows.net`, `devtunnels.ms` and `rel.tunnels.api.visualstudio.com` |
+| Jupyter | `curl` on `PATH`; HTTPS to `astral.sh`, `github.com`, `release-assets.githubusercontent.com` and `pypi.org` |
+| Terminals | Linux; HTTPS to `github.com` and `release-assets.githubusercontent.com` |
+| Pause/Resume | `criu` on `PATH`, allowed to run unprivileged |
 
 ## Quick start
 
-Create a Dev Tunnel on your laptop with `devtunnel create`, and mint a host token for it with
-`devtunnel token <id> --scopes host`. Then start Linkspan inside the job, hosting that tunnel.
+Inside the job:
 
 ```bash
-./linkspan --port 8080 --tunnel-enable \
-  --tunnel-id <id> --tunnel-cluster <cluster> --tunnel-host-token <token> &
-```
+./linkspan --port 8080 &
 
-Start a Jupyter server on a folder of the job.
-
-```bash
 curl -X POST http://127.0.0.1:8080/api/v1/jupyter/sessions \
   -H 'Content-Type: application/json' -d '{"root_dir": "/home/me/project"}'
-```
-
-The reply gives you the server's `url` on the tunnel and its `token`. Open the URL in a browser with the
-token, from anywhere. The first server builds its Python environment under `~/.cybershuttle/`, which
-takes a few minutes. Later servers reuse it.
-
-Start an SSH server for your public key.
-
-```bash
 curl -X POST http://127.0.0.1:8080/api/v1/vscode/sessions \
   -H 'Content-Type: application/json' \
   -d "{\"authorized_key\": \"$(cat ~/.ssh/id_ed25519.pub)\"}"
 ```
 
-The reply gives you the server's `bind_port`. Add that port to the tunnel with `devtunnel port create <id>
--p <bind_port>`, forward it to your laptop with `devtunnel connect <id>`, and point VS Code Remote-SSH at
-`127.0.0.1:<bind_port>`.
+Each reply names a loopback port: the Jupyter server's `addr`, with its `token`, and the SSH server's `bind_port`.
+The first Jupyter server builds the Python environment, which takes a few minutes. `/api/v1/forward/<port>` carries
+a WebSocket to either through the one API port, so whoever reaches that port reaches every server.
 
-Instead of a tunnel port per server, `/api/v1/forward/<bind_port>` reaches it through the control port; cs-plane
-relays that for its sessions, so its clients need no Dev Tunnels client at all.
+To reach the job from off the node, host a Dev Tunnel: create it with `devtunnel create`, declare only the API port with
+`devtunnel port create <id> -p 8080`, mint a token with `devtunnel token <id> --scopes host`, and add
+`--tunnel-enable --tunnel-id <id> --tunnel-cluster <cluster> --tunnel-host-token <token>`. Clients reach every server
+through `/api/v1/forward` on that port.
 
-Every server Linkspan starts stops when Linkspan stops. So when a batch job runs Linkspan as its main
-process, the whole workspace ends at the job's time limit.
+Every server stops when Linkspan stops, so a job running Linkspan as its main process ends its workspace at the
+time limit.
 
 ## Usage
 
 ### As a batch job
 
-A client creates the tunnel and makes a token that only allows hosting. Then it submits the job. The job
-runs Linkspan as its main process, with a workflow that sets up the workspace. The CyberShuttle clients do
-all of this for you. The script below is what they submit.
+cs-plane creates the tunnel, mints a host-scoped token and submits a job like this:
 
 ```bash
 #!/bin/bash
-#SBATCH --signal=B:USR1@120
 exec linkspan --port "$PORT" \
   --tunnel-enable \
   --tunnel-id "$CS_TUNNEL_ID" \
@@ -115,44 +88,36 @@ exec linkspan --port "$PORT" \
   --workflow workflow.yaml
 ```
 
-The first time it runs, Linkspan downloads Microsoft's `devtunnel` CLI and uses it as the relay. Each
-Jupyter server or terminal it starts is added to the tunnel while it runs, and you get back its public
-URL. If the relay fails or exits, Linkspan exits with a failure status. `--signal` tells Slurm to send
-`SIGUSR1` two minutes before the time limit, and a workflow step can react to it.
+Linkspan fetches the `devtunnel` CLI on first use and exits non-zero if the relay exits. Add
+`#SBATCH --signal=B:USR1@120` to get `SIGUSR1` two minutes before the limit.
 
 ### Workflows
 
-A workflow sets up a workspace and tears it down, all from one file. A job can checkpoint before its time
-limit and sync its results on exit, with no trap handlers in the batch script.
+A workflow is a list of tasks, each a trigger (`on`, default `start`) and its `steps`. A step is an action with
+`params`; `shell.exec` runs a command, and every other action is a subsystem command named `<subsystem>.<verb>`
+whose `params` are the matching route's request body. Steps run in order; the first failure exits Linkspan with
+status 1. Each trigger's run then waits on the sessions its steps started. Once `start` and `ready` complete,
+Linkspan exits, running the `stop` steps first, so a batch job ends with its payload and a workspace with its
+servers.
 
-A workflow is one or more tasks. Each task names a trigger with `on`, and `start` is the default, and holds
-one or more `steps`, each an action with its `params`. `shell.exec` runs a command. Any other
-action is one Linkspan offers, named by subsystem and verb, and its `params` are the same as the request
-body of the matching route. A task's steps run in order and stop at the first failure. That failure
-exits Linkspan with status 1. A trigger's run then waits on the sessions its steps started, and the job
-ends, with its `stop` steps run, once `start` and `ready` are complete: a batch job ends with its payload
-and a workspace with its servers.
-
-| Trigger | When |
+| Trigger | Runs when |
 |---|---|
-| `start` | The listeners are up. |
-| `ready` | After the `start` steps, once the tunnel relay is hosting; at once when no tunnel is hosted. A server's port is published through the management API, so a server may start on `start` too. |
-| `stop` | Linkspan was told to exit, before anything is torn down, so the API still answers. |
-| `SIGUSR1`, `SIGUSR2`, `SIGHUP` | The signal arrived, as Slurm's `--signal` sends it before the time limit. |
+| `start` | The listeners are up |
+| `ready` | The `start` run is complete |
+| `stop` | Linkspan is told to exit, before teardown, with the API still up |
+| `SIGUSR1`, `SIGUSR2`, `SIGHUP` | The signal arrives |
 
 | Action | Does | `params` |
 |---|---|---|
-| `shell.exec` | Runs `command` under `sh` as a process session, and answers when it ends | `command` |
-| `vscode.sessions.select`, `jupyter.sessions.select`, `terminal.sessions.select` | Lists that subsystem's sessions | |
-| `vscode.sessions.start` | Starts an SSH server for a key | `authorized_key` |
+| `shell.exec` | Runs `command` under `sh -c` as a process session; answers when it ends | `command` |
+| `vscode.sessions.select`, `jupyter.sessions.select`, `terminal.sessions.select` | Lists sessions | |
+| `vscode.sessions.start` | Starts an SSH server | `authorized_key` |
 | `jupyter.setup` | Builds the Jupyter environment ahead of the first server | |
-| `jupyter.sessions.start` | Starts a Jupyter server | `root_dir`, `addr`, `token` |
-| `jupyter.sessions.stop` | Stops one | `id` |
-| `terminal.sessions.start` | Starts a web terminal | `cwd` |
-| `terminal.sessions.stop` | Stops one | `id` |
-| `filesystem.mount`, `.unmount`, `.copy`, `.sync` | Declared, not yet implemented; a missing param is `400`, else `501` | `source`, `target`; `unmount` only `target` |
-| `checkpoint.pause` | Pauses one running process session into a snapshot with CRIU, ending it; the step waiting on it ends its trigger's run | `id` |
-| `checkpoint.resume` | Resumes one snapshot as a process session under the same id, and answers when it ends | `id` |
+| `jupyter.sessions.start`, `.stop` | Starts or stops a Jupyter server | `root_dir`, `addr`, `token`; `id` |
+| `terminal.sessions.start`, `.stop` | Starts or stops a web terminal | `cwd`; `id` |
+| `filesystem.mount`, `.unmount`, `.copy`, `.sync` | Not implemented | `source`, `target`; `unmount` only `target` |
+| `checkpoint.pause` | Snapshots a running process session with CRIU, ending it and the run of the step waiting on it | `id` |
+| `checkpoint.resume` | Resumes a snapshot as a process session under the same id; answers when it ends | `id` |
 
 ```yaml
 name: workspace
@@ -180,182 +145,101 @@ tasks:
           id: trainloop
 ```
 
-A step's `ref` names the session its action creates, so later steps can name it. Without
-one, Linkspan assigns the id and answers with it. A ref names one thing, so a step giving one must create
-one, and a repeated ref replaces what held it before. Over the API, `"ref"` is a field of the request body.
+A step's `ref`, or a request's `"ref"`, is the id of the session it creates; without one Linkspan assigns it. A
+repeated ref replaces the earlier session. An unknown trigger or field, or an action of a disabled subsystem, is
+refused before anything starts.
 
-A command runs under `sh`, with its globs, variables, pipes and redirects. A bare command name
-is looked up on Linkspan's `PATH`. An action from a disabled subsystem, or an unknown trigger, is refused
-before anything starts. [`examples/workflow.yml`](examples/workflow.yml) tries each kind of trigger against a
-local Linkspan. Run it, list `/api/v1/jupyter/sessions`, send `SIGUSR1`, then send `SIGTERM`. Each
-`shell.exec` step prints a line. [`examples/checkpoint.yml`](examples/checkpoint.yml) runs a payload as a
-process session and pauses it on `SIGUSR1`; [`examples/restore.yml`](examples/restore.yml) is the next job,
-resuming it from the snapshot. Both end the job with the payload; [`examples/checkpoint.sh`](examples/checkpoint.sh)
-runs the pair and checks the count is whole.
-
-### Reaching a job from inside the cluster
-
-`--socket` adds a unix socket listener. Then a caller elsewhere in the cluster can reach the job through a
-Slurm step, with no TCP port. The batch script creates the folder with mode `0700` and without `-p`, so if
-another user created it first, the job fails. Linkspan replaces a stale socket, refuses any other file at
-the path, and removes the socket on exit.
-
-```bash
-mkdir -m 700 "/tmp/linkspan-$SLURM_JOB_ID" && linkspan --port "$PORT" --socket "/tmp/linkspan-$SLURM_JOB_ID/api.sock"
-```
-
-A unix socket only connects on the same node, even on a shared filesystem, so the caller uses a Slurm step
-to land on the job's node. Each call costs a step's scheduling time, so the socket suits occasional
-requests rather than polling.
-
-```bash
-srun --jobid=<id> --overlap --mem=0 curl --unix-socket /tmp/linkspan-<id>/api.sock http://localhost/api/v1/metrics
-```
+| Example | Shows |
+|---|---|
+| [`examples/workflow.yml`](examples/workflow.yml) | Each trigger against a local Linkspan |
+| [`examples/checkpoint.yml`](examples/checkpoint.yml) | A payload paused on `SIGUSR1` |
+| [`examples/restore.yml`](examples/restore.yml) | The next job, resuming it |
+| [`examples/checkpoint.sh`](examples/checkpoint.sh) | Runs the pair and checks the count is whole |
 
 ## Configuration
 
 | Flag | Default | Description |
 |---|---|---|
-| `--port` | `8080` | HTTP port, bound on loopback; `0` picks a free one |
-| `--socket` | | Also serve on this unix socket path |
+| `--port` | `8080` | HTTP API port on loopback; `0` picks a free one |
 | `--workflow` | | Workflow YAML file |
 | `--tunnel-enable` | `false` | Host the tunnel named by `--tunnel-id` |
-| `--tunnel-id` | | Id of the tunnel the client created; required with `--tunnel-enable` |
+| `--tunnel-id` | | Id of the client-created tunnel; required with `--tunnel-enable` |
 | `--tunnel-cluster` | | Cluster id of `--tunnel-id`; required with `--tunnel-enable` |
-| `--tunnel-host-token` | | Access token scoped to hosting; required with `--tunnel-enable` |
+| `--tunnel-host-token` | | Host-scoped access token; required with `--tunnel-enable` |
 | `--version` | | Print the version and exit |
 
-Each capability is a subsystem that can be on or off, and all are on. A subsystem that is off has no
-routes, answers `404`, and offers no workflow action. The on/off set is written into `main.go` until a
-config file replaces it.
+| Environment | Read by |
+|---|---|
+| `JUPYTER_TOKEN` | `jupyter.sessions.start`, as the default token |
 
-| Subsystem | Shipped | Offers |
-|---|---|---|
-| `vscode` | on | SSH servers for VS Code Remote-SSH |
-| `jupyter` | on | Jupyter servers in a `uv`-built environment |
-| `terminal` | on | `ttyd` web terminals, Linux only |
-| `filesystem` | on | Mount, unmount, copy and sync, declared with their params and not yet implemented |
-| `checkpoint` | on | A sidecar that pauses and resumes process sessions with CRIU |
+Each subsystem can be switched off in `main.go`'s `config`; all ship on. An off subsystem has no routes, answering
+`404`, and no workflow actions.
+
+| Subsystem | Offers |
+|---|---|
+| `workflow` | `POST /workflow/shell/exec`; the `shell.exec` action stays available regardless |
+| `vscode` | SSH servers for Remote-SSH |
+| `jupyter` | Jupyter servers in a `uv`-built environment |
+| `terminal` | `ttyd` web terminals, Linux only |
+| `filesystem` | Mount, unmount, copy and sync, declared and answering `501` |
+| `checkpoint` | Pause and resume of process sessions with CRIU |
 
 ## HTTP API
 
-Requests carry no password or token. Access is controlled by how you reach Linkspan: the loopback port,
-the `0600` socket, or the tunnel the client owns. The port lets in every user on the node, so it assumes
-the job has the node to itself. The socket lets in only the job's user. [SECURITY.md](SECURITY.md) explains
-the model.
+Requests carry no credential; reaching the port is the authorization ([SECURITY.md](SECURITY.md)). Every route
+answers errors as `{"error": "<message>"}`: `400` for an unparsable body, `413` over 64KB.
 
 | Method | Path | Answers |
 |---|---|---|
 | GET | `/api/v1/health` | `{"status":"ok"}` |
-| GET | `/api/v1/forward/{port}` | WebSocket carrying one TCP connection to the server a running task binds on that loopback port, bytes in binary frames; `404` when none does |
-| GET | `/api/v1/metrics` | `{"memBytes":<n>,"cpuUsageUsec":<n>,"gpus":[{"index":<n>,"utilPct":<n>,"memUsedMiB":<n>,"memTotalMiB":<n>}]}`; a missing source omits its field, and the object is the last sample of a 5s loop |
-| POST | `/api/v1/workflow/shell/exec` | `200` with the process session object once the command exits 0, `202` once a pause ended it; takes `{"command": "<shell command>", "ref": "<id>"}` |
-| GET | `/api/v1/vscode/sessions` | `[{"id":"s-<port>","addr":"127.0.0.1:<port>","state":"<state>","error":""}]`, ordered by id, `[]` when none |
-| POST | `/api/v1/vscode/sessions` | `201` with `{"id":"s-<port>","bind_port":<port>}` |
-| GET | `/api/v1/jupyter/sessions` | `[{"id":"j-<port>","addr":"127.0.0.1:<port>","state":"<state>","error":"","url":"<public url>","root_dir":"<dir>","token":"<token>"}]`, ordered by id |
-| POST | `/api/v1/jupyter/sessions` | `201` with one session object; takes `{"root_dir": "<dir>"}`, default Linkspan's own directory |
-| DELETE | `/api/v1/jupyter/sessions/{id}` | `{"id":"j-<port>","state":"stopped"}`, `404` for an unknown id |
-| POST | `/api/v1/jupyter/setup` | `200` once the environment is built, which takes minutes the first time |
-| GET | `/api/v1/terminal/sessions` | `[{"id":"t-<port>","addr":"127.0.0.1:<port>","state":"<state>","error":"","url":"<public url>","cwd":"<dir>"}]`, ordered by id |
-| POST | `/api/v1/terminal/sessions` | `201` with one session object; takes `{"cwd": "<dir>"}`, default Linkspan's own directory |
-| DELETE | `/api/v1/terminal/sessions/{id}` | `{"id":"t-<port>","state":"stopped"}`, `404` for an unknown id |
-| POST | `/api/v1/filesystem/{mount,unmount,copy,sync}` | `400` for a missing param, else `501`: declared, not yet implemented; takes `{"source": "<path or URL>", "target": "<path>"}`, `unmount` only `target` |
-| POST | `/api/v1/checkpoint/pause` | `200` with `{"id":"<id>","dir":"<folder>"}` once CRIU has written the snapshot; takes `{"id": "<session id>"}`; `404` when the id is not a running session, `500` with CRIU's error, `501` without CRIU |
-| POST | `/api/v1/checkpoint/resume` | `200` with the process session object once it has ended, `202` once a pause ended it; takes `{"id": "<snapshot id>"}`; `404` for a missing snapshot, `500` with its error, `501` without CRIU |
+| GET | `/api/v1/forward/{port}` | WebSocket carrying one TCP connection, in binary frames, to the loopback port a running task serves; `404` when none does |
+| GET | `/api/v1/metrics` | `{"memBytes":<n>,"cpuUsageUsec":<n>,"gpus":[{"index":<n>,"utilPct":<n>,"memUsedMiB":<n>,"memTotalMiB":<n>}]}`, the latest sample, taken every 5s; an unreadable source omits its field |
+| POST | `/api/v1/workflow/shell/exec` | Takes `{"command","ref"}`, `400` without `command`; `200` with the process session once it exits 0, `202` once a pause ended it, `500` otherwise |
+| GET | `/api/v1/vscode/sessions` | `[{"id":"s-<port>","addr":"127.0.0.1:<port>","state":"<state>","error":""}]` |
+| POST | `/api/v1/vscode/sessions` | Takes `{"authorized_key","ref"}`; `201` with `{"id":"s-<port>","bind_port":<port>}` |
+| GET | `/api/v1/jupyter/sessions` | `[{"id":"j-<port>","addr":"127.0.0.1:<port>","state":"<state>","error":"","root_dir":"<dir>","token":"<token>"}]` |
+| POST | `/api/v1/jupyter/sessions` | Takes `{"root_dir","addr","token","ref"}`; `201` with one session object |
+| DELETE | `/api/v1/jupyter/sessions/{id}` | `{"id":"<id>","state":"stopped"}`; `404` for an unknown id |
+| POST | `/api/v1/jupyter/setup` | `200` once the environment is built |
+| GET | `/api/v1/terminal/sessions` | `[{"id":"t-<port>","addr":"127.0.0.1:<port>","state":"<state>","error":"","cwd":"<dir>"}]` |
+| POST | `/api/v1/terminal/sessions` | Takes `{"cwd","ref"}`; `201` with one session object; `501` off Linux |
+| DELETE | `/api/v1/terminal/sessions/{id}` | `{"id":"<id>","state":"stopped"}`; `404` for an unknown id |
+| POST | `/api/v1/filesystem/{mount,unmount,copy,sync}` | Takes `{"source","target"}`, `unmount` only `target`; `400` for a missing param, else `501` |
+| POST | `/api/v1/checkpoint/pause` | Takes `{"id"}`; `200` with `{"id","dir"}` once the snapshot is written; `404` for no such running session, `500` with CRIU's error, `501` without CRIU |
+| POST | `/api/v1/checkpoint/resume` | Takes `{"id"}`; as `shell/exec` once the resumed session ends; `404` for no snapshot, `501` without CRIU |
 
-Every creating POST takes `"ref"`, the id the created session will carry.
+Lists are ordered by id and `[]` when empty. An empty `root_dir` or `cwd` is Linkspan's working directory.
 
-Every POST reports an error as `{"error": "<message>"}`. The status is `400` when the body cannot be
-parsed and `413` when it is over 64KB. A route of a subsystem that is off answers `404`.
+**VS Code.** One SSH server per key, on loopback, accepting only that key and running commands through `sh`. A key
+with `authorized_keys` options is refused with `400`. The port accepts before the reply.
 
-A VS Code session is one SSH server. It listens on loopback, accepts one keypair identified by its public
-key, and runs commands through `sh`. The POST takes `{"authorized_key": "<ssh public key>"}`. The key
-must be bare, with no `authorized_keys` options, or it is refused with `400`. The port is already
-accepting when the reply arrives.
+**Jupyter and terminals.** A server starts `starting`, becomes `running` once its port accepts, and ends `exited` on
+status 0 or `failed` with `error` otherwise; a missing folder fails the server, not the request. It binds loopback
+and is reached through `/api/v1/forward`. `addr` pins a Jupyter server's loopback address; `token`
+defaults to `JUPYTER_TOKEN`, else a minted one.
 
-A Jupyter server or terminal starts in state `starting`. It becomes `running` once its port accepts, no
-matter how long that takes. It becomes `failed`, with `error` set, if it exits first. It becomes `exited`
-if it ends on its own. Poll the list to follow it. A folder that does not exist fails the server, not the
-request. The port is added to the hosted tunnel when the server starts and removed when it ends. `url` is
-the port's address on the tunnel, and is empty when no tunnel is hosted. A Jupyter server's port is
-anonymous on the tunnel, and its token is the only credential, so a browser reaches it with the token
-alone. A terminal's port is not anonymous. A browser signs in as the tunnel's owner. Any other client
-sends `X-Tunnel-Authorization: tunnel <connect token>`. `addr` pins a Jupyter server to a loopback port of
-your choice, and `token` sets its token. Without them, Linkspan picks a free port and takes the token from
-`JUPYTER_TOKEN` in its own environment, or makes one up. Terminals answer `501` on anything but Linux.
-
-A process session is a `shell.exec` command: run under `sh -c`, with Linkspan's stdout and stderr,
-listed with its `pid` under `ref`, or `p-<n>` without one, until it ends, when the step answers. A pause
-runs `criu dump` on its process tree into `~/.cybershuttle/checkpoints/<id>`, replacing an earlier snapshot
-of the id only once the dump has succeeded, so any Linkspan as the same user finds the latest by id. The
-session ends, and the step waiting on it answers `202` and ends its trigger's run, so a payload paused
-under `SIGUSR1` leaves the rest of `start` for the next job. A resume runs `criu restore` on the snapshot as
-a new process session under the same id, the tree CRIU's child writing to the new job's stdout and stderr,
-and answers when it ends. `criu` is looked up on `PATH` and must be allowed to run unprivileged, which its
-documentation covers.
+**Process sessions.** `shell.exec` runs under `sh -c` on Linkspan's stdout and stderr, with id `ref` or `p-<n>`,
+and its object carries `pid`. A pause runs `criu dump` into `~/.cybershuttle/checkpoints/<id>`, replacing an
+earlier snapshot only on success; the session ends and its waiting step answers `202`, ending its trigger's run.
+A resume runs `criu restore` as a new session under the same id, on the new job's stdout and stderr.
 
 ## Architecture
 
 Linkspan is one static Go binary built on three ideas.
 
-Everything that runs is a task. The HTTP listeners, the relay, the metrics sampler, the workflow, each SSH
-server and each Jupyter or `ttyd` child are all entries in one registry. Each is a function under a
-context, with an id, an address and a state. Starting a task binds its address first, so its port is
-reserved before the caller gets a reply, and an in-process server is already accepting. Stopping
-Linkspan cancels every task and waits for it. A child process runs in its own process group and is
-killed with it. Every child is forked through one path.
+- **Everything that runs is a task.** The listener, the relay, the metrics sampler, the workflow, each SSH
+  server and each child process are entries of one registry, each a function under a context with an id, an
+  address and a state. Starting a task binds its address first, so the port is reserved before the reply.
+  Stopping Linkspan cancels every task and waits for it; a child dies with its process group.
+- **A command is both a route and a workflow action.** Each subsystem exports a table of commands, plain
+  functions over a params map, and a route table naming them, so `POST /api/v1/jupyter/sessions` and a
+  `jupyter.sessions.start` step run one function.
+- **Building blocks are composed where used.** `internal/` holds primitives; a subsystem composes them into a
+  task at the point it starts one.
 
-A command is both a route and a workflow action. Each subsystem exports a table of commands, which are
-plain functions that take a map of params. Each also exports a route table that points at them. The
-router decodes the request body into the params. The workflow passes a step's `params` as the same map.
-So `POST /api/v1/jupyter/sessions` and a `jupyter.sessions.start` step run the same function. A test
-checks that every command is behind a route.
-
-Building blocks are put together where they are used. `internal/` holds the router, the task registry and
-the building blocks: the SSH server, the relay and port publishing, the metrics sampler, the
-`~/.cybershuttle/` installer, and what the session subsystems share: the list and stop commands, and a
-process session's life. A subsystem puts them together into a task at the point where it starts one.
-
-```
-main.go          flags, the subsystem table, startup and shutdown
-internal/
-  router/        a tree of routers; every route is a command
-  tasks/         the registry: Start, Select, Wait, Stop, StopAll, and Exec, the one fork path
-  sshd/ tunnel/ metrics/ install/
-  sessions/      what the session subsystems share, and a process session's life
-subsystems/
-  workflow/      YAML tasks on start, ready, stop and signals
-  checkpoint/    pause and resume, CRIU over process sessions
-  vscode/ jupyter/ terminal/ filesystem/
-```
-
-[CONTRIBUTING.md](CONTRIBUTING.md) has the full source layout, the file layout rules a test enforces, and
-the checks CI runs. [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) lists what the clients depend on.
-
-## Security
-
-Linkspan runs as the user who submitted the job, installs only under `~/.cybershuttle/`, and listens on
-loopback. It runs programs it does not ship: `devtunnel`, `ttyd` and `uv`, fetched over HTTPS on first
-use; the Python that `uv` installs; `nvidia-smi`; `sh` for SSH sessions; `$SHELL` on a PTY for terminals;
-and whatever a workflow step names. [SECURITY.md](SECURITY.md) explains the security model and how to
-report a vulnerability.
-
-## Clients
-
-- [cs-bridge](https://github.com/cyber-shuttle/cs-bridge) is a VS Code extension. It submits Linkspan as
-  a job with a time limit, starts an SSH server for your key over the tunnel, and points VS Code Remote-SSH
-  at it.
-- [cs-jupyter](https://github.com/cyber-shuttle/cs-jupyter) is a JupyterLite distribution whose sessions
-  cs-plane, its control plane, creates. cs-plane submits Linkspan with a one-step workflow that starts a
-  Jupyter server on a port it declared ahead, with the token it exported as `JUPYTER_TOKEN`. It then hands
-  the URL to cs-jupyter.
-
-## Contributing
-
-Issues and pull requests go through [GitHub](https://github.com/cyber-shuttle/linkspan/issues).
-[CONTRIBUTING.md](CONTRIBUTING.md) explains the process and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) the
-conduct expected.
+[CONTRIBUTING.md](CONTRIBUTING.md) has the source layout and checks; [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
+the client contracts; [SECURITY.md](SECURITY.md) the security model and how to report a vulnerability.
 
 ## License
 
-Linkspan is released under the Apache-2.0 license. See [LICENSE](LICENSE).
+Apache-2.0; see [LICENSE](LICENSE).
