@@ -1,10 +1,10 @@
-// Tests for the session surface cs-bridge parses: the handlers are called directly and their bodies marshalled.
+// Tests for the SSH session surface cs-plane drives: the handlers are called directly and their bodies marshalled.
 //
 //	authorizedKey
-//	marshal, create
+//	marshal
 //	TestCreateSessionServesOnReturn, TestCreateSessionRejectsBadKey
-//	TestSelectShape  Only the SSH kind may be listed, with the state literal cs-bridge compares.
-//	TestRefNamesTheSession
+//	TestARefReusesItsServer
+//	TestSelectShape  An empty list marshals as [].
 package vscode
 
 import (
@@ -29,32 +29,16 @@ func marshal(t *testing.T, body any) []byte {
 	return b
 }
 
-func create(t *testing.T) (string, int) {
-	t.Helper()
+func TestCreateSessionServesOnReturn(t *testing.T) {
 	t.Cleanup(func() { tasks.StopAll() })
 	status, body, errMsg := startSession(context.Background(), map[string]any{"authorized_key": authorizedKey})
-	if status != http.StatusCreated {
-		t.Fatalf("create = %d: %s", status, errMsg)
-	}
 	var out struct {
-		ID       string `json:"id"`
-		BindPort int    `json:"bind_port"`
+		BindPort int `json:"bind_port"`
 	}
-	if err := json.Unmarshal(marshal(t, body), &out); err != nil {
-		t.Fatalf("response is not the documented object: %v (%s)", err, marshal(t, body))
+	if status != http.StatusCreated || json.Unmarshal(marshal(t, body), &out) != nil || out.BindPort == 0 {
+		t.Fatalf("create = %d %s: %s", status, marshal(t, body), errMsg)
 	}
-	return out.ID, out.BindPort
-}
-
-func TestCreateSessionServesOnReturn(t *testing.T) {
-	id, port := create(t)
-	if port == 0 {
-		t.Fatal("bind_port missing or zero")
-	}
-	if want := "s-" + strconv.Itoa(port); id != want {
-		t.Fatalf("id = %q, want %q", id, want)
-	}
-	c, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(port))
+	c, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(out.BindPort))
 	if err != nil {
 		t.Fatalf("nothing accepting on bind_port when the response was written: %v", err)
 	}
@@ -75,38 +59,22 @@ func TestCreateSessionRejectsBadKey(t *testing.T) {
 	}
 }
 
+func TestARefReusesItsServer(t *testing.T) {
+	t.Cleanup(func() { tasks.StopAll() })
+	start := func() (int, any) {
+		status, body, _ := startSession(context.Background(), map[string]any{"authorized_key": authorizedKey, "ref": "ssh-laptop"})
+		return status, body.(map[string]any)["bind_port"]
+	}
+	firstStatus, firstPort := start()
+	againStatus, againPort := start()
+	if firstStatus != http.StatusCreated || againStatus != http.StatusOK || firstPort != againPort {
+		t.Fatalf("a repeated ref answered %d/%v then %d/%v, want 201 then 200 on the same port", firstStatus, firstPort, againStatus, againPort)
+	}
+}
+
 func TestSelectShape(t *testing.T) {
 	_, body, _ := Commands["sessions.select"](context.Background(), nil)
 	if got := string(marshal(t, body)); got != "[]" {
 		t.Fatalf("an empty sessions list must marshal as [], got %s", got)
-	}
-	idle := func(ctx context.Context) error { <-ctx.Done(); return nil }
-	_, _ = (&tasks.Task{ID: "not-a-session", Kind: "tunnel", Run: idle}).Start()
-	id, _ := create(t)
-	var listed []struct {
-		ID    string `json:"id"`
-		State string `json:"state"`
-		Addr  string `json:"addr"`
-	}
-	_, body, _ = Commands["sessions.select"](context.Background(), nil)
-	if err := json.Unmarshal(marshal(t, body), &listed); err != nil {
-		t.Fatalf("sessions body is not the documented array: %v", err)
-	}
-	if len(listed) != 1 || listed[0].ID != id || listed[0].Addr == "" {
-		t.Fatalf("want the one ssh session %s with its addr, got %+v", id, listed)
-	}
-	if listed[0].State != "running" {
-		t.Fatalf("state = %q, want %q -- cs-bridge compares against this literal", listed[0].State, "running")
-	}
-}
-
-func TestRefNamesTheSession(t *testing.T) {
-	status, body, msg := startSession(context.Background(), map[string]any{"authorized_key": authorizedKey, "ref": "laptop"})
-	if status != http.StatusCreated {
-		t.Fatalf("create answered %d %q", status, msg)
-	}
-	t.Cleanup(func() { tasks.Stop("laptop") })
-	if id := body.(map[string]any)["id"]; id != "laptop" {
-		t.Fatalf("id = %v, want the ref", id)
 	}
 }

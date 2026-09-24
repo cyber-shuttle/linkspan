@@ -8,6 +8,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 ### Changed
 
 - The workflow's `ready` trigger runs once the `start` run is complete, no longer waiting on the tunnel relay.
+- `POST /api/v1/vscode/sessions` with a `ref` already serving answers `200` with that server instead of replacing it.
 
 ### Removed
 
