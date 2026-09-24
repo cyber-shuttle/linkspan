@@ -5,6 +5,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- `--tunnel-enable` now takes `--tunnel-mode`, a comma-separated list of `websocket` and `devtunnel`, each mode
+  configured by its own `--tunnel-websocket-args="--url <url>"` or
+  `--tunnel-devtunnel-args="--id <id> --cluster <cluster>"`; both modes can run together. This replaces `--link-url`,
+  `--tunnel-id` and `--tunnel-cluster`.
+- The Dev Tunnel host token is read from `LINKSPAN_TUNNEL_HOST_TOKEN`, replacing `--tunnel-host-token`, so it no
+  longer shows on Linkspan's command line.
+
 ## [0.20.0] - 2026-09-24
 
 ### Added

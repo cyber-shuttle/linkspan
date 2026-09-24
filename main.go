@@ -1,4 +1,4 @@
-// Package main is the entry point. It parses the flags, serves the HTTP API on loopback, and starts the link, tunnel
+// Package main is the entry point. It parses the flags, serves the HTTP API on loopback, and starts the tunnel modes
 // and workflow triggers, all as tasks, so one StopAll ends everything and the first fatal error reaches main.
 //
 //	version                 Set by the linker; "dev" otherwise.
@@ -9,7 +9,7 @@
 //	routes                  The tree: /api/v1 with health and metrics, then only enabled subsystems.
 //	commands                The workflow's actions: its own unprefixed, and each enabled subsystem's behind its name.
 //	startAll                Validates every input before binding anything, then starts every task in one pass, the
-//	                        listener first as h-<port>, then metrics, the link, the tunnel and the workflow by kind.
+//	                        listener first as h-<port>, then metrics, each tunnel mode and the workflow by kind.
 //	main                    os.Exit is the first defer, so StopAll runs before it; the workflow's stop steps run
 //	                        first, with the API still up.
 package main
@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/cyber-shuttle/linkspan/internal/forward"
-	"github.com/cyber-shuttle/linkspan/internal/link"
 	"github.com/cyber-shuttle/linkspan/internal/metrics"
 	"github.com/cyber-shuttle/linkspan/internal/router"
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
@@ -59,24 +58,22 @@ var subsystems = map[string]subsystem{
 }
 
 type options struct {
-	printVersion    bool
-	tunnelEnable    bool
-	tunnelID        string
-	tunnelCluster   string
-	tunnelHostToken string
-	linkURL         string
-	port            int
-	workflow        string
+	printVersion bool
+	tunnelEnable bool
+	tunnelMode   string
+	tunnelArgs   map[string]string
+	port         int
+	workflow     string
 }
 
 func registerFlags(fs *flag.FlagSet) *options {
-	var o options
+	o := options{tunnelArgs: map[string]string{}}
 	fs.BoolVar(&o.printVersion, "version", false, "print the version and exit")
-	fs.BoolVar(&o.tunnelEnable, "tunnel-enable", false, "host the tunnel named by --tunnel-id")
-	fs.StringVar(&o.tunnelID, "tunnel-id", "", "id of the client-created tunnel; required with --tunnel-enable")
-	fs.StringVar(&o.tunnelCluster, "tunnel-cluster", "", "cluster id of --tunnel-id; required with --tunnel-enable")
-	fs.StringVar(&o.tunnelHostToken, "tunnel-host-token", "", "host-scoped access token; required with --tunnel-enable")
-	fs.StringVar(&o.linkURL, "link-url", "", "ws or wss URL of cs-plane to link to; requires "+link.Env)
+	fs.BoolVar(&o.tunnelEnable, "tunnel-enable", false, "carry the API off the node in the modes of --tunnel-mode")
+	fs.StringVar(&o.tunnelMode, "tunnel-mode", "", "comma-separated `modes`, websocket and/or devtunnel; required with --tunnel-enable")
+	for name, m := range tunnel.Modes {
+		fs.Func("tunnel-"+name+"-args", m.Usage, func(v string) error { o.tunnelArgs[name] = v; return nil })
+	}
 	fs.IntVar(&o.port, "port", 8080, "HTTP API port on loopback; 0 picks a free one")
 	fs.StringVar(&o.workflow, "workflow", "", "workflow YAML file")
 	return &o
@@ -111,14 +108,9 @@ func commands(cfg config) map[string]router.Command {
 }
 
 func startAll(opts *options, cfg config) error {
-	var (
-		tn  *tunnel.Tunnel
-		err error
-	)
-	if opts.tunnelEnable {
-		if tn, err = tunnel.New(opts.tunnelID, opts.tunnelCluster, opts.tunnelHostToken); err != nil {
-			return err
-		}
+	tunnels, err := tunnel.Parse(opts.tunnelEnable, opts.tunnelMode, opts.tunnelArgs)
+	if err != nil {
+		return err
 	}
 	if opts.workflow != "" {
 		if err := workflow.Load(opts.workflow, commands(cfg)); err != nil {
@@ -132,16 +124,7 @@ func startAll(opts *options, cfg config) error {
 		{Kind: "http", Addr: fmt.Sprintf("127.0.0.1:%d", opts.port), Server: &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}},
 		{Kind: "metrics", Run: metrics.Poll},
 	}
-	if opts.linkURL != "" {
-		ln, err := link.New(opts.linkURL, os.Getenv(link.Env))
-		if err != nil {
-			return err
-		}
-		all = append(all, &tasks.Task{Kind: "link", Run: ln.Run})
-	}
-	if tn != nil {
-		all = append(all, &tasks.Task{Kind: "tunnel", Run: tn.Relay})
-	}
+	all = append(all, tunnels...)
 	if opts.workflow != "" {
 		all = append(all, &tasks.Task{Kind: "workflow", Run: workflow.Start()})
 	}
