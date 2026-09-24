@@ -160,12 +160,19 @@ or field, or an action of a disabled subsystem, is refused before anything start
 | Flag | Default | Description |
 |---|---|---|
 | `--port` | `8080` | HTTP API port on loopback; `0` picks a free one |
+| `--socket` | | HTTP API unix socket path, mode `0600`; alone, it replaces the port |
 | `--workflow` | | Workflow YAML file |
 | `--tunnel-enable` | `false` | Carry the API off the node in the modes of `--tunnel-mode` |
 | `--tunnel-mode` | | Comma-separated modes, `websocket` and/or `devtunnel`; required with `--tunnel-enable` |
 | `--tunnel-websocket-args` | | `"--url <ws or wss URL>"` of cs-plane; required with the `websocket` mode, refused without it |
 | `--tunnel-devtunnel-args` | | `"--id <tunnel id> --cluster <cluster id>"` of the client-created tunnel; required with the `devtunnel` mode, refused without it |
 | `--version` | | Print the version and exit |
+
+The API listens on `--port`, `--socket`, or both, with the same routes on each; with neither it takes port `8080`.
+Linkspan replaces a stale socket, refuses any other file at the path, and removes the socket on exit. A socket
+connects only on its node, so a caller elsewhere in the cluster reaches it through a Slurm step:
+`srun --jobid=<id> --overlap curl --unix-socket <path> http://localhost/api/v1/metrics`. The `devtunnel` mode
+carries the port, so it refuses `--socket` without `--port`.
 
 | Environment | Read by |
 |---|---|
@@ -187,7 +194,7 @@ Each subsystem can be switched off in `main.go`'s `config`; all ship on. An off 
 
 ## HTTP API
 
-Requests carry no credential; reaching the port is the authorization ([SECURITY.md](SECURITY.md)). Every route
+Requests carry no credential; reaching the port or socket is the authorization ([SECURITY.md](SECURITY.md)). Every route
 answers errors as `{"error": "<message>"}`: `400` for an unparsable body, `413` over 64KB.
 
 | Method | Path | Answers |

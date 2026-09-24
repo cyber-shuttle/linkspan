@@ -12,6 +12,8 @@ cs-plane launches Linkspan with `--port --workflow --tunnel-enable --tunnel-mode
 `JUPYTER_TOKEN`, `LINKSPAN_LINK_TOKEN` and `LINKSPAN_TUNNEL_HOST_TOKEN`. It calls `/metrics` and
 `/vscode/sessions`, and reaches the Jupyter server over the link, or over the tunnel through `/forward`.
 
+cs-bridge's released launch passes `--socket` and reads `/metrics` over it through `srun`.
+
 Not yet contracts, since no client drives them: `/terminal`, `/filesystem`, `/checkpoint`, `POST /jupyter/setup`.
 
 A "session" differs by layer: to cs-plane and cs-jupyter it is a Linkspan job; to Linkspan it is a server or process
