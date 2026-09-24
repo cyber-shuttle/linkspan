@@ -16,8 +16,11 @@ published.
 A useful report shows one of these boundaries failing.
 
 - **Access control is at the transport.** Requests carry no credential. The HTTP listener binds loopback, and remote
-  callers arrive over the client-owned tunnel. The port admits every user on the node, any of whom could start an SSH
-  server for their own key running as the job's user, and cs-plane does not request `--exclusive`.
+  callers arrive over the link or the client-owned tunnel. The port admits every user on the node, any of whom could
+  start an SSH server for their own key running as the job's user, and cs-plane does not request `--exclusive`.
+- **The link trusts cs-plane.** Linkspan presents the token from `LINKSPAN_LINK_TOKEN`, kept off the process list,
+  as a WebSocket subprotocol, in clear over `ws`. cs-plane, like any caller of `/api/v1/forward/{port}`, may open a
+  stream to any loopback port a running task serves, the API's included, and nothing else on the node.
 - **The tunnel is client-owned.** The client creates it and mints the host-scoped token. Linkspan passes the token
   to `devtunnel host` as a command-line argument, the only form the CLI documents, so the process list shows it to
   every user on the node. Linkspan only hosts it: it publishes no port and never creates, refreshes or deletes a

@@ -1,14 +1,15 @@
 # Compatibility
 
-Clients install and drive Linkspan through its flags, `--version` and `--help` output, release archive name, and
-`/api/v1` routes and response shapes. Changing any of these needs a coordinated client release.
+Clients install and drive Linkspan through its flags, `--version` and `--help` output, release archive name, link
+protocol, and `/api/v1` routes and response shapes. Changing any of these needs a coordinated client release.
 `main_test.go` pins the flag names, version line, archive name, and health and metrics bodies.
 
 ## Clients
 
-cs-plane launches Linkspan with `--port --tunnel-enable --tunnel-id --tunnel-cluster --tunnel-host-token
---workflow` and exports `JUPYTER_TOKEN`. It calls `/metrics` and `/vscode/sessions`, and reaches the Jupyter server
-over the tunnel through `/forward`.
+cs-plane launches Linkspan with `--port --link-url --workflow`, adding `--tunnel-enable
+--tunnel-id --tunnel-cluster --tunnel-host-token` when the owner delegated a Dev Tunnels account, and exports
+`JUPYTER_TOKEN` and `LINKSPAN_LINK_TOKEN`. It calls `/metrics` and `/vscode/sessions`, and reaches the Jupyter
+server over the link, or over the tunnel through `/forward`.
 
 Not yet contracts, since no client drives them: `/terminal`, `/filesystem`, `/checkpoint`, `POST /jupyter/setup`.
 
@@ -19,8 +20,9 @@ inside that job.
 
 | Surface | Contract |
 |---|---|
-| `--version` | A bare `X.Y.Z[.commit]`, the only line on stdout. cs-plane refuses a Linkspan below `0.19.0` by `sort -V`. |
+| `--version` | A bare `X.Y.Z[.commit]`, the only line on stdout. cs-plane refuses a Linkspan below `0.20.0` by `sort -V`. |
 | Archive | `linkspan_Linux_${arch}.tar.gz` holding the member `linkspan`; cs-plane curls and untars it by those names. |
+| Link | One WebSocket offering subprotocols `cybershuttle.v1` and `link.<token>`, carrying yamux in binary frames, cs-plane the yamux client. Per stream cs-plane writes a port as two big-endian bytes; Linkspan answers `1` if it connected to that port, else `0`, then carries bytes until either end closes. yamux's keepalive detects a dead link and Linkspan redials. |
 | Response bodies | As in the README's [HTTP API](../README.md#http-api), field names included: metrics camelCase, sessions snake_case. `/metrics` is an object. |
 | `POST /vscode/sessions` | `201` with `bind_port` already accepting; a `ref` already serving answers `200` with the same server, so cs-plane names each key's server `ssh-<key hash>` and reuses it. |
 | Workflow document | `tasks`, each with `on` and `steps`. cs-plane ships one `start` task whose one step is `jupyter.sessions.start` with `root_dir` and `addr`, the port it derived ahead, and the token from `JUPYTER_TOKEN`. The job lives as long as that server. |

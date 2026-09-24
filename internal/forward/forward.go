@@ -2,8 +2,10 @@
 // A client that can reach the control port, over the tunnel or a relay such as cs-plane, reaches every server behind
 // it through that one port. Binary frames carry the bytes each way, and closing either side closes both.
 //
-//	Stream  GET /api/v1/forward/{port}: 404 unless a running task is bound to that loopback port, so the route
-//	        reaches Linkspan's own servers and nothing else on the node.
+//	Dial    nil unless a running task serves that loopback port, so a stream reaches Linkspan's own servers and
+//	        nothing else on the node.
+//	Pipe
+//	Stream  GET /api/v1/forward/{port}: 404 unless Dial reaches the port.
 package forward
 
 import (
@@ -17,22 +19,16 @@ import (
 
 var upgrader websocket.Upgrader
 
-func Stream(w http.ResponseWriter, r *http.Request) {
-	port, _ := strconv.Atoi(r.PathValue("port"))
+func Dial(port int) net.Conn {
 	if !tasks.IsServing(port) {
-		http.Error(w, `{"error":"no running server on that port"}`, http.StatusNotFound)
-		return
+		return nil
 	}
-	server, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-	if err != nil {
-		http.Error(w, `{"error":"the server refused the connection"}`, http.StatusBadGateway)
-		return
-	}
+	conn, _ := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	return conn
+}
+
+func Pipe(client *websocket.Conn, server net.Conn) {
 	defer func() { _ = server.Close() }()
-	client, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		return
-	}
 	go func() {
 		defer func() { _ = client.Close() }()
 		buf := make([]byte, 32<<10)
@@ -52,4 +48,19 @@ func Stream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+func Stream(w http.ResponseWriter, r *http.Request) {
+	port, _ := strconv.Atoi(r.PathValue("port"))
+	server := Dial(port)
+	if server == nil {
+		http.Error(w, `{"error":"no running server on that port"}`, http.StatusNotFound)
+		return
+	}
+	client, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		_ = server.Close()
+		return
+	}
+	Pipe(client, server)
 }

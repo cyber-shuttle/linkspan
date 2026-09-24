@@ -50,6 +50,7 @@ func TestFlagSurface(t *testing.T) {
 	registerFlags(fs)
 
 	want := []string{
+		"link-url",
 		"port",
 		"tunnel-cluster",
 		"tunnel-enable",

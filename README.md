@@ -17,7 +17,7 @@
 
 ![Architecture: clients reach Linkspan's tasks through cs-plane](docs/assets/architecture.png)
 
-Compute nodes sit behind a login node and a firewall. To get through, the client creates a
+Compute nodes sit behind a login node and a firewall. To get through, Linkspan dials cs-plane, or the client creates a
 [Dev Tunnel](https://learn.microsoft.com/en-us/azure/developer/dev-tunnels/overview) and Linkspan hosts it from
 inside the job. Most people reach Linkspan through [cs-bridge](https://github.com/cyber-shuttle/cs-bridge), the VS
 Code extension, or [cs-jupyter](https://github.com/cyber-shuttle/cs-jupyter), the JupyterLite distribution, both
@@ -64,7 +64,8 @@ Each reply names a loopback port: the Jupyter server's `addr`, with its `token`,
 The first Jupyter server builds the Python environment, which takes a few minutes. `/api/v1/forward/<port>` carries
 a WebSocket to either through the one API port, so whoever reaches that port reaches every server.
 
-To reach the job from off the node, host a Dev Tunnel: create it with `devtunnel create`, declare only the API port with
+To reach the job from off the node, add `--link-url <url>` with `LINKSPAN_LINK_TOKEN=<token>`, both issued by
+cs-plane. Without cs-plane, host a Dev Tunnel instead: create it with `devtunnel create`, declare only the API port with
 `devtunnel port create <id> -p 8080`, mint a token with `devtunnel token <id> --scopes host`, and add
 `--tunnel-enable --tunnel-id <id> --tunnel-cluster <cluster> --tunnel-host-token <token>`. Clients reach every server
 through `/api/v1/forward` on that port.
@@ -76,19 +77,14 @@ time limit.
 
 ### As a batch job
 
-cs-plane creates the tunnel, mints a host-scoped token and submits a job like this:
+cs-plane exports `LINKSPAN_LINK_TOKEN`, `CS_LINK_URL` and `CS_CONTROL_PORT` and submits a job like this:
 
 ```bash
 #!/bin/bash
-exec linkspan --port "$PORT" \
-  --tunnel-enable \
-  --tunnel-id "$CS_TUNNEL_ID" \
-  --tunnel-cluster "$CS_TUNNEL_CLUSTER" \
-  --tunnel-host-token "$CS_TUNNEL_HOST_TOKEN" \
-  --workflow workflow.yaml
+exec linkspan --port "$CS_CONTROL_PORT" --link-url "$CS_LINK_URL" --workflow workflow.yaml
 ```
 
-Linkspan fetches the `devtunnel` CLI on first use and exits non-zero if the relay exits. Add
+With `--tunnel-enable`, Linkspan fetches the `devtunnel` CLI on first use and exits non-zero if the relay exits. Add
 `#SBATCH --signal=B:USR1@120` to get `SIGUSR1` two minutes before the limit.
 
 ### Workflows
@@ -162,6 +158,7 @@ or field, or an action of a disabled subsystem, is refused before anything start
 |---|---|---|
 | `--port` | `8080` | HTTP API port on loopback; `0` picks a free one |
 | `--workflow` | | Workflow YAML file |
+| `--link-url` | | `ws` or `wss` URL of cs-plane to link to; requires `LINKSPAN_LINK_TOKEN` |
 | `--tunnel-enable` | `false` | Host the tunnel named by `--tunnel-id` |
 | `--tunnel-id` | | Id of the client-created tunnel; required with `--tunnel-enable` |
 | `--tunnel-cluster` | | Cluster id of `--tunnel-id`; required with `--tunnel-enable` |
@@ -170,6 +167,7 @@ or field, or an action of a disabled subsystem, is refused before anything start
 
 | Environment | Read by |
 |---|---|
+| `LINKSPAN_LINK_TOKEN` | `--link-url`, as the link's credential |
 | `JUPYTER_TOKEN` | `jupyter.sessions.start`, as the default token |
 
 Each subsystem can be switched off in `main.go`'s `config`; all ship on. An off subsystem has no routes, answering
@@ -192,7 +190,7 @@ answers errors as `{"error": "<message>"}`: `400` for an unparsable body, `413` 
 | Method | Path | Answers |
 |---|---|---|
 | GET | `/api/v1/health` | `{"status":"ok"}` |
-| GET | `/api/v1/forward/{port}` | WebSocket carrying one TCP connection, in binary frames, to the loopback port a running task serves; `404` when none does |
+| GET | `/api/v1/forward/{port}` | WebSocket carrying one TCP connection, in binary frames, to the loopback port a running task serves; `404` otherwise |
 | GET | `/api/v1/metrics` | `{"memBytes":<n>,"cpuUsageUsec":<n>,"gpus":[{"index":<n>,"utilPct":<n>,"memUsedMiB":<n>,"memTotalMiB":<n>}]}`, the latest sample, taken every 5s; an unreadable source omits its field |
 | POST | `/api/v1/workflow/shell/exec` | Takes `{"command","ref"}`, `400` without `command`; `200` with the process session once it exits 0, `202` once a pause ended it, `500` otherwise |
 | GET | `/api/v1/vscode/sessions` | `[{"id":"s-<port>","addr":"127.0.0.1:<port>","state":"<state>","error":""}]` |
@@ -216,7 +214,7 @@ answered as is, whatever key the request names.
 
 **Jupyter and terminals.** A server starts `starting`, becomes `running` once its port accepts, and ends `exited` on
 status 0 or `failed` with `error` otherwise; a missing folder fails the server, not the request. It binds loopback
-and is reached through `/api/v1/forward`. `addr` pins a Jupyter server's loopback address; `token`
+and is reached through `/api/v1/forward` or the link. `addr` pins a Jupyter server's loopback address; `token`
 defaults to `JUPYTER_TOKEN`, else a minted one.
 
 **Process sessions.** `shell.exec` runs under `sh -c` on Linkspan's stdout and stderr, with id `ref` or `p-<n>`,
@@ -228,7 +226,7 @@ A resume runs `criu restore` as a new session under the same id, on the new job'
 
 Linkspan is one static Go binary built on three ideas.
 
-- **Everything that runs is a task.** The listener, the relay, the metrics sampler, the workflow, each SSH
+- **Everything that runs is a task.** The listener, the link, the relay, the metrics sampler, the workflow, each SSH
   server and each child process are entries of one registry, each a function under a context with an id, an
   address and a state. Starting a task binds its address first, so the port is reserved before the reply.
   Stopping Linkspan cancels every task and waits for it; a child dies with its process group.
