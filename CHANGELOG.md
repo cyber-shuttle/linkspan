@@ -5,6 +5,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-09-24
+
 ### Changed
 
 - `--tunnel-enable` now takes `--tunnel-mode`, a comma-separated list of `websocket` and `devtunnel`, each mode
@@ -582,7 +584,8 @@ No change. The tag points at the same commit as 0.14.8.
   tunnel routes, and opens a dev tunnel at startup unless `--tunnel-enable=false`.
 - GoReleaser archives for Linux, macOS and Windows.
 
-[Unreleased]: https://github.com/cyber-shuttle/linkspan/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/cyber-shuttle/linkspan/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/cyber-shuttle/linkspan/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/cyber-shuttle/linkspan/compare/v0.19.2...v0.20.0
 [0.19.2]: https://github.com/cyber-shuttle/linkspan/compare/v0.19.1...v0.19.2
 [0.19.1]: https://github.com/cyber-shuttle/linkspan/compare/v0.19.0...v0.19.1
