@@ -1,7 +1,7 @@
 # A workflow that runs a payload as a process session, pauses it to a snapshot ahead of the time limit and shuts
 # Linkspan down once it ends. Linux, with criu on PATH and the kernel letting it run unprivileged:
 #
-#   linkspan --port 8080 --workflow examples/checkpoint.yml
+#   ./linkspan --port 8080 --workflow examples/checkpoint.yml
 #
 # start: the payload counts on stdout; when it ends, so does the job.
 # SIGUSR1: kill -USR1 <pid>, as sbatch --signal=USR1@60 would: the tree is written to a snapshot under

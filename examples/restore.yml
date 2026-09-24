@@ -1,7 +1,7 @@
 # The next job after examples/checkpoint.yml: resume the payload from its snapshot under the same id, pause it
 # again ahead of the time limit, and shut Linkspan down once it ends.
 #
-#   linkspan --port 8080 --workflow examples/restore.yml
+#   ./linkspan --port 8080 --workflow examples/restore.yml
 name: restore
 tasks:
   - on: start

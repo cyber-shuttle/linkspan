@@ -1,7 +1,6 @@
-// Package forward carries a TCP connection to a server Linkspan runs over a WebSocket on Linkspan's own HTTP listener,
-// the alternative to publishing that server's port on the Dev Tunnel. A client that can reach the control port, over
-// the tunnel, the unix socket or a relay such as cs-plane, reaches every server behind it through that one port.
-// Binary frames carry the bytes each way, and closing either side closes both.
+// Package forward carries a TCP connection to a server Linkspan runs over a WebSocket on Linkspan's own HTTP listener.
+// A client that can reach the control port, over the tunnel or a relay such as cs-plane, reaches every server behind
+// it through that one port. Binary frames carry the bytes each way, and closing either side closes both.
 //
 //	Stream  GET /api/v1/forward/{port}: 404 unless a running task is bound to that loopback port, so the route
 //	        reaches Linkspan's own servers and nothing else on the node.

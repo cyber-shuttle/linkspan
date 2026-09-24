@@ -6,7 +6,7 @@ GOLANGCI := v2.13.2
 GOVULN   := v1.8.0
 
 # A release tag is X.Y.Z; a build ahead of one is X.Y.Z.<commit>, a distinct newer version.
-# Untagged is refused: it would report "dev", which fails the version check cs-bridge runs on every launch.
+# Untagged is refused: it would report "dev", which fails cs-plane's sort -V version check.
 VERSION := $(patsubst v%,%,$(shell git describe --tags --exact-match 2>/dev/null))
 VALID   := $(shell printf '%s' '$(VERSION)' | grep -Eo '^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9a-f]{7,40})?$$')
 

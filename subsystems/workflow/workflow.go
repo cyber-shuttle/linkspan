@@ -1,11 +1,10 @@
 // Package workflow runs the tasks a YAML document names at the moments of the job's life it chooses: start, once
-// the API is up; ready, once the tunnel is hosting, or at once without one; stop, when Linkspan is told to exit;
-// or a signal such as SIGUSR1, which Slurm sends ahead of the time limit. A task is a list of steps under one
-// trigger, each an action with its params; they run in order, and the first failure stops them. shell.exec runs a
-// command under sh as a process session named by the step's ref, which checkpoint.pause can end; a paused step
-// ends its trigger's run, so the rest waits for a resume. A run then waits on the sessions its steps started, and
-// the job ends once start and ready are complete, so a batch job ends with its payload and a workspace with its
-// servers. Any other action is one a subsystem offers, such as vscode.sessions.start, with the params it takes,
+// the API is up; ready, once start's run is complete; stop, when Linkspan is told to exit; or a signal such as
+// SIGUSR1, which Slurm sends ahead of the time limit. A task is a list of steps under one trigger, each an action
+// with its params; they run in order, and the first failure stops them. shell.exec runs a command under sh as a
+// process session named by the step's ref, which checkpoint.pause can end; a paused step ends its trigger's run, so
+// the rest waits for a resume. A run then waits on the sessions its steps started, and the job ends once start and
+// ready are complete, so a batch job ends with its payload and a workspace with its servers. Any other action is one a subsystem offers, such as vscode.sessions.start, with the params it takes,
 // so a workspace is set up from the file. One document is loaded per job.
 //
 //	signals          The triggers beyond start, ready and stop, by name.
@@ -16,9 +15,9 @@
 //	Run              The steps of each task on one trigger, in order, each failing on a status outside 2xx and
 //	                 ending the run on 202, then a wait on every session a step answered with. Nothing when no
 //	                 document is loaded.
-//	Start            The task main starts, built after Load: the start steps, then the ready steps once tunnel.Ready
-//	                 is closed, then SIGTERM to Linkspan, the job being done; beside them each signal's steps as it
-//	                 arrives, so one reaches a running step, and the job's end waits for a signal's steps.
+//	Start            The task main starts, built after Load: the start steps, then the ready steps, then SIGTERM to
+//	                 Linkspan, the job being done; beside them each signal's steps as it arrives, so one reaches a
+//	                 running step, and the job's end waits for a signal's steps.
 //	Load             Reads and validates the document against the commands main enables, so an invalid one is
 //	                 refused at startup, as is one without tasks or with a field it does not know; a step's ref
 //	                 goes to its command as the ref param.
@@ -44,7 +43,6 @@ import (
 	"github.com/cyber-shuttle/linkspan/internal/router"
 	"github.com/cyber-shuttle/linkspan/internal/sessions"
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
-	"github.com/cyber-shuttle/linkspan/internal/tunnel"
 	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
 )
@@ -126,15 +124,11 @@ func Start() func(context.Context) error {
 		defer signal.Stop(ch)
 		setup := make(chan error, 1)
 		go func() {
-			if err := Run(ctx, "start"); err != nil {
-				setup <- err
-				return
+			err := Run(ctx, "start")
+			if err == nil {
+				err = Run(ctx, "ready")
 			}
-			select {
-			case <-ctx.Done():
-			case <-tunnel.Ready():
-				setup <- Run(ctx, "ready")
-			}
+			setup <- err
 		}()
 		for {
 			select {
