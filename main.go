@@ -1,21 +1,25 @@
-// Package main is the entry point. It parses the flags, serves the HTTP API on loopback, and starts the tunnel modes
-// and workflow triggers, all as tasks, so one StopAll ends everything and the first fatal error reaches main.
+// Package main is the entry point. It parses the flags, serves the HTTP API on a loopback port, a unix socket or both,
+// and starts the tunnel modes and workflow triggers, all as tasks, so one StopAll ends everything and the first fatal
+// error reaches main.
 //
 //	version                 Set by the linker; "dev" otherwise.
 //	config                  Which subsystems publish their routes and actions, by name; main passes a literal until
 //	                        a file loader does.
 //	subsystem, subsystems   The one table of what each subsystem offers.
-//	options, registerFlags  Flag spellings are frozen by docs/COMPATIBILITY.md; a test passes its own FlagSet.
+//	options, registerFlags  Flag spellings are frozen by docs/COMPATIBILITY.md; a test passes its own FlagSet. portSet
+//	                        is whether --port was given, since --socket alone drops the default port.
 //	routes                  The tree: /api/v1 with health and metrics, then only enabled subsystems.
 //	commands                The workflow's actions: its own unprefixed, and each enabled subsystem's behind its name.
 //	startAll                Validates every input before binding anything, then starts every task in one pass, the
-//	                        listener first as h-<port>, then metrics, each tunnel mode and the workflow by kind.
+//	                        listeners first as h-<port> and h-<socket path>, then metrics, each tunnel mode and the
+//	                        workflow by kind. devtunnel needs the port, which the tunnel carries.
 //	main                    os.Exit is the first defer, so StopAll runs before it; the workflow's stop steps run
 //	                        first, with the API still up.
 package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -23,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -63,6 +68,8 @@ type options struct {
 	tunnelMode   string
 	tunnelArgs   map[string]string
 	port         int
+	portSet      bool
+	socket       string
 	workflow     string
 }
 
@@ -75,6 +82,7 @@ func registerFlags(fs *flag.FlagSet) *options {
 		fs.Func("tunnel-"+name+"-args", m.Usage, func(v string) error { o.tunnelArgs[name] = v; return nil })
 	}
 	fs.IntVar(&o.port, "port", 8080, "HTTP API port on loopback; 0 picks a free one")
+	fs.StringVar(&o.socket, "socket", "", "HTTP API unix socket `path`, owner-only; alone, it replaces the port")
 	fs.StringVar(&o.workflow, "workflow", "", "workflow YAML file")
 	return &o
 }
@@ -108,6 +116,15 @@ func commands(cfg config) map[string]router.Command {
 }
 
 func startAll(opts *options, cfg config) error {
+	var addrs []string
+	if opts.portSet || opts.socket == "" {
+		addrs = append(addrs, fmt.Sprintf("127.0.0.1:%d", opts.port))
+	} else if strings.Contains(opts.tunnelMode, "devtunnel") {
+		return errors.New("--tunnel-mode=devtunnel needs --port, since the tunnel carries the API port")
+	}
+	if opts.socket != "" {
+		addrs = append(addrs, opts.socket)
+	}
 	tunnels, err := tunnel.Parse(opts.tunnelEnable, opts.tunnelMode, opts.tunnelArgs)
 	if err != nil {
 		return err
@@ -120,11 +137,11 @@ func startAll(opts *options, cfg config) error {
 	h := http.NewServeMux()
 	h.Handle("/", routes(cfg).Handler())
 	h.HandleFunc("GET /api/v1/forward/{port}", forward.Stream)
-	all := []*tasks.Task{
-		{Kind: "http", Addr: fmt.Sprintf("127.0.0.1:%d", opts.port), Server: &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}},
-		{Kind: "metrics", Run: metrics.Poll},
+	var all []*tasks.Task
+	for _, addr := range addrs {
+		all = append(all, &tasks.Task{Kind: "http", Addr: addr, Server: &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}})
 	}
-	all = append(all, tunnels...)
+	all = append(append(all, &tasks.Task{Kind: "metrics", Run: metrics.Poll}), tunnels...)
 	if opts.workflow != "" {
 		all = append(all, &tasks.Task{Kind: "workflow", Run: workflow.Start()})
 	}
@@ -146,6 +163,7 @@ func main() {
 
 	opts := registerFlags(flag.CommandLine)
 	flag.Parse()
+	flag.Visit(func(f *flag.Flag) { opts.portSet = opts.portSet || f.Name == "port" })
 
 	if opts.printVersion {
 		fmt.Println(version)

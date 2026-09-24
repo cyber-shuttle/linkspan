@@ -14,11 +14,13 @@
 //	             fields, computed from the bound task. Pid is the Child's process, or one preset in its stead.
 //	registry     One lock, which also guards each task's state.
 //	Failed       The first fatal error; main exits on it.
+//	listen       An Addr that is not host:port is a unix path: a stale socket there is unlinked, any other file
+//	             fails the bind, and the socket is created with mode 0600.
 //	setState     The one writer of State and Error.
-//	Port
+//	Port         0 for a unix socket.
 //	MarshalJSON  The wire object: id, addr, state and error, pid once a Child has one, then the attrs.
 //	Start        Binds Addr when set; a failed bind is the error and registers nothing. The id defaults to the
-//	             kind's initial with the port, else to the kind; the state to running unless a Spawn set it to
+//	             kind's initial with the port or socket path, else to the kind; the state to running unless a Spawn set it to
 //	             starting; a repeated id cancels and replaces the earlier task. Run goes on its own goroutine; the
 //	             listener closes on cancellation, and a Server after it. A returned error sets failed and is fatal
 //	             unless the task is a Spawn or a Child; a panic is an error; a cancelled Run's error is dropped; a nil
@@ -39,6 +41,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"os"
 	"os/exec"
 	"runtime/debug"
 	"slices"
@@ -87,6 +90,22 @@ var registry = struct {
 
 var Failed = make(chan error, 1)
 
+func listen(addr string) (net.Listener, error) {
+	if _, _, err := net.SplitHostPort(addr); err == nil {
+		return net.Listen("tcp", addr)
+	}
+	if fi, err := os.Lstat(addr); err == nil && fi.Mode()&os.ModeSocket != 0 {
+		_ = os.Remove(addr)
+	}
+	ln, err := net.Listen("unix", addr)
+	if err == nil {
+		if err = os.Chmod(addr, 0o600); err != nil {
+			_ = ln.Close()
+		}
+	}
+	return ln, err
+}
+
 func (t *Task) setState(state State, err error) {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
@@ -128,13 +147,13 @@ func (t *Task) Start() (Task, error) {
 		t.State, t.Run = StateStarting, t.child
 	}
 	if t.Addr != "" {
-		ln, err := net.Listen("tcp", t.Addr)
+		ln, err := listen(t.Addr)
 		if err != nil {
 			return Task{}, fmt.Errorf("tasks: listen: %w", err)
 		}
 		_, port, _ := net.SplitHostPort(ln.Addr().String())
 		t.ln, t.Addr = ln, ln.Addr().String()
-		t.ID = cmp.Or(t.ID, fmt.Sprintf("%c-%s", t.Kind[0], port))
+		t.ID = cmp.Or(t.ID, fmt.Sprintf("%c-%s", t.Kind[0], cmp.Or(port, t.Addr)))
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.ID, t.State, t.cancel, t.done = cmp.Or(t.ID, string(t.Kind)), cmp.Or(t.State, StateRunning), cancel, make(chan struct{})

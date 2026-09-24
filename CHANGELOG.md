@@ -5,6 +5,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `--socket` returns: the API can listen on a TCP port, a unix socket, or both.
+
 ## [0.21.0] - 2026-09-24
 
 ### Changed
