@@ -37,6 +37,7 @@ linkspan
 │   ├── metrics/               # cgroup v2 + nvidia-smi job metrics
 │   ├── sshd/                  # SSH server (gliderlabs/ssh)
 │   ├── tunnel/                # hosting the delegated Dev Tunnel
+│   ├── link/                  # the WebSocket link to cs-plane
 │   ├── forward/               # /api/v1/forward/{port}
 │   └── install/               # ~/.cybershuttle: fetched binaries, uv, Python, the Jupyter environment
 └── subsystems/

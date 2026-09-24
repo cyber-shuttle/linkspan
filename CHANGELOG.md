@@ -5,9 +5,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `--link-url`, with its token in `LINKSPAN_LINK_TOKEN`: one outbound WebSocket to cs-plane carrying the job's
+  servers as yamux streams, so a job needs no inbound port or Dev Tunnel.
+
 ### Changed
 
 - The workflow's `ready` trigger runs once the `start` run is complete, no longer waiting on the tunnel relay.
+- `/api/v1/forward/{port}` answers `404`, not `502`, when the server refuses the connection.
 - `POST /api/v1/vscode/sessions` with a `ref` already serving answers `200` with that server instead of replacing it.
 
 ### Removed
