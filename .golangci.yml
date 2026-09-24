@@ -42,7 +42,7 @@ linters:
         linters: [gosec]
         text: "G704"
       # Runs the fetched devtunnel binary (G204).
-      - path: internal/tunnel/tunnel\.go
+      - path: internal/tunnel/devtunnel/devtunnel\.go
         linters: [gosec]
         text: "G204"
       # Run the uv, python and ttyd binaries they installed, and $SHELL on a PTY (G204, G702).

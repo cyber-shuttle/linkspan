@@ -22,8 +22,9 @@ A useful report shows one of these boundaries failing.
   as a WebSocket subprotocol, in clear over `ws`. cs-plane, like any caller of `/api/v1/forward/{port}`, may open a
   stream to any loopback port a running task serves, the API's included, and nothing else on the node.
 - **The tunnel is client-owned.** The client creates it and mints the host-scoped token. Linkspan passes the token
-  to `devtunnel host` as a command-line argument, the only form the CLI documents, so the process list shows it to
-  every user on the node. Linkspan only hosts it: it publishes no port and never creates, refreshes or deletes a
+  from `LINKSPAN_TUNNEL_HOST_TOKEN`, keeping it off Linkspan's process list entry, but passes it to `devtunnel host`
+  as a command-line argument, the only form the CLI documents, so the relay's entry shows it to every user on the
+  node. Linkspan only hosts it: it publishes no port and never creates, refreshes or deletes a
   tunnel. The client declares the API port, and every server is reached through `/api/v1/forward` behind it. The
   tunnel terminates at Microsoft's Dev Tunnels service, so HTTP traffic is not end-to-end encrypted; SSH carries its
   own encryption.

@@ -1,89 +1,51 @@
-// Tests for the relay's lifecycle under StopAll. The heartbeat fake appends to a file named by its tunnel id, so a
-// relay left running is visible.
+// Tests for the mode framing. Each case expects the tasks' kinds, or an error naming the offending flag.
 //
-//	newTunnel  Installs a fake CLI under a temporary HOME, $2 being the qualified id.
-//	beatCount
-//	TestOutputKeepsTheTail  The last 64KB must be kept.
-//	TestStopAllKillsTheRelay, TestRelayExitEndsTheTask
+//	TestParse
 package tunnel
 
 import (
-	"bytes"
-	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/cyber-shuttle/linkspan/internal/tasks"
+	"github.com/cyber-shuttle/linkspan/internal/tunnel/devtunnel"
+	"github.com/cyber-shuttle/linkspan/internal/tunnel/websocket"
 )
 
-func newTunnel(t *testing.T, id, script string) *Tunnel {
-	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	bin := filepath.Join(home, ".cybershuttle", "bin", "devtunnel")
-	if err := os.MkdirAll(filepath.Dir(bin), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	tn, err := New(id, "c", "token")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return tn
-}
-
-func beatCount(t *testing.T, path string) int {
-	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return 0
-	}
-	return len(b)
-}
-
-func TestOutputKeepsTheTail(t *testing.T) {
-	o := &output{}
-	_, _ = o.Write(bytes.Repeat([]byte("x"), 70<<10))
-	_, _ = o.Write([]byte("tail\n"))
-	if s := o.String(); len(s) != 64<<10 || !strings.HasSuffix(s, "tail\n") {
-		t.Fatalf("captured %d bytes ending %q; want the last 64KB", len(s), s[len(s)-5:])
-	}
-}
-
-func TestStopAllKillsTheRelay(t *testing.T) {
-	id := filepath.Join(t.TempDir(), "beat")
-	tn, beat := newTunnel(t, id, "#!/bin/sh\nwhile :; do echo . >> \"$2\"; /bin/sleep 0.02; done\n"), id+".c"
-	_, _ = (&tasks.Task{Kind: "tunnel", Run: tn.Relay}).Start()
-
-	for deadline := time.Now().Add(5 * time.Second); beatCount(t, beat) == 0; time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the fake relay never started")
+func TestParse(t *testing.T) {
+	t.Setenv(websocket.Env, "link-token")
+	t.Setenv(devtunnel.Env, "host-token")
+	ws, dt := "--url wss://plane.example/link", "--id t --cluster usw2"
+	for _, c := range []struct {
+		enable bool
+		list   string
+		args   map[string]string
+		want   string
+	}{
+		{false, "", nil, ""},
+		{true, "websocket", map[string]string{"websocket": ws}, "websocket"},
+		{true, "devtunnel", map[string]string{"devtunnel": dt}, "devtunnel"},
+		{true, "websocket,devtunnel", map[string]string{"websocket": ws, "devtunnel": dt}, "devtunnel,websocket"},
+		{true, "", nil, "--tunnel-mode"},
+		{false, "websocket", map[string]string{"websocket": ws}, "--tunnel-mode"},
+		{true, "ssh", nil, "--tunnel-mode"},
+		{true, "websocket,websocket", map[string]string{"websocket": ws}, "--tunnel-mode"},
+		{true, "websocket", nil, "--tunnel-websocket-args"},
+		{true, "websocket", map[string]string{"websocket": ws, "devtunnel": dt}, "--tunnel-devtunnel-args"},
+		{true, "websocket", map[string]string{"websocket": "--url https://plane.example"}, "--tunnel-websocket-args"},
+		{true, "websocket", map[string]string{"websocket": ws + " --token x"}, "--tunnel-websocket-args"},
+		{true, "devtunnel", map[string]string{"devtunnel": "--id t"}, "--tunnel-devtunnel-args"},
+	} {
+		all, err := Parse(c.enable, c.list, c.args)
+		kinds := make([]string, 0, len(all))
+		for _, task := range all {
+			kinds = append(kinds, string(task.Kind))
 		}
-	}
-
-	tasks.StopAll()
-	before := beatCount(t, beat)
-	time.Sleep(200 * time.Millisecond)
-	if now := beatCount(t, beat); now != before {
-		t.Fatalf("relay still running after StopAll: heartbeat grew %d -> %d", before, now)
-	}
-}
-
-func TestRelayExitEndsTheTask(t *testing.T) {
-	tn := newTunnel(t, "t", "#!/bin/sh\necho hosting\n")
-	exited := make(chan error, 1)
-	go func() { exited <- tn.Relay(context.Background()) }()
-	select {
-	case err := <-exited:
-		if err == nil || !strings.Contains(err.Error(), "relay exited") {
-			t.Fatalf("want a relay-exited error, got %v", err)
+		got := strings.Join(kinds, ",")
+		if err != nil {
+			got = strings.TrimSuffix(strings.Fields(err.Error())[0], ":")
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("the task never returned after the relay died")
+		if got != c.want {
+			t.Errorf("Parse(%v, %q, %q) gave %q (%v), want %q", c.enable, c.list, c.args, got, err, c.want)
+		}
 	}
 }

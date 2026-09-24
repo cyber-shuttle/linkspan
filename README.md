@@ -41,7 +41,7 @@ Archives exist for `Linux` and `Darwin` on `x86_64` and `arm64`. To build from s
 | Everything | A writable home directory; Linkspan fetches and builds only under `~/.cybershuttle/` |
 | Metrics | Linux, cgroup v2 as Slurm lays it out; macOS builds report none |
 | GPU metrics | `nvidia-smi` on `PATH`; otherwise `gpus` is omitted |
-| `--tunnel-enable` | HTTPS to `tunnelsassetsprod.blob.core.windows.net`, `devtunnels.ms` and `rel.tunnels.api.visualstudio.com` |
+| `--tunnel-mode=devtunnel` | HTTPS to `tunnelsassetsprod.blob.core.windows.net`, `devtunnels.ms` and `rel.tunnels.api.visualstudio.com` |
 | Jupyter | `curl` on `PATH`; HTTPS to `astral.sh`, `github.com`, `release-assets.githubusercontent.com` and `pypi.org` |
 | Terminals | Linux; HTTPS to `github.com` and `release-assets.githubusercontent.com` |
 | Pause/Resume | `criu` on `PATH`, allowed to run unprivileged |
@@ -64,10 +64,12 @@ Each reply names a loopback port: the Jupyter server's `addr`, with its `token`,
 The first Jupyter server builds the Python environment, which takes a few minutes. `/api/v1/forward/<port>` carries
 a WebSocket to either through the one API port, so whoever reaches that port reaches every server.
 
-To reach the job from off the node, add `--link-url <url>` with `LINKSPAN_LINK_TOKEN=<token>`, both issued by
-cs-plane. Without cs-plane, host a Dev Tunnel instead: create it with `devtunnel create`, declare only the API port with
-`devtunnel port create <id> -p 8080`, mint a token with `devtunnel token <id> --scopes host`, and add
-`--tunnel-enable --tunnel-id <id> --tunnel-cluster <cluster> --tunnel-host-token <token>`. Clients reach every server
+To reach the job from off the node, add `--tunnel-enable --tunnel-mode=websocket --tunnel-websocket-args="--url <url>"`
+with `LINKSPAN_LINK_TOKEN=<token>`, both issued by cs-plane. Without cs-plane, host a Dev Tunnel instead: create it
+with `devtunnel create`, declare only the API port with `devtunnel port create <id> -p 8080`, mint a token with
+`devtunnel token <id> --scopes host`, and add
+`--tunnel-enable --tunnel-mode=devtunnel --tunnel-devtunnel-args="--id <id> --cluster <cluster>"` with
+`LINKSPAN_TUNNEL_HOST_TOKEN=<token>`. `--tunnel-mode=websocket,devtunnel` runs both. Clients reach every server
 through `/api/v1/forward` on that port.
 
 Every server stops when Linkspan stops, so a job running Linkspan as its main process ends its workspace at the
@@ -81,11 +83,12 @@ cs-plane exports `LINKSPAN_LINK_TOKEN`, `CS_LINK_URL` and `CS_CONTROL_PORT` and 
 
 ```bash
 #!/bin/bash
-exec linkspan --port "$CS_CONTROL_PORT" --link-url "$CS_LINK_URL" --workflow workflow.yaml
+exec linkspan --port "$CS_CONTROL_PORT" --workflow workflow.yaml \
+  --tunnel-enable --tunnel-mode=websocket --tunnel-websocket-args="--url $CS_LINK_URL"
 ```
 
-With `--tunnel-enable`, Linkspan fetches the `devtunnel` CLI on first use and exits non-zero if the relay exits. Add
-`#SBATCH --signal=B:USR1@120` to get `SIGUSR1` two minutes before the limit.
+With the `devtunnel` mode, Linkspan fetches the `devtunnel` CLI on first use and exits non-zero if the relay exits.
+Add `#SBATCH --signal=B:USR1@120` to get `SIGUSR1` two minutes before the limit.
 
 ### Workflows
 
@@ -158,16 +161,16 @@ or field, or an action of a disabled subsystem, is refused before anything start
 |---|---|---|
 | `--port` | `8080` | HTTP API port on loopback; `0` picks a free one |
 | `--workflow` | | Workflow YAML file |
-| `--link-url` | | `ws` or `wss` URL of cs-plane to link to; requires `LINKSPAN_LINK_TOKEN` |
-| `--tunnel-enable` | `false` | Host the tunnel named by `--tunnel-id` |
-| `--tunnel-id` | | Id of the client-created tunnel; required with `--tunnel-enable` |
-| `--tunnel-cluster` | | Cluster id of `--tunnel-id`; required with `--tunnel-enable` |
-| `--tunnel-host-token` | | Host-scoped access token; required with `--tunnel-enable` |
+| `--tunnel-enable` | `false` | Carry the API off the node in the modes of `--tunnel-mode` |
+| `--tunnel-mode` | | Comma-separated modes, `websocket` and/or `devtunnel`; required with `--tunnel-enable` |
+| `--tunnel-websocket-args` | | `"--url <ws or wss URL>"` of cs-plane; required with the `websocket` mode, refused without it |
+| `--tunnel-devtunnel-args` | | `"--id <tunnel id> --cluster <cluster id>"` of the client-created tunnel; required with the `devtunnel` mode, refused without it |
 | `--version` | | Print the version and exit |
 
 | Environment | Read by |
 |---|---|
-| `LINKSPAN_LINK_TOKEN` | `--link-url`, as the link's credential |
+| `LINKSPAN_LINK_TOKEN` | The `websocket` mode, as the link's credential |
+| `LINKSPAN_TUNNEL_HOST_TOKEN` | The `devtunnel` mode, as the host-scoped access token |
 | `JUPYTER_TOKEN` | `jupyter.sessions.start`, as the default token |
 
 Each subsystem can be switched off in `main.go`'s `config`; all ship on. An off subsystem has no routes, answering

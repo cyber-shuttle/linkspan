@@ -36,8 +36,9 @@ linkspan
 │   ├── sessions/              # what the session subsystems share, and a process session's life
 │   ├── metrics/               # cgroup v2 + nvidia-smi job metrics
 │   ├── sshd/                  # SSH server (gliderlabs/ssh)
-│   ├── tunnel/                # hosting the delegated Dev Tunnel
-│   ├── link/                  # the WebSocket link to cs-plane
+│   ├── tunnel/                # --tunnel-mode: validates the list and dispatches each mode by name
+│   │   ├── websocket/         # the WebSocket link to cs-plane
+│   │   └── devtunnel/         # hosting the delegated Dev Tunnel
 │   ├── forward/               # /api/v1/forward/{port}
 │   └── install/               # ~/.cybershuttle: fetched binaries, uv, Python, the Jupyter environment
 └── subsystems/
@@ -58,6 +59,7 @@ under `/api/v1` and is the only file that reads flags.
 |---|---|
 | A subsystem | One package exporting both tables, and one line in `main.go`'s `subsystems` map |
 | An action | One function, and one entry in each table |
+| A tunnel mode | One package under `internal/tunnel/` exporting `Usage` and `New(args)`, and one line in `tunnel.Modes` |
 | A subsystem to the diagram | `docs/assets/architecture.mmd`, then `mmdc -i docs/assets/architecture.mmd -o docs/assets/architecture.png -b white -s 2 -w 1600` |
 
 ## File Layout

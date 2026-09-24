@@ -1,9 +1,9 @@
-// Tests for the link against a fake cs-plane that multiplexes streams over the one socket Linkspan holds.
+// Tests for the websocket mode against a fake cs-plane that multiplexes streams over the one socket Linkspan holds.
 //
 //	TestLinkMultiplexesStreamsOverOneSocket  The token rides the subprotocol; a port no task serves is refused, a
 //	                                         served one carries an HTTP exchange, closing the stream closes the
 //	                                         server's connection, and every stream shares the one socket.
-package link
+package websocket
 
 import (
 	"context"
@@ -50,13 +50,14 @@ func TestLinkMultiplexesStreamsOverOneSocket(t *testing.T) {
 	}))
 	defer plane.Close()
 
-	ln, err := New("ws"+strings.TrimPrefix(plane.URL, "http"), "secret")
+	t.Setenv(Env, "secret")
+	run, err := New("--url ws" + strings.TrimPrefix(plane.URL, "http"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _ = ln.Run(ctx) }()
+	go func() { _ = run(ctx) }()
 	session := <-sessions
 	open := func(port int) (net.Conn, byte) {
 		stream, err := session.Open()
