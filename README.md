@@ -146,8 +146,8 @@ tasks:
 ```
 
 A step's `ref`, or a request's `"ref"`, is the id of the session it creates; without one Linkspan assigns it. A
-repeated ref replaces the earlier session. An unknown trigger or field, or an action of a disabled subsystem, is
-refused before anything starts.
+repeated ref replaces the earlier session, except a serving VS Code one (see **VS Code** below). An unknown trigger
+or field, or an action of a disabled subsystem, is refused before anything starts.
 
 | Example | Shows |
 |---|---|
@@ -196,7 +196,7 @@ answers errors as `{"error": "<message>"}`: `400` for an unparsable body, `413` 
 | GET | `/api/v1/metrics` | `{"memBytes":<n>,"cpuUsageUsec":<n>,"gpus":[{"index":<n>,"utilPct":<n>,"memUsedMiB":<n>,"memTotalMiB":<n>}]}`, the latest sample, taken every 5s; an unreadable source omits its field |
 | POST | `/api/v1/workflow/shell/exec` | Takes `{"command","ref"}`, `400` without `command`; `200` with the process session once it exits 0, `202` once a pause ended it, `500` otherwise |
 | GET | `/api/v1/vscode/sessions` | `[{"id":"s-<port>","addr":"127.0.0.1:<port>","state":"<state>","error":""}]` |
-| POST | `/api/v1/vscode/sessions` | Takes `{"authorized_key","ref"}`; `201` with `{"id":"s-<port>","bind_port":<port>}` |
+| POST | `/api/v1/vscode/sessions` | Takes `{"authorized_key","ref"}`; `201` with `{"id":"s-<port>","bind_port":<port>}`, or `200` with the same shape when `ref` is already serving |
 | GET | `/api/v1/jupyter/sessions` | `[{"id":"j-<port>","addr":"127.0.0.1:<port>","state":"<state>","error":"","root_dir":"<dir>","token":"<token>"}]` |
 | POST | `/api/v1/jupyter/sessions` | Takes `{"root_dir","addr","token","ref"}`; `201` with one session object |
 | DELETE | `/api/v1/jupyter/sessions/{id}` | `{"id":"<id>","state":"stopped"}`; `404` for an unknown id |
@@ -211,7 +211,8 @@ answers errors as `{"error": "<message>"}`: `400` for an unparsable body, `413` 
 Lists are ordered by id and `[]` when empty. An empty `root_dir` or `cwd` is Linkspan's working directory.
 
 **VS Code.** One SSH server per key, on loopback, accepting only that key and running commands through `sh`. A key
-with `authorized_keys` options is refused with `400`. The port accepts before the reply.
+with `authorized_keys` options is refused with `400`. The port accepts before the reply. A `ref` already serving is
+answered as is, whatever key the request names.
 
 **Jupyter and terminals.** A server starts `starting`, becomes `running` once its port accepts, and ends `exited` on
 status 0 or `failed` with `error` otherwise; a missing folder fails the server, not the request. It binds loopback

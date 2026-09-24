@@ -5,7 +5,8 @@
 //
 //	kind            The SSH kind, so ids are s-<port>.
 //	startSession    Serves one sshd server for params.authorized_key under tasks; the port accepts before it
-//	                answers. A key carrying authorized_keys options is refused, since the server would ignore them.
+//	                answers. A key carrying authorized_keys options is refused, since the server would ignore them. A
+//	                ref already serving is answered 200 as it is, so a client that names its key reuses one server.
 //	Commands        sessions.select, from sessions, and sessions.start; shapes are frozen by docs/COMPATIBILITY.md.
 //	Router          /vscode/sessions, each route a Commands entry.
 package vscode
@@ -33,7 +34,13 @@ func startSession(_ context.Context, params map[string]any) (int, any, string) {
 	if len(options) > 0 {
 		return http.StatusBadRequest, nil, "authorized_key options are not supported"
 	}
-	created, err := (&tasks.Task{ID: sessions.Ref(params), Kind: kind, Server: sshd.New(key)}).Start()
+	ref := sessions.Ref(params)
+	for _, running := range tasks.Select(kind) {
+		if running.ID == ref && running.State == tasks.StateRunning {
+			return http.StatusOK, map[string]any{"id": running.ID, "bind_port": running.Port()}, ""
+		}
+	}
+	created, err := (&tasks.Task{ID: ref, Kind: kind, Server: sshd.New(key)}).Start()
 	if err != nil {
 		return http.StatusInternalServerError, nil, err.Error()
 	}
