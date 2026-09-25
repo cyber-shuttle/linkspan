@@ -4,7 +4,7 @@
 //	newTunnel  Installs a fake CLI under a temporary HOME, $2 being the qualified id.
 //	beatCount
 //	TestOutputKeepsTheTail  The last 64KB must be kept.
-//	TestStopAllKillsTheRelay, TestRelayExitEndsTheTask
+//	TestStopAllKillsTheRelay, TestRelayExitReturnsItsOutput
 package devtunnel
 
 import (
@@ -70,7 +70,7 @@ func TestStopAllKillsTheRelay(t *testing.T) {
 	}
 }
 
-func TestRelayExitEndsTheTask(t *testing.T) {
+func TestRelayExitReturnsItsOutput(t *testing.T) {
 	tn := newTunnel(t, "t", "#!/bin/sh\necho hosting\n")
 	exited := make(chan error, 1)
 	go func() { exited <- tn.Relay(context.Background()) }()

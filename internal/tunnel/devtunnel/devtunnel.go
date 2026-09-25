@@ -1,6 +1,6 @@
 // Package devtunnel hosts the Dev Tunnel a client created, by running the devtunnel CLI, the relay, as a task. The
 // client declares the control port on the tunnel, so the relay carries only the API and every server is reached
-// through /api/v1/forward. A relay that dies ends the task and is not restarted. The host token is read from
+// through /api/v1/forward. A relay that dies returns its output, and the tunnel package reruns it. The host token is read from
 // LINKSPAN_TUNNEL_HOST_TOKEN so it never shows on Linkspan's command line.
 //
 //	output  The last 64KB of the relay's stdout and stderr.

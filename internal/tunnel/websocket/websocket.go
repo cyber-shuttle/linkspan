@@ -1,5 +1,5 @@
 // Package websocket carries Linkspan's servers to cs-plane with no inbound port and no Dev Tunnel. Linkspan dials one
-// WebSocket out to its --url and holds it, redialing with backoff, and yamux multiplexes every stream over it with its
+// WebSocket out to its --url and holds it until it ends, and yamux multiplexes every stream over it with its
 // own keepalive. For each stream cs-plane opens, Linkspan reads a two-byte port, answers one byte, 1 carried or 0
 // refused, and joins the stream to that port through forward.Dial, so only a port a running task serves is reached;
 // closing either end closes both. The socket offers cybershuttle.v1 and link.<token>, the token read from
@@ -7,8 +7,7 @@
 //
 //	Link
 //	carry
-//	serve  One socket as yamux's transport, accepting streams until it ends; true once it connected.
-//	Run    The task main starts; returns once its context is done.
+//	Run    One socket as yamux's transport, accepting streams until it or its context ends.
 //	New    Parses the args value and validates the URL and token, so main refuses them before binding.
 package websocket
 
@@ -18,7 +17,6 @@ import (
 	"errors"
 	"flag"
 	"io"
-	"log"
 	"net"
 	"net/url"
 	"os"
@@ -57,14 +55,13 @@ func carry(stream net.Conn) {
 	_, _ = io.Copy(stream, server)
 }
 
-func (l *Link) serve(ctx context.Context) bool {
+func (l *Link) Run(ctx context.Context) error {
 	ws, response, err := l.dialer.DialContext(ctx, l.url, nil)
 	if response != nil {
 		_ = response.Body.Close()
 	}
 	if err != nil {
-		log.Printf("link: %v", err)
-		return false
+		return err
 	}
 	local, remote := net.Pipe()
 	go forward.Pipe(ws, remote)
@@ -73,24 +70,10 @@ func (l *Link) serve(ctx context.Context) bool {
 	for {
 		stream, err := session.AcceptStreamWithContext(ctx)
 		if err != nil {
-			log.Printf("link: %v", err)
-			return true
+			return err
 		}
 		go carry(stream)
 	}
-}
-
-func (l *Link) Run(ctx context.Context) error {
-	for backoff := time.Second; ctx.Err() == nil; backoff = min(2*backoff, time.Minute) {
-		if l.serve(ctx) {
-			backoff = time.Second
-		}
-		select {
-		case <-ctx.Done():
-		case <-time.After(backoff):
-		}
-	}
-	return nil
 }
 
 func New(args string) (func(context.Context) error, error) {
