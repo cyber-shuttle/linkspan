@@ -4,6 +4,8 @@
 //
 //	Mode
 //	Modes   Each mode by name; main registers --tunnel-<name>-args with its Usage.
+//	redial  Reruns a mode's attempt until cancelled, backing off from 1s to 1m, reset once an attempt lasts a minute,
+//	        so one mode failing never ends Linkspan or another mode.
 //	Parse   One task per listed mode, kinded by its name; a listed mode without args, or args of an unlisted one, is
 //	        refused.
 package tunnel
@@ -12,9 +14,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
 	"github.com/cyber-shuttle/linkspan/internal/tunnel/devtunnel"
@@ -29,6 +33,25 @@ type Mode struct {
 var Modes = map[string]Mode{
 	"websocket": {websocket.Usage, websocket.New},
 	"devtunnel": {devtunnel.Usage, devtunnel.New},
+}
+
+func redial(name string, attempt func(context.Context) error) func(context.Context) error {
+	return func(ctx context.Context) error {
+		for backoff := time.Second; ctx.Err() == nil; backoff = min(2*backoff, time.Minute) {
+			started := time.Now()
+			if err := attempt(ctx); err != nil && ctx.Err() == nil {
+				log.Printf("%s: %v", name, err)
+			}
+			if time.Since(started) > time.Minute {
+				backoff = time.Second
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(backoff):
+			}
+		}
+		return nil
+	}
 }
 
 func Parse(enable bool, list string, args map[string]string) ([]*tasks.Task, error) {
@@ -54,7 +77,7 @@ func Parse(enable bool, list string, args map[string]string) ([]*tasks.Task, err
 		if err != nil {
 			return nil, err
 		}
-		all = append(all, &tasks.Task{Kind: tasks.Kind(name), Run: run})
+		all = append(all, &tasks.Task{Kind: tasks.Kind(name), Run: redial(name, run)})
 	}
 	return all, nil
 }

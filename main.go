@@ -12,14 +12,13 @@
 //	commands                The workflow's actions: its own unprefixed, and each enabled subsystem's behind its name.
 //	startAll                Validates every input before binding anything, then starts every task in one pass, the
 //	                        listeners first as h-<port> and h-<socket path>, then metrics, each tunnel mode and the
-//	                        workflow by kind. devtunnel needs the port, which the tunnel carries.
+//	                        workflow by kind.
 //	main                    os.Exit is the first defer, so StopAll runs before it; the workflow's stop steps run
 //	                        first, with the API still up.
 package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -27,7 +26,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -119,8 +117,6 @@ func startAll(opts *options, cfg config) error {
 	var addrs []string
 	if opts.portSet || opts.socket == "" {
 		addrs = append(addrs, fmt.Sprintf("127.0.0.1:%d", opts.port))
-	} else if strings.Contains(opts.tunnelMode, "devtunnel") {
-		return errors.New("--tunnel-mode=devtunnel needs --port, since the tunnel carries the API port")
 	}
 	if opts.socket != "" {
 		addrs = append(addrs, opts.socket)

@@ -6,7 +6,7 @@
 //	TestRoutesCoverCommands      Every command a subsystem exports is behind one of its routes.
 //	TestVersionIsOneLine, TestArchiveName
 //	TestExampleWorkflowLoads     examples/workflow.yml must name only commands the subsystems export.
-//	TestSocketAlone, TestDevtunnelNeedsThePort
+//	TestSocketAlone
 //	TestBindsLoopbackAndUnwinds  Sends SIGTERM once both listeners answer, and reads stderr to its end before Wait.
 package main
 
@@ -220,17 +220,6 @@ func TestSocketAlone(t *testing.T) {
 	}
 	if code := unixGet(t, sock, "/api/v1/health"); code != http.StatusOK {
 		t.Fatalf("health over the socket answered %d", code)
-	}
-}
-
-func TestDevtunnelNeedsThePort(t *testing.T) {
-	sock := socketPath(t)
-	err := startAll(&options{socket: sock, tunnelEnable: true, tunnelMode: "websocket,devtunnel"}, config{})
-	if err == nil || !strings.Contains(err.Error(), "--port") {
-		t.Fatalf("devtunnel with --socket alone answered %v, want a refusal naming --port", err)
-	}
-	if _, err := os.Stat(sock); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the refusal came after binding the socket: %v", err)
 	}
 }
 

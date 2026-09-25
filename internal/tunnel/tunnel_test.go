@@ -1,11 +1,15 @@
 // Tests for the mode framing. Each case expects the tasks' kinds, or an error naming the offending flag.
 //
 //	TestParse
+//	TestRedialRerunsAFailedMode  A failing attempt is rerun, not fatal, and cancellation ends the loop cleanly.
 package tunnel
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cyber-shuttle/linkspan/internal/tunnel/devtunnel"
 	"github.com/cyber-shuttle/linkspan/internal/tunnel/websocket"
@@ -47,5 +51,25 @@ func TestParse(t *testing.T) {
 		if got != c.want {
 			t.Errorf("Parse(%v, %q, %q) gave %q (%v), want %q", c.enable, c.list, c.args, got, err, c.want)
 		}
+	}
+}
+
+func TestRedialRerunsAFailedMode(t *testing.T) {
+	attempts := make(chan struct{}, 8)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- redial("test", func(context.Context) error { attempts <- struct{}{}; return errors.New("relay exited") })(ctx)
+	}()
+	for range 2 {
+		select {
+		case <-attempts:
+		case <-time.After(5 * time.Second):
+			t.Fatal("a failed attempt was not rerun")
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("a cancelled redial returned %v", err)
 	}
 }

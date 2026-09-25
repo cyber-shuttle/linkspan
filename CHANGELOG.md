@@ -9,6 +9,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 - `--socket` returns: the API can listen on a TCP port, a unix socket, or both.
 
+### Changed
+
+- `--port` and `--socket` configure only the API; `--tunnel-mode=devtunnel` no longer requires `--port`.
+- A tunnel mode that fails is redialed with backoff, like the websocket link, instead of ending Linkspan, so one
+  mode failing never takes down another.
+
 ## [0.21.0] - 2026-09-24
 
 ### Changed
