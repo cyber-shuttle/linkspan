@@ -2,7 +2,7 @@
 //
 //	binary                       Built once per run.
 //	socketPath, unixGet          The directory avoids t.TempDir because macOS caps socket paths at 104 characters.
-//	TestFlagSurface, TestRoutesFollowConfig
+//	TestFlagSurface, TestRoutes
 //	TestRoutesCoverCommands      Every command a subsystem exports is behind one of its routes.
 //	TestVersionIsOneLine, TestArchiveName
 //	TestExampleWorkflowLoads     examples/workflow.yml must name only commands the subsystems export.
@@ -94,38 +94,29 @@ func TestFlagSurface(t *testing.T) {
 	}
 }
 
-func TestRoutesFollowConfig(t *testing.T) {
-	get := func(cfg config, path string) *httptest.ResponseRecorder {
+func TestRoutes(t *testing.T) {
+	serve := func(method, path string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		routes(cfg).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		routes().Handler().ServeHTTP(rec, httptest.NewRequest(method, path, nil))
 		return rec
 	}
-	if rec := get(config{}, "/api/v1/health"); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"status":"ok"}` {
+	if rec := serve(http.MethodGet, "/api/v1/health"); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"status":"ok"}` {
 		t.Fatalf("health answered %d %s, want the documented literal", rec.Code, rec.Body)
 	}
 	var snap map[string]any
-	if rec := get(config{}, "/api/v1/metrics"); rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &snap) != nil {
+	if rec := serve(http.MethodGet, "/api/v1/metrics"); rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &snap) != nil {
 		t.Fatalf("metrics answered %d %s, want an object", rec.Code, rec.Body)
 	}
-	all := config{"workflow": true, "vscode": true, "jupyter": true, "terminal": true, "filesystem": true, "checkpoint": true}
 	for _, path := range []string{"/api/v1/vscode/sessions", "/api/v1/jupyter/sessions", "/api/v1/terminal/sessions"} {
-		if rec := get(all, path); rec.Code != http.StatusOK {
-			t.Errorf("%s answered %d with its subsystem enabled, want 200", path, rec.Code)
-		}
-		if rec := get(config{}, path); rec.Code != http.StatusNotFound {
-			t.Errorf("%s answered %d with its subsystem disabled, want 404", path, rec.Code)
+		if rec := serve(http.MethodGet, path); rec.Code != http.StatusOK {
+			t.Errorf("%s answered %d, want 200", path, rec.Code)
 		}
 	}
-	post := func(cfg config, path string) int {
-		rec := httptest.NewRecorder()
-		routes(cfg).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, nil))
-		return rec.Code
+	if code := serve(http.MethodPost, "/api/v1/filesystem/mount").Code; code != http.StatusBadRequest {
+		t.Errorf("a filesystem route answered %d without its params, want 400", code)
 	}
-	if post(all, "/api/v1/filesystem/mount") != http.StatusBadRequest || post(config{}, "/api/v1/filesystem/mount") != http.StatusNotFound {
-		t.Error("a filesystem route must want its params when enabled and answer 404 when disabled")
-	}
-	if post(all, "/api/v1/workflow/shell/exec") != http.StatusBadRequest || post(config{}, "/api/v1/workflow/shell/exec") != http.StatusNotFound {
-		t.Error("the workflow route must refuse an empty command when enabled and answer 404 when disabled")
+	if code := serve(http.MethodPost, "/api/v1/workflow/shell/exec").Code; code != http.StatusBadRequest {
+		t.Errorf("the workflow route answered %d to an empty command, want 400", code)
 	}
 }
 
@@ -201,9 +192,8 @@ func TestArchiveName(t *testing.T) {
 }
 
 func TestExampleWorkflowLoads(t *testing.T) {
-	all := config{"vscode": true, "jupyter": true, "terminal": true, "filesystem": true, "checkpoint": true}
 	for _, example := range []string{"examples/workflow.yml", "examples/checkpoint.yml", "examples/restore.yml"} {
-		if err := workflow.Load(example, commands(all)); err != nil {
+		if err := workflow.Load(example, commands()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -212,7 +202,7 @@ func TestExampleWorkflowLoads(t *testing.T) {
 func TestSocketAlone(t *testing.T) {
 	sock := socketPath(t)
 	t.Cleanup(tasks.StopAll)
-	if err := startAll(&options{port: 8080, socket: sock}, config{}); err != nil {
+	if err := startAll(&options{port: 8080, socket: sock}); err != nil {
 		t.Fatal(err)
 	}
 	if bound := tasks.Select("http"); len(bound) != 1 || bound[0].Addr != sock {

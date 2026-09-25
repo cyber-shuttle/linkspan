@@ -15,6 +15,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 - A tunnel mode that fails is redialed with backoff, like the websocket link, instead of ending Linkspan, so one
   mode failing never takes down another.
 
+### Removed
+
+- The unused per-subsystem switch in `main.go`; every subsystem is always on.
+
 ## [0.21.0] - 2026-09-24
 
 ### Changed
