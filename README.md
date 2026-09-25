@@ -180,9 +180,6 @@ carries the port, so it refuses `--socket` without `--port`.
 | `LINKSPAN_TUNNEL_HOST_TOKEN` | The `devtunnel` mode, as the host-scoped access token |
 | `JUPYTER_TOKEN` | `jupyter.sessions.start`, as the default token |
 
-Each subsystem can be switched off in `main.go`'s `config`; all ship on. An off subsystem has no routes, answering
-`404`, and no workflow actions.
-
 | Subsystem | Offers |
 |---|---|
 | `workflow` | `POST /workflow/shell/exec`; the `shell.exec` action stays available regardless |

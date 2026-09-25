@@ -3,8 +3,6 @@
 // error reaches main.
 //
 //	version                 Set by the linker; "dev" otherwise.
-//	config                  Which subsystems publish their routes and actions, by name; main passes a literal until
-//	                        a file loader does.
 //	subsystem, subsystems   The one table of what each subsystem offers.
 //	options, registerFlags  Flag spellings are frozen by docs/COMPATIBILITY.md; a test passes its own FlagSet. portSet
 //	                        is whether --port was given, since --socket alone drops the default port.
@@ -43,8 +41,6 @@ import (
 )
 
 var version = "dev"
-
-type config map[string]bool
 
 type subsystem struct {
 	router   *router.Router
@@ -85,27 +81,22 @@ func registerFlags(fs *flag.FlagSet) *options {
 	return &o
 }
 
-func routes(cfg config) *router.Router {
+func routes() *router.Router {
 	root := router.New("/api/v1", map[string]router.Command{
 		"GET /health": func(context.Context, map[string]any) (int, any, string) {
 			return http.StatusOK, map[string]string{"status": "ok"}, ""
 		},
 		"GET /metrics": func(context.Context, map[string]any) (int, any, string) { return http.StatusOK, metrics.Latest(), "" },
 	})
-	for name, sub := range subsystems {
-		if cfg[name] {
-			root.Mount(sub.router)
-		}
+	for _, sub := range subsystems {
+		root.Mount(sub.router)
 	}
 	return root
 }
 
-func commands(cfg config) map[string]router.Command {
+func commands() map[string]router.Command {
 	out := maps.Clone(workflow.Commands)
 	for name, sub := range subsystems {
-		if !cfg[name] {
-			continue
-		}
 		for command, c := range sub.commands {
 			out[name+"."+command] = c
 		}
@@ -113,7 +104,7 @@ func commands(cfg config) map[string]router.Command {
 	return out
 }
 
-func startAll(opts *options, cfg config) error {
+func startAll(opts *options) error {
 	var addrs []string
 	if opts.portSet || opts.socket == "" {
 		addrs = append(addrs, fmt.Sprintf("127.0.0.1:%d", opts.port))
@@ -126,12 +117,12 @@ func startAll(opts *options, cfg config) error {
 		return err
 	}
 	if opts.workflow != "" {
-		if err := workflow.Load(opts.workflow, commands(cfg)); err != nil {
+		if err := workflow.Load(opts.workflow, commands()); err != nil {
 			return err
 		}
 	}
 	h := http.NewServeMux()
-	h.Handle("/", routes(cfg).Handler())
+	h.Handle("/", routes().Handler())
 	h.HandleFunc("GET /api/v1/forward/{port}", forward.Stream)
 	var all []*tasks.Task
 	for _, addr := range addrs {
@@ -173,7 +164,7 @@ func main() {
 		log.Println("stopped")
 	}()
 
-	if err := startAll(opts, config{"workflow": true, "vscode": true, "jupyter": true, "terminal": true, "filesystem": true, "checkpoint": true}); err != nil {
+	if err := startAll(opts); err != nil {
 		log.Printf("fatal: %v", err)
 		code = 1
 		return
