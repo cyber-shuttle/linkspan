@@ -1,10 +1,10 @@
-// Package router builds the HTTP route table as a tree, and every route is a command. A Router is a prefix and
-// its Routes, given as "METHOD path" relative to the prefix and each naming a command. Routes is the whole table:
+// Package router builds the HTTP route table as a tree, and every route is an action. A Router is a prefix and
+// its Routes, given as "METHOD path" relative to the prefix and each naming an action. Routes is the whole table:
 // New writes each route behind Prefix and Mount copies a child's table behind it again, so a tree is assembled
 // leaf first and one function is a route and a workflow action alike. The route decodes the body as the params
 // and adds the path id. Requests carry no credential: reaching a listener is the authorisation (SECURITY.md).
 //
-//	Command  Returns a status, a body and an error message.
+//	Action   Returns a status, a body and an error message.
 //	Router   Routes is held keyed by "METHOD path" behind Prefix.
 //	respond  The one reader and writer: the body decoded as the params, an absent one being none, an oversize one
 //	         refused with 413 and any other failure with 400; a non-empty message becomes the error shape.
@@ -23,14 +23,14 @@ import (
 	"strings"
 )
 
-type Command func(ctx context.Context, params map[string]any) (status int, body any, errMsg string)
+type Action func(ctx context.Context, params map[string]any) (status int, body any, errMsg string)
 
 type Router struct {
 	Prefix string
-	Routes map[string]Command
+	Routes map[string]Action
 }
 
-func respond(c Command) http.HandlerFunc {
+func respond(c Action) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		params := map[string]any{}
 		var status int
@@ -59,7 +59,7 @@ func respond(c Command) http.HandlerFunc {
 	}
 }
 
-func (r *Router) add(routes map[string]Command) *Router {
+func (r *Router) add(routes map[string]Action) *Router {
 	for pattern, c := range routes {
 		method, path, _ := strings.Cut(pattern, " ")
 		r.Routes[method+" "+r.Prefix+path] = c
@@ -67,8 +67,8 @@ func (r *Router) add(routes map[string]Command) *Router {
 	return r
 }
 
-func New(prefix string, routes map[string]Command) *Router {
-	return (&Router{Prefix: prefix, Routes: map[string]Command{}}).add(routes)
+func New(prefix string, routes map[string]Action) *Router {
+	return (&Router{Prefix: prefix, Routes: map[string]Action{}}).add(routes)
 }
 
 func (r *Router) Mount(child *Router) *Router {

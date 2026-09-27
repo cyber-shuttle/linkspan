@@ -5,15 +5,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+The next release is 0.22.0.
+
 ### Added
 
 - `--socket` returns: the API can listen on a TCP port, a unix socket, or both.
 
 ### Changed
 
+- `GET /api/v1/metrics` is `GET /api/v1/usage`, with the same body.
+- `--tunnel-mode` takes `link` instead of `websocket`, and `--tunnel-link-args` replaces `--tunnel-websocket-args`.
 - `--port` and `--socket` configure only the API; `--tunnel-mode=devtunnel` no longer requires `--port`.
-- A tunnel mode that fails is redialed with backoff, like the websocket link, instead of ending Linkspan, so one
-  mode failing never takes down another.
+- A transport that fails is redialed with backoff instead of ending Linkspan, so one failing never takes down
+  another.
+- Documentation, flag usage, logs and errors use one term per concept: transport, Dev Tunnel host process, control
+  port, server, trigger, action, sample and checkpoint.
 
 ### Removed
 

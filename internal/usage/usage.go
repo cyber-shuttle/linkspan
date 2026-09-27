@@ -1,8 +1,8 @@
-// Package metrics reports the job's resource use: memory and CPU from its cgroup v2 hierarchy, and GPU utilisation
-// and memory from nvidia-smi. A source that cannot be read leaves its field unset. A task samples the whole set,
+// Package usage reports the job's usage: memory and CPU from its cgroup v2 hierarchy, and GPU load and memory
+// from nvidia-smi. A source that cannot be read leaves its field unset. A task samples the whole set,
 // so a request answers from the last sample without waiting on anything.
 //
-//	GPU, Snapshot
+//	GPU, Sample
 //	interval, procCgroup, cgroupRoot  Test seams.
 //	last           The last sample; nil before the first.
 //	parseGPUs      Skips rows that do not scan, because a failed nvidia-smi prints its complaint to stdout.
@@ -12,7 +12,7 @@
 //	Latest         The last sample, or an empty one before the first.
 //	Poll           The task main starts: a sample, then interval, until cancelled. Cancellation kills a slow
 //	               probe; one that ignores SIGKILL holds the task, and StopAll with it.
-package metrics
+package usage
 
 import (
 	"bytes"
@@ -35,7 +35,7 @@ type GPU struct {
 	MemTotalMiB int `json:"memTotalMiB"`
 }
 
-type Snapshot struct {
+type Sample struct {
 	MemBytes     *int64 `json:"memBytes,omitempty"`
 	CPUUsageUsec *int64 `json:"cpuUsageUsec,omitempty"`
 	GPUs         []GPU  `json:"gpus,omitempty"`
@@ -47,7 +47,7 @@ var (
 	cgroupRoot = "/sys/fs/cgroup"
 )
 
-var last atomic.Pointer[Snapshot]
+var last atomic.Pointer[Sample]
 
 func parseGPUs(out string) []GPU {
 	var gpus []GPU
@@ -76,29 +76,29 @@ func readCgroupInt(path, key string) *int64 {
 }
 
 func sample(ctx context.Context) {
-	var snap Snapshot
+	var s Sample
 	var out bytes.Buffer
 	cmd := exec.Command("nvidia-smi",
 		"--query-gpu=index,utilization.gpu,memory.used,memory.total",
 		"--format=csv,noheader,nounits")
 	cmd.Stdout = &out
 	if err := tasks.Exec(ctx, cmd); err == nil {
-		snap.GPUs = parseGPUs(out.String())
+		s.GPUs = parseGPUs(out.String())
 	}
 	if b, err := os.ReadFile(procCgroup); err == nil {
 		_, path, _ := strings.Cut(string(b), "0::")
 		job, _, _ := strings.Cut(strings.TrimSpace(path), "/step_")
-		snap.MemBytes = readCgroupInt(cgroupRoot+job+"/memory.current", "")
-		snap.CPUUsageUsec = readCgroupInt(cgroupRoot+job+"/cpu.stat", "usage_usec ")
+		s.MemBytes = readCgroupInt(cgroupRoot+job+"/memory.current", "")
+		s.CPUUsageUsec = readCgroupInt(cgroupRoot+job+"/cpu.stat", "usage_usec ")
 	}
-	last.Store(&snap)
+	last.Store(&s)
 }
 
-func Latest() Snapshot {
-	if snap := last.Load(); snap != nil {
-		return *snap
+func Latest() Sample {
+	if s := last.Load(); s != nil {
+		return *s
 	}
-	return Snapshot{}
+	return Sample{}
 }
 
 func Poll(ctx context.Context) error {

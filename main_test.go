@@ -3,9 +3,9 @@
 //	binary                       Built once per run.
 //	socketPath, unixGet          The directory avoids t.TempDir because macOS caps socket paths at 104 characters.
 //	TestFlagSurface, TestRoutes
-//	TestRoutesCoverCommands      Every command a subsystem exports is behind one of its routes.
+//	TestRoutesCoverActions       Every action a subsystem exports is behind one of its routes.
 //	TestVersionIsOneLine, TestArchiveName
-//	TestExampleWorkflowLoads     examples/workflow.yml must name only commands the subsystems export.
+//	TestExampleWorkflowLoads     examples/workflow.yml must name only actions the subsystems export.
 //	TestSocketAlone
 //	TestBindsLoopbackAndUnwinds  Sends SIGTERM once both listeners answer, and reads stderr to its end before Wait.
 package main
@@ -82,8 +82,8 @@ func TestFlagSurface(t *testing.T) {
 		"socket",
 		"tunnel-devtunnel-args",
 		"tunnel-enable",
+		"tunnel-link-args",
 		"tunnel-mode",
-		"tunnel-websocket-args",
 		"version",
 		"workflow",
 	}
@@ -103,9 +103,9 @@ func TestRoutes(t *testing.T) {
 	if rec := serve(http.MethodGet, "/api/v1/health"); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"status":"ok"}` {
 		t.Fatalf("health answered %d %s, want the documented literal", rec.Code, rec.Body)
 	}
-	var snap map[string]any
-	if rec := serve(http.MethodGet, "/api/v1/metrics"); rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &snap) != nil {
-		t.Fatalf("metrics answered %d %s, want an object", rec.Code, rec.Body)
+	var sample map[string]any
+	if rec := serve(http.MethodGet, "/api/v1/usage"); rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &sample) != nil {
+		t.Fatalf("usage answered %d %s, want an object", rec.Code, rec.Body)
 	}
 	for _, path := range []string{"/api/v1/vscode/sessions", "/api/v1/jupyter/sessions", "/api/v1/terminal/sessions"} {
 		if rec := serve(http.MethodGet, path); rec.Code != http.StatusOK {
@@ -120,15 +120,15 @@ func TestRoutes(t *testing.T) {
 	}
 }
 
-func TestRoutesCoverCommands(t *testing.T) {
+func TestRoutesCoverActions(t *testing.T) {
 	for name, sub := range subsystems {
-		for command, c := range sub.commands {
+		for action, a := range sub.actions {
 			routed := false
 			for _, r := range sub.router.Routes {
-				routed = routed || reflect.ValueOf(r).Pointer() == reflect.ValueOf(c).Pointer()
+				routed = routed || reflect.ValueOf(r).Pointer() == reflect.ValueOf(a).Pointer()
 			}
 			if !routed {
-				t.Errorf("%s.%s is a command but not a route", name, command)
+				t.Errorf("%s.%s is an action but not a route", name, action)
 			}
 		}
 	}
@@ -193,7 +193,7 @@ func TestArchiveName(t *testing.T) {
 
 func TestExampleWorkflowLoads(t *testing.T) {
 	for _, example := range []string{"examples/workflow.yml", "examples/checkpoint.yml", "examples/restore.yml"} {
-		if err := workflow.Load(example, commands()); err != nil {
+		if err := workflow.Load(example, actions()); err != nil {
 			t.Fatal(err)
 		}
 	}

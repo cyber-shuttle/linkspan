@@ -15,7 +15,7 @@ func TestCreateOffLinux(t *testing.T) {
 	if runtime.GOOS == "linux" {
 		t.Skip("a Linux build exists, and create would fetch it")
 	}
-	status, _, msg := startSession(context.Background(), map[string]any{"cwd": "/work"})
+	status, _, msg := startServer(context.Background(), map[string]any{"cwd": "/work"})
 	if status != http.StatusNotImplemented || !strings.Contains(msg, "no ttyd binary") {
 		t.Fatalf("off Linux create answered %d %q, want 501", status, msg)
 	}

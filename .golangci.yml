@@ -25,12 +25,12 @@ linters:
       - path: subsystems/workflow/workflow\.go
         linters: [gosec]
         text: "G304"
-      # Runs a process session's command (G204).
-      - path: internal/sessions/sessions\.go
+      # Runs a process's argv (G204).
+      - path: internal/servers/servers\.go
         linters: [gosec]
         text: "G204"
       # Reads a path the kernel wrote to /proc/self/cgroup (G304, G703).
-      - path: internal/metrics/metrics\.go
+      - path: internal/usage/usage\.go
         linters: [gosec]
         text: "G304|G703"
       # Writes a fetched binary executable (G306).

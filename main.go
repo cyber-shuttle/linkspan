@@ -1,15 +1,15 @@
 // Package main is the entry point. It parses the flags, serves the HTTP API on a loopback port, a unix socket or both,
-// and starts the tunnel modes and workflow triggers, all as tasks, so one StopAll ends everything and the first fatal
-// error reaches main.
+// and starts the transports and workflow triggers, all as tasks, so one StopAll ends everything and the first
+// fatal error reaches main.
 //
 //	version                 Set by the linker; "dev" otherwise.
 //	subsystem, subsystems   The one table of what each subsystem offers.
 //	options, registerFlags  Flag spellings are frozen by docs/COMPATIBILITY.md; a test passes its own FlagSet. portSet
 //	                        is whether --port was given, since --socket alone drops the default port.
-//	routes                  The tree: /api/v1 with health and metrics, then only enabled subsystems.
-//	commands                The workflow's actions: its own unprefixed, and each enabled subsystem's behind its name.
+//	routes                  The tree: /api/v1 with health and usage, then every subsystem's.
+//	actions                 The workflow's actions: its own unprefixed, and each subsystem's behind its name.
 //	startAll                Validates every input before binding anything, then starts every task in one pass, the
-//	                        listeners first as h-<port> and h-<socket path>, then metrics, each tunnel mode and the
+//	                        listeners first as h-<port> and h-<socket path>, then usage, each transport and the
 //	                        workflow by kind.
 //	main                    os.Exit is the first defer, so StopAll runs before it; the workflow's stop steps run
 //	                        first, with the API still up.
@@ -28,10 +28,10 @@ import (
 	"time"
 
 	"github.com/cyber-shuttle/linkspan/internal/forward"
-	"github.com/cyber-shuttle/linkspan/internal/metrics"
 	"github.com/cyber-shuttle/linkspan/internal/router"
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
 	"github.com/cyber-shuttle/linkspan/internal/tunnel"
+	"github.com/cyber-shuttle/linkspan/internal/usage"
 	"github.com/cyber-shuttle/linkspan/subsystems/checkpoint"
 	"github.com/cyber-shuttle/linkspan/subsystems/filesystem"
 	"github.com/cyber-shuttle/linkspan/subsystems/jupyter"
@@ -43,17 +43,17 @@ import (
 var version = "dev"
 
 type subsystem struct {
-	router   *router.Router
-	commands map[string]router.Command
+	router  *router.Router
+	actions map[string]router.Action
 }
 
 var subsystems = map[string]subsystem{
 	"workflow":   {workflow.Router, nil},
-	"vscode":     {vscode.Router, vscode.Commands},
-	"jupyter":    {jupyter.Router, jupyter.Commands},
-	"terminal":   {terminal.Router, terminal.Commands},
-	"filesystem": {filesystem.Router, filesystem.Commands},
-	"checkpoint": {checkpoint.Router, checkpoint.Commands},
+	"vscode":     {vscode.Router, vscode.Actions},
+	"jupyter":    {jupyter.Router, jupyter.Actions},
+	"terminal":   {terminal.Router, terminal.Actions},
+	"filesystem": {filesystem.Router, filesystem.Actions},
+	"checkpoint": {checkpoint.Router, checkpoint.Actions},
 }
 
 type options struct {
@@ -70,23 +70,23 @@ type options struct {
 func registerFlags(fs *flag.FlagSet) *options {
 	o := options{tunnelArgs: map[string]string{}}
 	fs.BoolVar(&o.printVersion, "version", false, "print the version and exit")
-	fs.BoolVar(&o.tunnelEnable, "tunnel-enable", false, "carry the API off the node in the modes of --tunnel-mode")
-	fs.StringVar(&o.tunnelMode, "tunnel-mode", "", "comma-separated `modes`, websocket and/or devtunnel; required with --tunnel-enable")
-	for name, m := range tunnel.Modes {
-		fs.Func("tunnel-"+name+"-args", m.Usage, func(v string) error { o.tunnelArgs[name] = v; return nil })
+	fs.BoolVar(&o.tunnelEnable, "tunnel-enable", false, "carry the API off the node over the transports of --tunnel-mode")
+	fs.StringVar(&o.tunnelMode, "tunnel-mode", "", "comma-separated `transports`, link and/or devtunnel; required with --tunnel-enable")
+	for name, t := range tunnel.Transports {
+		fs.Func("tunnel-"+name+"-args", t.Usage, func(v string) error { o.tunnelArgs[name] = v; return nil })
 	}
-	fs.IntVar(&o.port, "port", 8080, "HTTP API port on loopback; 0 picks a free one")
+	fs.IntVar(&o.port, "port", 8080, "control port on loopback; 0 picks a free one")
 	fs.StringVar(&o.socket, "socket", "", "HTTP API unix socket `path`, owner-only; alone, it replaces the port")
 	fs.StringVar(&o.workflow, "workflow", "", "workflow YAML file")
 	return &o
 }
 
 func routes() *router.Router {
-	root := router.New("/api/v1", map[string]router.Command{
+	root := router.New("/api/v1", map[string]router.Action{
 		"GET /health": func(context.Context, map[string]any) (int, any, string) {
 			return http.StatusOK, map[string]string{"status": "ok"}, ""
 		},
-		"GET /metrics": func(context.Context, map[string]any) (int, any, string) { return http.StatusOK, metrics.Latest(), "" },
+		"GET /usage": func(context.Context, map[string]any) (int, any, string) { return http.StatusOK, usage.Latest(), "" },
 	})
 	for _, sub := range subsystems {
 		root.Mount(sub.router)
@@ -94,11 +94,11 @@ func routes() *router.Router {
 	return root
 }
 
-func commands() map[string]router.Command {
-	out := maps.Clone(workflow.Commands)
+func actions() map[string]router.Action {
+	out := maps.Clone(workflow.Actions)
 	for name, sub := range subsystems {
-		for command, c := range sub.commands {
-			out[name+"."+command] = c
+		for action, a := range sub.actions {
+			out[name+"."+action] = a
 		}
 	}
 	return out
@@ -117,7 +117,7 @@ func startAll(opts *options) error {
 		return err
 	}
 	if opts.workflow != "" {
-		if err := workflow.Load(opts.workflow, commands()); err != nil {
+		if err := workflow.Load(opts.workflow, actions()); err != nil {
 			return err
 		}
 	}
@@ -128,7 +128,7 @@ func startAll(opts *options) error {
 	for _, addr := range addrs {
 		all = append(all, &tasks.Task{Kind: "http", Addr: addr, Server: &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}})
 	}
-	all = append(append(all, &tasks.Task{Kind: "metrics", Run: metrics.Poll}), tunnels...)
+	all = append(append(all, &tasks.Task{Kind: "usage", Run: usage.Poll}), tunnels...)
 	if opts.workflow != "" {
 		all = append(all, &tasks.Task{Kind: "workflow", Run: workflow.Start()})
 	}

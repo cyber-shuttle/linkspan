@@ -1,17 +1,17 @@
-// Package sessions is what the session subsystems share: the commands that list a kind's sessions and stop one,
-// over the task registry, with the wire shapes docs/COMPATIBILITY.md freezes; and, for a session that is a plain
-// process, starting it and waiting for its end. ref names what a request creates, else Linkspan assigns the id.
+// Package servers is what the subsystems behind /sessions routes share: the actions that list a kind's servers and
+// stop one, over the task registry, with the wire shapes docs/COMPATIBILITY.md freezes; and, for a plain process,
+// starting it and waiting for its end. ref names what a request creates, else Linkspan assigns the id.
 //
-//	Process   The kind of a plain-process session: a shell.exec command, or a resumed one.
-//	pausing   The sessions a pause is ending, so the end is not a failure to whoever waits.
+//	Process   The kind of a plain process: a shell.exec command, or a resumed one.
+//	pausing   The processes a pause is ending, so the end is not a failure to whoever waits.
 //	Ref       The id a request names for what it creates.
-//	Select    The list command of one kind, ordered by id, [] when none.
+//	Select    The list action of one kind, ordered by id, [] when none.
 //	Start     Runs argv as the given task, its id defaulting to the kind's initial and the time; a repeated id
-//	          replaces the earlier session. It cannot fail, since a process binds no address.
+//	          replaces the earlier process. It cannot fail, since a process binds no address.
 //	Stop      Answers 404 for an id the registry does not hold, else the id with state stopped.
-//	Pausing   Whether a pause is about to end the session.
-//	Wait      Blocks until the session ends and is unlisted, and says whether a pause ended it.
-package sessions
+//	Pausing   Whether a pause is about to end the process.
+//	Wait      Blocks until the process ends and is unlisted, and says whether a pause ended it.
+package servers
 
 import (
 	"cmp"
@@ -37,7 +37,7 @@ func Ref(params map[string]any) string {
 	return ref
 }
 
-func Select(kind tasks.Kind) router.Command {
+func Select(kind tasks.Kind) router.Action {
 	return func(context.Context, map[string]any) (int, any, string) {
 		return http.StatusOK, tasks.Select(kind), ""
 	}

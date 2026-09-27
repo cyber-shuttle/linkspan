@@ -1,9 +1,9 @@
-// Tests for the SSH session surface cs-plane drives: the handlers are called directly and their bodies marshalled.
+// Tests for the SSH server surface cs-plane drives: the handlers are called directly and their bodies marshalled.
 //
 //	authorizedKey
 //	marshal
-//	TestCreateSessionServesOnReturn, TestCreateSessionRejectsBadKey
-//	TestARefReusesItsServer
+//	TestStartServerServesOnReturn, TestStartServerRejectsBadKey
+//	TestARefKeepsItsServer
 //	TestSelectShape  An empty list marshals as [].
 package vscode
 
@@ -29,9 +29,9 @@ func marshal(t *testing.T, body any) []byte {
 	return b
 }
 
-func TestCreateSessionServesOnReturn(t *testing.T) {
+func TestStartServerServesOnReturn(t *testing.T) {
 	t.Cleanup(func() { tasks.StopAll() })
-	status, body, errMsg := startSession(context.Background(), map[string]any{"authorized_key": authorizedKey})
+	status, body, errMsg := startServer(context.Background(), map[string]any{"authorized_key": authorizedKey})
 	var out struct {
 		BindPort int `json:"bind_port"`
 	}
@@ -45,13 +45,13 @@ func TestCreateSessionServesOnReturn(t *testing.T) {
 	_ = c.Close()
 }
 
-func TestCreateSessionRejectsBadKey(t *testing.T) {
+func TestStartServerRejectsBadKey(t *testing.T) {
 	for name, key := range map[string]string{
 		"unparsable":   "not-a-key",
 		"with options": `from="10.0.0.1" ` + authorizedKey,
 	} {
 		t.Run(name, func(t *testing.T) {
-			status, _, errMsg := startSession(context.Background(), map[string]any{"authorized_key": key})
+			status, _, errMsg := startServer(context.Background(), map[string]any{"authorized_key": key})
 			if status != http.StatusBadRequest || errMsg == "" {
 				t.Fatalf("status = %d message %q, want 400 with a message", status, errMsg)
 			}
@@ -59,10 +59,10 @@ func TestCreateSessionRejectsBadKey(t *testing.T) {
 	}
 }
 
-func TestARefReusesItsServer(t *testing.T) {
+func TestARefKeepsItsServer(t *testing.T) {
 	t.Cleanup(func() { tasks.StopAll() })
 	start := func() (int, any) {
-		status, body, _ := startSession(context.Background(), map[string]any{"authorized_key": authorizedKey, "ref": "ssh-laptop"})
+		status, body, _ := startServer(context.Background(), map[string]any{"authorized_key": authorizedKey, "ref": "ssh-laptop"})
 		return status, body.(map[string]any)["bind_port"]
 	}
 	firstStatus, firstPort := start()
@@ -73,8 +73,8 @@ func TestARefReusesItsServer(t *testing.T) {
 }
 
 func TestSelectShape(t *testing.T) {
-	_, body, _ := Commands["sessions.select"](context.Background(), nil)
+	_, body, _ := Actions["sessions.select"](context.Background(), nil)
 	if got := string(marshal(t, body)); got != "[]" {
-		t.Fatalf("an empty sessions list must marshal as [], got %s", got)
+		t.Fatalf("an empty server list must marshal as [], got %s", got)
 	}
 }

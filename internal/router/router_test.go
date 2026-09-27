@@ -1,10 +1,10 @@
-// Tests for the writer every route answers through, for what a command sees of a request, and for the paths a
+// Tests for the writer every route answers through, for what an action sees of a request, and for the paths a
 // nested tree holds.
 //
 //	ok
 //	TestErrorShape
 //	TestParams          The body is the params, the path id joins them, no body is no params, and bad or oversize
-//	                    bodies are refused before the command runs.
+//	                    bodies are refused before the action runs.
 //	TestNestedPrefixes  A leaf-first chain of many levels, each with siblings, and one subtree mounted at every
 //	                    level and again at the root.
 package router
@@ -41,7 +41,7 @@ func TestParams(t *testing.T) {
 		seen = append(seen, fmt.Sprint(params))
 		return http.StatusOK, nil, ""
 	}
-	h := New("/x", map[string]Command{"GET /s": echo, "POST /s": echo, "DELETE /s/{id}": echo}).Handler()
+	h := New("/x", map[string]Action{"GET /s": echo, "POST /s": echo, "DELETE /s/{id}": echo}).Handler()
 	call := func(method, path, body string) int {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
@@ -51,7 +51,7 @@ func TestParams(t *testing.T) {
 		t.Fatalf("codes; seen %q", seen)
 	}
 	if want := []string{"map[]", "map[a:1]", "map[id:j-9]"}; fmt.Sprint(seen) != fmt.Sprint(want) {
-		t.Fatalf("commands saw %q, want %q", seen, want)
+		t.Fatalf("actions saw %q, want %q", seen, want)
 	}
 	if code := call(http.MethodPost, "/x/s", "{"); code != http.StatusBadRequest {
 		t.Fatalf("bad JSON answered %d", code)
@@ -60,24 +60,24 @@ func TestParams(t *testing.T) {
 		t.Fatalf("an oversize body answered %d", code)
 	}
 	if len(seen) != 3 {
-		t.Fatal("a refused body must not reach the command")
+		t.Fatal("a refused body must not reach the action")
 	}
 }
 
 func TestNestedPrefixes(t *testing.T) {
 	const depth = 64
-	shared := New("/shared", map[string]Command{"GET /items": ok, "GET /extra": ok})
+	shared := New("/shared", map[string]Action{"GET /items": ok, "GET /extra": ok})
 	want := map[string]bool{}
 	var chain *Router
 	for level := depth; level >= 1; level-- {
 		prefix := "/l" + strconv.Itoa(level)
-		node := New(prefix, map[string]Command{"POST /items": ok, "DELETE /items/{id}": ok}).Mount(shared).Mount(New("/sib", map[string]Command{"POST /items/signal": ok}))
+		node := New(prefix, map[string]Action{"POST /items": ok, "DELETE /items/{id}": ok}).Mount(shared).Mount(New("/sib", map[string]Action{"POST /items/signal": ok}))
 		if chain != nil {
 			node.Mount(chain)
 		}
 		chain = node
 	}
-	root := New("/root", map[string]Command{"GET /health": ok}).Mount(chain).Mount(shared)
+	root := New("/root", map[string]Action{"GET /health": ok}).Mount(chain).Mount(shared)
 	want["GET /root/health"], want["GET /root/shared/items"], want["GET /root/shared/extra"] = true, true, true
 	path := "/root"
 	for level := 1; level <= depth; level++ {

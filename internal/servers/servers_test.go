@@ -1,8 +1,8 @@
-// Tests for a plain-process session's life. Each test stops what it starts.
+// Tests for a plain process's life. Each test stops what it starts.
 //
-//	TestWait         An ended session is forgotten, its final copy answered.
-//	TestPausedEnd    A session a pause ends is not a failure to the waiter.
-package sessions
+//	TestWait         An ended process is forgotten, its final copy answered.
+//	TestPausedEnd    A process a pause ends is not a failure to the waiter.
+package servers
 
 import (
 	"strings"
@@ -16,7 +16,7 @@ import (
 func TestWait(t *testing.T) {
 	created := Start(tasks.Task{Kind: "test"}, "true")
 	if !strings.HasPrefix(created.ID, "t-") || created.Attrs(created)["command"] != "true" {
-		t.Fatalf("created %+v, want a t- session running true", created)
+		t.Fatalf("created %+v, want a t- process running true", created)
 	}
 	ended, paused := Wait(created.ID)
 	if ended.State != tasks.StateExited || paused || ended.Pid == 0 || len(tasks.Select("test")) != 0 {
@@ -35,7 +35,7 @@ func TestPausedEnd(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("the session never ran")
+			t.Fatal("the process never ran")
 		}
 	}
 	if ended, paused := Wait("named"); !paused || ended.State != tasks.StateFailed {

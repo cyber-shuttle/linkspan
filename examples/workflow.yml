@@ -3,7 +3,7 @@
 #   ./linkspan --port 8080 --workflow examples/workflow.yml
 #
 # start: a line on stdout, then the Jupyter environment built under ~/.cybershuttle, minutes the first time.
-# ready: once start is complete: a Jupyter server on /tmp, then the session list logged;
+# ready: once start is complete: a Jupyter server on /tmp, then the server list logged;
 #        curl http://127.0.0.1:8080/api/v1/jupyter/sessions shows it running with its token.
 # SIGUSR1: kill -USR1 <pid>, as Slurm's --signal would: a line on stdout.
 # stop: Ctrl-C or SIGTERM: a line on stdout before anything is torn down, then exit 0.
@@ -23,14 +23,14 @@ tasks:
         action: jupyter.sessions.start
         params:
           root_dir: /tmp
-      - name: List sessions
+      - name: List servers
         action: jupyter.sessions.select
   - on: SIGUSR1
     steps:
-      - name: Checkpoint before the time limit
+      - name: Checkpoint before the walltime
         action: shell.exec
         params:
-          command: echo time limit near, checkpointing
+          command: echo walltime near, checkpointing
   - on: stop
     steps:
       - name: Sync results

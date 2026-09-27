@@ -4,7 +4,7 @@
 //	TestPollSamplesAndStops  The task must store what nvidia-smi prints; with a slow probe in flight, Latest must
 //	                         still answer at once with the last sample and Stop must kill the probe and return.
 //	TestSampleCgroup  A sample must read the job path with its step suffix removed.
-package metrics
+package usage
 
 import (
 	"context"
@@ -39,8 +39,8 @@ func TestPollSamplesAndStops(t *testing.T) {
 	interval = 50 * time.Millisecond
 	t.Cleanup(func() { interval = old })
 
-	_, _ = (&tasks.Task{Kind: "metrics", Run: Poll}).Start()
-	t.Cleanup(func() { tasks.Stop("metrics") })
+	_, _ = (&tasks.Task{Kind: "usage", Run: Poll}).Start()
+	t.Cleanup(func() { tasks.Stop("usage") })
 	for deadline := time.Now().Add(5 * time.Second); len(Latest().GPUs) == 0; time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("the task never stored a sample")
@@ -60,7 +60,7 @@ func TestPollSamplesAndStops(t *testing.T) {
 		t.Fatalf("Latest took %s and answered %+v with a probe in flight; want the last sample at once", elapsed, got.GPUs)
 	}
 	stopStart := time.Now()
-	tasks.Stop("metrics")
+	tasks.Stop("usage")
 	if elapsed := time.Since(stopStart); elapsed > 2*time.Second {
 		t.Fatalf("Stop took %s; cancellation must kill the probe in flight", elapsed)
 	}
