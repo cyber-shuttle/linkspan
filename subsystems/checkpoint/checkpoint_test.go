@@ -1,9 +1,9 @@
 // Tests for the CRIU wiring, against a fake criu that records its argv and kills what it dumps, with HOME in a
-// temp dir so the snapshots land there. Each test stops what it starts.
+// temp dir so the checkpoints land there. Each test stops what it starts.
 //
 //	fakeCriu   Also HOME; without a fake, criu is unset.
 //	await
-//	TestPause   Every answer in one flow: 501, 404, a snapshot, its replacement, and a failed dump.
+//	TestPause   Every answer in one flow: 501, 404, a checkpoint, its replacement, and a failed dump.
 //	TestResume
 package checkpoint
 
@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/cyber-shuttle/linkspan/internal/install"
-	"github.com/cyber-shuttle/linkspan/internal/sessions"
+	"github.com/cyber-shuttle/linkspan/internal/servers"
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
 )
 
@@ -44,8 +44,8 @@ func fakeCriu(t *testing.T, fake bool) (argvLog string) {
 func await(t *testing.T, id string, state tasks.State) tasks.Task {
 	t.Helper()
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if i := slices.IndexFunc(tasks.Select(sessions.Process), func(t tasks.Task) bool { return t.ID == id }); i >= 0 {
-			if got := tasks.Select(sessions.Process)[i]; got.State == state {
+		if i := slices.IndexFunc(tasks.Select(servers.Process), func(t tasks.Task) bool { return t.ID == id }); i >= 0 {
+			if got := tasks.Select(servers.Process)[i]; got.State == state {
 				return got
 			}
 		}
@@ -61,13 +61,13 @@ func TestPause(t *testing.T) {
 	}
 	argvLog := fakeCriu(t, true)
 	if status, _, msg := pause(context.Background(), map[string]any{"id": "payload"}); status != http.StatusNotFound {
-		t.Fatalf("pausing a session that is not running answered %d %q, want 404", status, msg)
+		t.Fatalf("pausing a process that is not running answered %d %q, want 404", status, msg)
 	}
 	start := func() (tasks.Task, chan bool) {
-		sessions.Start(tasks.Task{Kind: sessions.Process, ID: "payload"}, "sleep", "30")
+		servers.Start(tasks.Task{Kind: servers.Process, ID: "payload"}, "sleep", "30")
 		t.Cleanup(func() { tasks.Stop("payload") })
 		waited := make(chan bool, 1)
-		go func() { _, paused := sessions.Wait("payload"); waited <- paused }()
+		go func() { _, paused := servers.Wait("payload"); waited <- paused }()
 		return await(t, "payload", tasks.StateRunning), waited
 	}
 	running, waited := start()
@@ -82,19 +82,19 @@ func TestPause(t *testing.T) {
 	if argv, _ := os.ReadFile(argvLog); !strings.Contains(string(argv), "dump -t "+strconv.Itoa(running.Pid)+" --images-dir "+images+".part --shell-job --tcp-established") {
 		t.Fatalf("criu ran with %q", argv)
 	}
-	if !<-waited || len(tasks.Select(sessions.Process)) != 0 {
-		t.Fatal("the waiter must be told of the pause and the session forgotten")
+	if !<-waited || len(tasks.Select(servers.Process)) != 0 {
+		t.Fatal("the waiter must be told of the pause and the process forgotten")
 	}
 	data, err := os.ReadFile(filepath.Join(images, "snapshot"))
 	if err != nil || !strings.Contains(string(data), `"pid":`+strconv.Itoa(running.Pid)) {
-		t.Fatalf("snapshot = %q, %v; want the pid %d", data, err, running.Pid)
+		t.Fatalf("record = %q, %v; want the pid %d", data, err, running.Pid)
 	}
 	start()
 	if status, _, msg := pause(context.Background(), map[string]any{"id": "payload"}); status != http.StatusOK {
 		t.Fatalf("a second pause answered %d %q", status, msg)
 	}
 	if later, _ := os.ReadFile(filepath.Join(images, "snapshot")); string(later) == string(data) {
-		t.Fatal("a second pause must replace the snapshot")
+		t.Fatal("a second pause must replace the checkpoint")
 	}
 	if err := os.WriteFile(criu, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
 		t.Fatal(err)
@@ -104,8 +104,8 @@ func TestPause(t *testing.T) {
 		t.Fatalf("a failed pause answered %d, want 500", status)
 	}
 	folders, _ := filepath.Glob(filepath.Join(install.Dir(), "checkpoints", "*"))
-	if len(folders) != 1 || folders[0] != images || len(tasks.Select(sessions.Process)) != 1 {
-		t.Fatalf("a failed pause left %v and %d sessions, want the earlier snapshot alone and the session running", folders, len(tasks.Select(sessions.Process)))
+	if len(folders) != 1 || folders[0] != images || len(tasks.Select(servers.Process)) != 1 {
+		t.Fatalf("a failed pause left %v and %d processes, want the earlier checkpoint alone and the process running", folders, len(tasks.Select(servers.Process)))
 	}
 	tasks.Stop("payload")
 	if <-waited {
@@ -116,7 +116,7 @@ func TestPause(t *testing.T) {
 func TestResume(t *testing.T) {
 	argvLog := fakeCriu(t, true)
 	if status, _, msg := resume(context.Background(), map[string]any{"id": "gone"}); status != http.StatusNotFound {
-		t.Fatalf("a missing snapshot answered %d %q, want 404", status, msg)
+		t.Fatalf("a missing checkpoint answered %d %q, want 404", status, msg)
 	}
 	images := filepath.Join(install.Dir(), "checkpoints", "payload")
 	if err := os.MkdirAll(images, 0o700); err != nil {
@@ -131,10 +131,10 @@ func TestResume(t *testing.T) {
 	}
 	ended := body.(tasks.Task)
 	if got := ended.Attrs(ended)["command"]; ended.ID != "payload" || !strings.HasSuffix(got, "criu restore --images-dir "+images+" --shell-job --tcp-established --unprivileged --inherit-fd fd[1]:dev/null") {
-		t.Fatalf("the session is %s running %q, want payload running the resume", ended.ID, got)
+		t.Fatalf("the process is %s running %q, want payload running the resume", ended.ID, got)
 	}
-	if ended.State != tasks.StateExited || ended.Pid != os.Getpid() || len(tasks.Select(sessions.Process)) != 0 {
-		t.Fatalf("the resumed session ended as %+v, want exited with the tree's pid %d and forgotten", ended, os.Getpid())
+	if ended.State != tasks.StateExited || ended.Pid != os.Getpid() || len(tasks.Select(servers.Process)) != 0 {
+		t.Fatalf("the resumed process ended as %+v, want exited with the tree's pid %d and forgotten", ended, os.Getpid())
 	}
 	if argv, _ := os.ReadFile(argvLog); strings.Count(string(argv), "restore --images-dir "+images) != 1 {
 		t.Fatalf("criu ran with %q", argv)

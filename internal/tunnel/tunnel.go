@@ -1,13 +1,14 @@
-// Package tunnel carries the API off the node in the modes --tunnel-mode lists. Each mode is a package of its own that
-// parses its --tunnel-<mode>-args value and reads its credential from the environment; this package only frames them,
-// so it knows each mode by name and nothing of its flags. Parse validates everything before main binds anything.
+// Package tunnel carries the API off the node over the transports --tunnel-mode lists. Each transport is a package of
+// its own that parses its --tunnel-<transport>-args value and reads its credential from the environment; this package
+// only frames them, so it knows each transport by name and nothing of its flags. Parse validates everything before
+// main binds anything.
 //
-//	Mode
-//	Modes   Each mode by name; main registers --tunnel-<name>-args with its Usage.
-//	redial  Reruns a mode's attempt until cancelled, backing off from 1s to 1m, reset once an attempt lasts a minute,
-//	        so one mode failing never ends Linkspan or another mode.
-//	Parse   One task per listed mode, kinded by its name; a listed mode without args, or args of an unlisted one, is
-//	        refused.
+//	Transport
+//	Transports  Each transport by name; main registers --tunnel-<name>-args with its Usage.
+//	redial      Reruns a transport's attempt until cancelled, backing off from 1s to 1m, reset once an attempt lasts a
+//	            minute, so one transport failing never ends Linkspan or another transport.
+//	Parse       One task per listed transport, kinded by its name; a listed transport without args, or args of an
+//	            unlisted one, is refused.
 package tunnel
 
 import (
@@ -22,16 +23,16 @@ import (
 
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
 	"github.com/cyber-shuttle/linkspan/internal/tunnel/devtunnel"
-	"github.com/cyber-shuttle/linkspan/internal/tunnel/websocket"
+	"github.com/cyber-shuttle/linkspan/internal/tunnel/link"
 )
 
-type Mode struct {
+type Transport struct {
 	Usage string
 	start func(args string) (func(context.Context) error, error)
 }
 
-var Modes = map[string]Mode{
-	"websocket": {websocket.Usage, websocket.New},
+var Transports = map[string]Transport{
+	"link":      {link.Usage, link.New},
 	"devtunnel": {devtunnel.Usage, devtunnel.New},
 }
 
@@ -60,20 +61,20 @@ func Parse(enable bool, list string, args map[string]string) ([]*tasks.Task, err
 	}
 	listed := map[string]bool{}
 	for name := range strings.SplitSeq(list, ",") {
-		if _, ok := Modes[name]; list != "" && (!ok || listed[name]) {
-			return nil, fmt.Errorf("--tunnel-mode: %q is not websocket or devtunnel, or is repeated", name)
+		if _, ok := Transports[name]; list != "" && (!ok || listed[name]) {
+			return nil, fmt.Errorf("--tunnel-mode: %q is not link or devtunnel, or is repeated", name)
 		}
 		listed[name] = true
 	}
 	var all []*tasks.Task
-	for _, name := range slices.Sorted(maps.Keys(Modes)) {
+	for _, name := range slices.Sorted(maps.Keys(Transports)) {
 		if listed[name] != (args[name] != "") {
 			return nil, fmt.Errorf("--tunnel-%s-args is required with --tunnel-mode=%s and refused without it", name, name)
 		}
 		if !listed[name] {
 			continue
 		}
-		run, err := Modes[name].start(args[name])
+		run, err := Transports[name].start(args[name])
 		if err != nil {
 			return nil, err
 		}

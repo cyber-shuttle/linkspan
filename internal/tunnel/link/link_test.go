@@ -1,9 +1,9 @@
-// Tests for the websocket mode against a fake cs-plane that multiplexes streams over the one socket Linkspan holds.
+// Tests for the link transport against a fake cs-plane that multiplexes streams over the one socket Linkspan holds.
 //
 //	TestLinkMultiplexesStreamsOverOneSocket  The token rides the subprotocol; a port no task serves is refused, a
 //	                                         served one carries an HTTP exchange, closing the stream closes the
 //	                                         server's connection, and every stream shares the one socket.
-package websocket
+package link
 
 import (
 	"context"

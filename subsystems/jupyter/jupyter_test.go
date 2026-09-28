@@ -1,7 +1,7 @@
 // Tests for what reaches the server and the wire without building an environment.
 //
 //	TestToken     43 URL-safe characters, and two differ.
-//	TestCommands  The list must carry only the Jupyter kind, and stop must answer 404 for an unknown id and 200 once
+//	TestActions   The list must carry only the Jupyter kind, and stop must answer 404 for an unknown id and 200 once
 //	              for a listed one.
 package jupyter
 
@@ -21,17 +21,17 @@ func TestToken(t *testing.T) {
 	}
 }
 
-func TestCommands(t *testing.T) {
+func TestActions(t *testing.T) {
 	ctx := context.Background()
 	idle := func(ctx context.Context) error { <-ctx.Done(); return nil }
 	_, _ = (&tasks.Task{ID: "t-1", Kind: "terminal", Run: idle}).Start()
 	_, _ = (&tasks.Task{ID: "j-2", Kind: kind, Run: idle}).Start()
 	t.Cleanup(tasks.StopAll)
-	if _, body, _ := Commands["sessions.select"](ctx, nil); len(body.([]tasks.Task)) != 1 || body.([]tasks.Task)[0].ID != "j-2" {
+	if _, body, _ := Actions["sessions.select"](ctx, nil); len(body.([]tasks.Task)) != 1 || body.([]tasks.Task)[0].ID != "j-2" {
 		t.Fatalf("list = %+v, want the Jupyter kind alone", body)
 	}
 	stop := func(id string) int {
-		status, _, _ := Commands["sessions.stop"](ctx, map[string]any{"id": id})
+		status, _, _ := Actions["sessions.stop"](ctx, map[string]any{"id": id})
 		return status
 	}
 	if stop("nope") != http.StatusNotFound || stop("j-2") != http.StatusOK || stop("j-2") != http.StatusNotFound {

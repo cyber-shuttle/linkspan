@@ -1,7 +1,7 @@
-// Tests for the mode framing. Each case expects the tasks' kinds, or an error naming the offending flag.
+// Tests for the transport framing. Each case expects the tasks' kinds, or an error naming the offending flag.
 //
 //	TestParse
-//	TestRedialRerunsAFailedMode  A failing attempt is rerun, not fatal, and cancellation ends the loop cleanly.
+//	TestRedialRerunsAFailedTransport  A failing attempt is rerun, not fatal, and cancellation ends the loop cleanly.
 package tunnel
 
 import (
@@ -12,13 +12,13 @@ import (
 	"time"
 
 	"github.com/cyber-shuttle/linkspan/internal/tunnel/devtunnel"
-	"github.com/cyber-shuttle/linkspan/internal/tunnel/websocket"
+	"github.com/cyber-shuttle/linkspan/internal/tunnel/link"
 )
 
 func TestParse(t *testing.T) {
-	t.Setenv(websocket.Env, "link-token")
+	t.Setenv(link.Env, "link-token")
 	t.Setenv(devtunnel.Env, "host-token")
-	ws, dt := "--url wss://plane.example/link", "--id t --cluster usw2"
+	lk, dt := "--url wss://plane.example/link", "--id t --cluster usw2"
 	for _, c := range []struct {
 		enable bool
 		list   string
@@ -26,17 +26,17 @@ func TestParse(t *testing.T) {
 		want   string
 	}{
 		{false, "", nil, ""},
-		{true, "websocket", map[string]string{"websocket": ws}, "websocket"},
+		{true, "link", map[string]string{"link": lk}, "link"},
 		{true, "devtunnel", map[string]string{"devtunnel": dt}, "devtunnel"},
-		{true, "websocket,devtunnel", map[string]string{"websocket": ws, "devtunnel": dt}, "devtunnel,websocket"},
+		{true, "link,devtunnel", map[string]string{"link": lk, "devtunnel": dt}, "devtunnel,link"},
 		{true, "", nil, "--tunnel-mode"},
-		{false, "websocket", map[string]string{"websocket": ws}, "--tunnel-mode"},
+		{false, "link", map[string]string{"link": lk}, "--tunnel-mode"},
 		{true, "ssh", nil, "--tunnel-mode"},
-		{true, "websocket,websocket", map[string]string{"websocket": ws}, "--tunnel-mode"},
-		{true, "websocket", nil, "--tunnel-websocket-args"},
-		{true, "websocket", map[string]string{"websocket": ws, "devtunnel": dt}, "--tunnel-devtunnel-args"},
-		{true, "websocket", map[string]string{"websocket": "--url https://plane.example"}, "--tunnel-websocket-args"},
-		{true, "websocket", map[string]string{"websocket": ws + " --token x"}, "--tunnel-websocket-args"},
+		{true, "link,link", map[string]string{"link": lk}, "--tunnel-mode"},
+		{true, "link", nil, "--tunnel-link-args"},
+		{true, "link", map[string]string{"link": lk, "devtunnel": dt}, "--tunnel-devtunnel-args"},
+		{true, "link", map[string]string{"link": "--url https://plane.example"}, "--tunnel-link-args"},
+		{true, "link", map[string]string{"link": lk + " --token x"}, "--tunnel-link-args"},
 		{true, "devtunnel", map[string]string{"devtunnel": "--id t"}, "--tunnel-devtunnel-args"},
 	} {
 		all, err := Parse(c.enable, c.list, c.args)
@@ -54,12 +54,12 @@ func TestParse(t *testing.T) {
 	}
 }
 
-func TestRedialRerunsAFailedMode(t *testing.T) {
+func TestRedialRerunsAFailedTransport(t *testing.T) {
 	attempts := make(chan struct{}, 8)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- redial("test", func(context.Context) error { attempts <- struct{}{}; return errors.New("relay exited") })(ctx)
+		done <- redial("test", func(context.Context) error { attempts <- struct{}{}; return errors.New("exited") })(ctx)
 	}()
 	for range 2 {
 		select {

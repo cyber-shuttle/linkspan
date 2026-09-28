@@ -1,6 +1,6 @@
-// Package checkpoint is a sidecar over running process sessions: pause writes one into a snapshot with CRIU
-// under ~/.cybershuttle/checkpoints/<id>, and resume runs the snapshot as a session under the same id, in this
-// job or a later one, via the API or a workflow step. A paused session ends, and the step waiting on it answers
+// Package checkpoint is a sidecar over running shell.exec processes: pause writes one into a checkpoint with CRIU
+// under ~/.cybershuttle/checkpoints/<id>, and resume runs the checkpoint as a process under the same id, in this
+// job or a later one, via the API or a workflow step. A paused process ends, and the step waiting on it answers
 // 202, so a workflow pauses its payload under a signal and goes on with the steps after the pause. CRIU is the
 // user's, on PATH, allowed to run unprivileged.
 //
@@ -9,11 +9,11 @@
 //	          flag needs CRIU 3.18.
 //	record    What a resume needs beside the images: the tree's pid, and the names of the stdout and stderr CRIU
 //	          dumped, so it hands the tree this job's in their stead.
-//	pause     Dumps the running session id into a .part folder, so a failed dump leaves the earlier snapshot, and
-//	          the session ends with it.
-//	resume    Runs criu as the session, its pid the tree's, and like shell.exec answers once it ends: 202 when
+//	pause     Dumps the running process id into a .part folder, so a failed dump leaves the earlier checkpoint,
+//	          and the process ends with it.
+//	resume    Runs criu as the process, its pid the tree's, and like shell.exec answers once it ends: 202 when
 //	          paused again.
-//	Commands, Router  pause and resume, each a route.
+//	Actions, Router  pause and resume, each a route.
 package checkpoint
 
 import (
@@ -31,7 +31,7 @@ import (
 
 	"github.com/cyber-shuttle/linkspan/internal/install"
 	"github.com/cyber-shuttle/linkspan/internal/router"
-	"github.com/cyber-shuttle/linkspan/internal/sessions"
+	"github.com/cyber-shuttle/linkspan/internal/servers"
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
 )
 
@@ -56,10 +56,10 @@ func pause(ctx context.Context, params map[string]any) (int, any, string) {
 	if criu == "" {
 		return http.StatusNotImplemented, nil, "criu is not on PATH"
 	}
-	listed := tasks.Select(sessions.Process)
+	listed := tasks.Select(servers.Process)
 	i := slices.IndexFunc(listed, func(t tasks.Task) bool { return t.ID == id && t.State == tasks.StateRunning })
 	if i < 0 {
-		return http.StatusNotFound, nil, "no running session " + id
+		return http.StatusNotFound, nil, "no running process " + id
 	}
 	t := listed[i]
 	var r record
@@ -73,7 +73,7 @@ func pause(ctx context.Context, params map[string]any) (int, any, string) {
 	cmd := exec.Command(criu, append([]string{"dump", "-t", strconv.Itoa(t.Pid), "--images-dir", part}, criuArgs...)...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	log.Printf("checkpoint: pausing %s to %s", id, images)
-	sessions.Pausing(id, true)
+	servers.Pausing(id, true)
 	err := os.MkdirAll(part, 0o700)
 	if err == nil {
 		err = tasks.Exec(ctx, cmd)
@@ -87,7 +87,7 @@ func pause(ctx context.Context, params map[string]any) (int, any, string) {
 		err = os.Rename(part, images)
 	}
 	if err != nil {
-		sessions.Pausing(id, false)
+		servers.Pausing(id, false)
 		_ = os.RemoveAll(part)
 		return http.StatusInternalServerError, nil, err.Error()
 	}
@@ -102,7 +102,7 @@ func resume(_ context.Context, params map[string]any) (int, any, string) {
 	images := filepath.Join(install.Dir(), "checkpoints", id)
 	var r record
 	if data, err := os.ReadFile(filepath.Join(images, "snapshot")); err != nil || json.Unmarshal(data, &r) != nil {
-		return http.StatusNotFound, nil, "no snapshot " + id
+		return http.StatusNotFound, nil, "no checkpoint " + id
 	}
 	argv := append([]string{criu, "restore", "--images-dir", images}, criuArgs...)
 	for fd, name := range []string{r.Stdout, r.Stderr} {
@@ -110,8 +110,8 @@ func resume(_ context.Context, params map[string]any) (int, any, string) {
 			argv = append(argv, "--inherit-fd", fmt.Sprintf("fd[%d]:%s", fd+1, name))
 		}
 	}
-	created := sessions.Start(tasks.Task{Kind: sessions.Process, ID: id, Pid: r.Pid}, argv...)
-	ended, paused := sessions.Wait(created.ID)
+	created := servers.Start(tasks.Task{Kind: servers.Process, ID: id, Pid: r.Pid}, argv...)
+	ended, paused := servers.Wait(created.ID)
 	switch {
 	case paused:
 		return http.StatusAccepted, ended, ""
@@ -121,12 +121,12 @@ func resume(_ context.Context, params map[string]any) (int, any, string) {
 	return http.StatusOK, ended, ""
 }
 
-var Commands = map[string]router.Command{
+var Actions = map[string]router.Action{
 	"pause":  pause,
 	"resume": resume,
 }
 
-var Router = router.New("/checkpoint", map[string]router.Command{
-	"POST /pause":  Commands["pause"],
-	"POST /resume": Commands["resume"],
+var Router = router.New("/checkpoint", map[string]router.Action{
+	"POST /pause":  Actions["pause"],
+	"POST /resume": Actions["resume"],
 })

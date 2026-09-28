@@ -4,7 +4,7 @@
 // listener; or a Spawn or Child, a child process on the bound port or none, whose life Linkspan observes, so its end is
 // recorded and never fatal. Start is the one entry: it binds the address, if any, registers the task and runs it
 // on its own goroutine. A task stays listed after its work ends, as failed or exited, until Stop removes it;
-// StopAll cancels every task, waits for each and empties the registry. Nothing restarts. exec.go holds the fork.
+// StopAll cancels every task, waits for each and empties the registry. Nothing is rerun. exec.go holds the fork.
 //
 //	Kind         Declared by whoever starts the task.
 //	State*       Starting until the port accepts, then running; failed carries the error; exited is a nil return.

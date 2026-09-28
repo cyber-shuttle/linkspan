@@ -9,14 +9,14 @@
 //	setup                               Installs uv without touching shell profiles, then creates the environment
 //	                                    and installs the packages, idempotently, with Linkspan's stdio and uv's
 //	                                    paths under install.Dir. A workflow runs it on start to build ahead of the
-//	                                    first session.
-//	startSession                        Spawns a server for params.root_dir on params.addr, loopback at any port by
+//	                                    first server.
+//	startServer                         Spawns a server for params.root_dir on params.addr, loopback at any port by
 //	                                    default: sets the environment up and runs the server with params.token,
 //	                                    else the JUPYTER_TOKEN Linkspan inherited, else one it mints; an empty
 //	                                    root_dir is Linkspan's own directory.
-//	Commands                            setup and sessions.start, with sessions.select and sessions.stop from
-//	                                    sessions; shapes are frozen by docs/COMPATIBILITY.md.
-//	Router                              /jupyter/setup and /jupyter/sessions, each route a Commands entry.
+//	Actions                             setup and sessions.start, with sessions.select and sessions.stop from
+//	                                    servers; shapes are frozen by docs/COMPATIBILITY.md.
+//	Router                              /jupyter/setup and /jupyter/sessions, each route an Actions entry.
 package jupyter
 
 import (
@@ -35,7 +35,7 @@ import (
 
 	"github.com/cyber-shuttle/linkspan/internal/install"
 	"github.com/cyber-shuttle/linkspan/internal/router"
-	"github.com/cyber-shuttle/linkspan/internal/sessions"
+	"github.com/cyber-shuttle/linkspan/internal/servers"
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
 )
 
@@ -79,12 +79,12 @@ func setup(ctx context.Context, _ map[string]any) (int, any, string) {
 	return http.StatusOK, nil, ""
 }
 
-func startSession(_ context.Context, params map[string]any) (int, any, string) {
+func startServer(_ context.Context, params map[string]any) (int, any, string) {
 	rootDir, _ := params["root_dir"].(string)
 	addr, _ := params["addr"].(string)
 	token, _ := params["token"].(string)
 	token = cmp.Or(token, os.Getenv("JUPYTER_TOKEN"), newToken())
-	created, err := (&tasks.Task{ID: sessions.Ref(params), Kind: kind, Addr: addr, Attrs: func(tasks.Task) map[string]string {
+	created, err := (&tasks.Task{ID: servers.Ref(params), Kind: kind, Addr: addr, Attrs: func(tasks.Task) map[string]string {
 		return map[string]string{"root_dir": rootDir, "token": token}
 	}, Spawn: func(ctx context.Context, port int) (*exec.Cmd, error) {
 		if status, _, msg := setup(ctx, nil); status != http.StatusOK {
@@ -103,16 +103,16 @@ func startSession(_ context.Context, params map[string]any) (int, any, string) {
 	return http.StatusCreated, created, ""
 }
 
-var Commands = map[string]router.Command{
+var Actions = map[string]router.Action{
 	"setup":           setup,
-	"sessions.select": sessions.Select(kind),
-	"sessions.start":  startSession,
-	"sessions.stop":   sessions.Stop,
+	"sessions.select": servers.Select(kind),
+	"sessions.start":  startServer,
+	"sessions.stop":   servers.Stop,
 }
 
-var Router = router.New("/jupyter", map[string]router.Command{
-	"POST /setup":           Commands["setup"],
-	"GET /sessions":         Commands["sessions.select"],
-	"POST /sessions":        Commands["sessions.start"],
-	"DELETE /sessions/{id}": Commands["sessions.stop"],
+var Router = router.New("/jupyter", map[string]router.Action{
+	"POST /setup":           Actions["setup"],
+	"GET /sessions":         Actions["sessions.select"],
+	"POST /sessions":        Actions["sessions.start"],
+	"DELETE /sessions/{id}": Actions["sessions.stop"],
 })

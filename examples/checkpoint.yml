@@ -1,12 +1,12 @@
-# A workflow that runs a payload as a process session, pauses it to a snapshot ahead of the time limit and shuts
+# A workflow that runs a payload as a process, pauses it to a checkpoint ahead of the walltime and shuts
 # Linkspan down once it ends. Linux, with criu on PATH and the kernel letting it run unprivileged:
 #
 #   ./linkspan --port 8080 --workflow examples/checkpoint.yml
 #
 # start: the payload counts on stdout; when it ends, so does the job.
-# SIGUSR1: kill -USR1 <pid>, as sbatch --signal=USR1@60 would: the tree is written to a snapshot under
+# SIGUSR1: kill -USR1 <pid>, as sbatch --signal=USR1@60 would: the tree is written to a checkpoint under
 #          ~/.cybershuttle/checkpoints/payload, its step ends with no more start steps, and the job ends.
-#          examples/restore.yml resumes it from that snapshot.
+#          examples/restore.yml resumes it from that checkpoint.
 name: checkpoint
 tasks:
   - on: start
@@ -18,7 +18,7 @@ tasks:
           command: for i in $(seq 1 30); do echo $i; sleep 1; done
   - on: SIGUSR1
     steps:
-      - name: Pause before the time limit
+      - name: Pause before the walltime
         action: checkpoint.pause
         params:
           id: payload

@@ -1,13 +1,13 @@
-// Package devtunnel hosts the Dev Tunnel a client created, by running the devtunnel CLI, the relay, as a task. The
-// client declares the control port on the tunnel, so the relay carries only the API and every server is reached
-// through /api/v1/forward. A relay that dies returns its output, and the tunnel package reruns it. The host token is read from
-// LINKSPAN_TUNNEL_HOST_TOKEN so it never shows on Linkspan's command line.
+// Package devtunnel hosts the Dev Tunnel whoever started Linkspan made, by running the devtunnel CLI's host process as
+// a task. They declare the control port on the Dev Tunnel, so the host process carries only the API and every server
+// is reached through /api/v1/forward. A host process that dies returns its output, and the tunnel package reruns it.
+// The host token is read from LINKSPAN_TUNNEL_HOST_TOKEN so it never shows on Linkspan's command line.
 //
-//	output  The last 64KB of the relay's stdout and stderr.
+//	output  The last 64KB of the host process's stdout and stderr.
 //	Tunnel
 //	assets, cliBase
 //	Write, String
-//	Relay   The task main starts: fetches the CLI on first use, then runs the relay until it exits or is
+//	Host    The task main starts: fetches the CLI on first use, then runs the host process until it exits or is
 //	        cancelled, and returns with the captured output.
 //	New     Parses the args value and validates it with the token, so main refuses them before binding.
 package devtunnel
@@ -32,7 +32,7 @@ import (
 
 const (
 	Env   = "LINKSPAN_TUNNEL_HOST_TOKEN"
-	Usage = "devtunnel mode `args`: \"--id <tunnel id> --cluster <cluster id>\"; host token in " + Env
+	Usage = "devtunnel transport `args`: \"--id <Dev Tunnel id> --cluster <Dev Tunnels region>\"; host token in " + Env
 )
 
 type output struct {
@@ -69,7 +69,7 @@ func (o *output) String() string {
 	return o.buf.String()
 }
 
-func (t *Tunnel) Relay(ctx context.Context) error {
+func (t *Tunnel) Host(ctx context.Context) error {
 	asset, err := install.Asset(assets, "devtunnel")
 	if err != nil {
 		return err
@@ -79,7 +79,7 @@ func (t *Tunnel) Relay(ctx context.Context) error {
 		return err
 	}
 	qualifiedID := t.id + "." + t.cluster
-	log.Printf("tunnel: running %s host %s --access-token [redacted]", bin, qualifiedID)
+	log.Printf("devtunnel: running %s host %s --access-token [redacted]", bin, qualifiedID)
 	out := &output{}
 	cmd := exec.Command(bin, "host", qualifiedID, "--access-token", t.token)
 	cmd.Stdout, cmd.Stderr = out, out
@@ -87,7 +87,7 @@ func (t *Tunnel) Relay(ctx context.Context) error {
 	if err == nil {
 		err = errors.New("exit status 0")
 	}
-	return fmt.Errorf("relay exited (output=%q): %w", out, err)
+	return fmt.Errorf("host process exited (output=%q): %w", out, err)
 }
 
 func New(args string) (func(context.Context) error, error) {
@@ -98,7 +98,7 @@ func New(args string) (func(context.Context) error, error) {
 		return nil, errors.New("--tunnel-devtunnel-args needs only --id and --cluster")
 	}
 	if token == "" {
-		return nil, errors.New(Env + " is required with the devtunnel mode")
+		return nil, errors.New(Env + " is required with the devtunnel transport")
 	}
-	return (&Tunnel{id: *id, cluster: *cluster, token: token}).Relay, nil
+	return (&Tunnel{id: *id, cluster: *cluster, token: token}).Host, nil
 }
