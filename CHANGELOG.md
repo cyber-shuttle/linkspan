@@ -5,7 +5,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
-The next release is 0.22.0.
+## [0.22.0] - 2026-09-28
 
 ### Added
 
@@ -604,7 +604,8 @@ No change. The tag points at the same commit as 0.14.8.
   tunnel routes, and opens a dev tunnel at startup unless `--tunnel-enable=false`.
 - GoReleaser archives for Linux, macOS and Windows.
 
-[Unreleased]: https://github.com/cyber-shuttle/linkspan/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/cyber-shuttle/linkspan/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/cyber-shuttle/linkspan/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/cyber-shuttle/linkspan/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/cyber-shuttle/linkspan/compare/v0.19.2...v0.20.0
 [0.19.2]: https://github.com/cyber-shuttle/linkspan/compare/v0.19.1...v0.19.2
