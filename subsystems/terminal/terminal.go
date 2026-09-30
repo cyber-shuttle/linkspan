@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 
 	"github.com/cyber-shuttle/linkspan/internal/install"
@@ -43,11 +42,11 @@ func startServer(_ context.Context, params map[string]any) (int, any, string) {
 	if err != nil {
 		return http.StatusNotImplemented, nil, err.Error()
 	}
-	cwd, _ := params["cwd"].(string)
-	created, err := (&tasks.Task{ID: servers.Ref(params), Kind: kind, Attrs: func(tasks.Task) map[string]string {
+	cwd := router.Str(params, "cwd")
+	return servers.Serve(&tasks.Task{ID: router.Str(params, "ref"), Kind: kind, Attrs: func(tasks.Task) map[string]string {
 		return map[string]string{"cwd": cwd}
 	}, Spawn: func(ctx context.Context, port int) (*exec.Cmd, error) {
-		bin := filepath.Join(install.Dir(), "bin", "ttyd")
+		bin := install.Bin("ttyd")
 		if err := install.Fetch(ctx, bin, ttydBase+ttydVersion+"/"+asset); err != nil {
 			return nil, err
 		}
@@ -55,11 +54,7 @@ func startServer(_ context.Context, params map[string]any) (int, any, string) {
 		cmd.Dir = cwd
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		return cmd, nil
-	}}).Start()
-	if err != nil {
-		return http.StatusInternalServerError, nil, err.Error()
-	}
-	return http.StatusCreated, created, ""
+	}})
 }
 
 var Actions = map[string]router.Action{

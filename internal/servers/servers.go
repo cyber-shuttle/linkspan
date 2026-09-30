@@ -4,13 +4,14 @@
 //
 //	Process   The kind of a plain process: a shell.exec command, or a resumed one.
 //	pausing   The processes a pause is ending, so the end is not a failure to whoever waits.
-//	Ref       The id a request names for what it creates.
 //	Select    The list action of one kind, ordered by id, [] when none.
 //	Start     Runs argv as the given task, its id defaulting to the kind's initial and the time; a repeated id
 //	          replaces the earlier process. It cannot fail, since a process binds no address.
 //	Stop      Answers 404 for an id the registry does not hold, else the id with state stopped.
 //	Pausing   Whether a pause is about to end the process.
 //	Wait      Blocks until the process ends and is unlisted, and says whether a pause ended it.
+//	Run       Starts argv and answers once it ends: 202 when a pause ended it, 500 when it failed, else 200.
+//	Serve     Starts a server task and answers 201 with it, or 500.
 package servers
 
 import (
@@ -32,11 +33,6 @@ const Process tasks.Kind = "process"
 
 var pausing sync.Map
 
-func Ref(params map[string]any) string {
-	ref, _ := params["ref"].(string)
-	return ref
-}
-
 func Select(kind tasks.Kind) router.Action {
 	return func(context.Context, map[string]any) (int, any, string) {
 		return http.StatusOK, tasks.Select(kind), ""
@@ -56,7 +52,7 @@ func Start(t tasks.Task, argv ...string) tasks.Task {
 }
 
 func Stop(_ context.Context, params map[string]any) (int, any, string) {
-	id, _ := params["id"].(string)
+	id := router.Str(params, "id")
 	if !tasks.Stop(id) {
 		return http.StatusNotFound, nil, "unknown id " + id
 	}
@@ -75,4 +71,23 @@ func Wait(id string) (tasks.Task, bool) {
 	ended := tasks.Wait(id)
 	_, paused := pausing.LoadAndDelete(id)
 	return ended, paused
+}
+
+func Run(t tasks.Task, argv ...string) (int, any, string) {
+	ended, paused := Wait(Start(t, argv...).ID)
+	switch {
+	case paused:
+		return http.StatusAccepted, ended, ""
+	case ended.State != tasks.StateExited:
+		return http.StatusInternalServerError, nil, ended.Error
+	}
+	return http.StatusOK, ended, ""
+}
+
+func Serve(t *tasks.Task) (int, any, string) {
+	created, err := t.Start()
+	if err != nil {
+		return http.StatusInternalServerError, nil, err.Error()
+	}
+	return http.StatusCreated, created, ""
 }

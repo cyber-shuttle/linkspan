@@ -120,7 +120,7 @@ func TestJobEndsAfterReady(t *testing.T) {
 	signal.Notify(got, syscall.SIGTERM)
 	defer signal.Stop(got)
 	serve := func(_ context.Context, params map[string]any) (int, any, string) {
-		return http.StatusCreated, servers.Start(tasks.Task{Kind: "jupyter", ID: servers.Ref(params)}, "sleep", "30"), ""
+		return http.StatusCreated, servers.Start(tasks.Task{Kind: "jupyter", ID: router.Str(params, "ref")}, "sleep", "30"), ""
 	}
 	doc := "name: t\ntasks:\n  - steps: [{action: shell.exec, params: {command: \"true\"}}]\n  - {on: ready, steps: [{ref: j, action: jupyter.sessions.start}]}\n"
 	if err := loadDoc(t, doc, map[string]router.Action{"shell.exec": exec, "jupyter.sessions.start": serve}); err != nil {

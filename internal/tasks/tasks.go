@@ -39,6 +39,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"maps"
 	"net"
 	"os"
@@ -154,6 +155,7 @@ func (t *Task) Start() (Task, error) {
 		_, port, _ := net.SplitHostPort(ln.Addr().String())
 		t.ln, t.Addr = ln, ln.Addr().String()
 		t.ID = cmp.Or(t.ID, fmt.Sprintf("%c-%s", t.Kind[0], cmp.Or(port, t.Addr)))
+		log.Printf("%s: listening on %s", t.Kind, t.Addr)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.ID, t.State, t.cancel, t.done = cmp.Or(t.ID, string(t.Kind)), cmp.Or(t.State, StateRunning), cancel, make(chan struct{})

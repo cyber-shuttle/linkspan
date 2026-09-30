@@ -17,7 +17,7 @@ import (
 func notImplemented(name string, params ...string) router.Action {
 	return func(_ context.Context, given map[string]any) (int, any, string) {
 		for _, p := range params {
-			if v, _ := given[p].(string); v == "" {
+			if router.Str(given, p) == "" {
 				return http.StatusBadRequest, nil, p + " is required"
 			}
 		}

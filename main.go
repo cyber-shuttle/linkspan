@@ -133,12 +133,8 @@ func startAll(opts *options) error {
 		all = append(all, &tasks.Task{Kind: "workflow", Run: workflow.Start()})
 	}
 	for _, t := range all {
-		created, err := t.Start()
-		if err != nil {
+		if _, err := t.Start(); err != nil {
 			return err
-		}
-		if t.Kind == "http" {
-			log.Printf("api: listening on %s", created.Addr)
 		}
 	}
 	return nil
