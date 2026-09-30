@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/cyber-shuttle/linkspan/internal/router"
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
 	"github.com/gorilla/websocket"
 )
@@ -54,7 +55,7 @@ func Stream(w http.ResponseWriter, r *http.Request) {
 	port, _ := strconv.Atoi(r.PathValue("port"))
 	server := Dial(port)
 	if server == nil {
-		http.Error(w, `{"error":"no running server on that port"}`, http.StatusNotFound)
+		router.Error(w, http.StatusNotFound, "no running server on that port")
 		return
 	}
 	client, err := upgrader.Upgrade(w, r, nil)

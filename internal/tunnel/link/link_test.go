@@ -50,8 +50,7 @@ func TestLinkMultiplexesStreamsOverOneSocket(t *testing.T) {
 	}))
 	defer plane.Close()
 
-	t.Setenv(Env, "secret")
-	run, err := New("--url ws" + strings.TrimPrefix(plane.URL, "http"))
+	run, err := New("--url ws"+strings.TrimPrefix(plane.URL, "http"), "secret")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,6 +4,7 @@
 // owns the wire shape, and the server is internal/sshd.
 //
 //	kind            The SSH kind, so ids are s-<port>.
+//	startMu         Concurrent starts of one ref keep one server.
 //	startServer     Serves one sshd server for params.authorized_key under tasks; the port accepts before it
 //	                answers. A key carrying authorized_keys options is refused, since the server would ignore them. A
 //	                ref already serving is answered 200 as it is, so a client that names its key keeps one server.
@@ -13,8 +14,8 @@ package vscode
 
 import (
 	"context"
-	"log"
 	"net/http"
+	"sync"
 
 	"github.com/cyber-shuttle/linkspan/internal/router"
 	"github.com/cyber-shuttle/linkspan/internal/servers"
@@ -25,16 +26,19 @@ import (
 
 const kind tasks.Kind = "sshd"
 
+var startMu sync.Mutex
+
 func startServer(_ context.Context, params map[string]any) (int, any, string) {
-	authorizedKey, _ := params["authorized_key"].(string)
-	key, _, options, _, err := gossh.ParseAuthorizedKey([]byte(authorizedKey))
+	key, _, options, _, err := gossh.ParseAuthorizedKey([]byte(router.Str(params, "authorized_key")))
 	if err != nil {
 		return http.StatusBadRequest, nil, "authorized_key is missing or invalid"
 	}
 	if len(options) > 0 {
 		return http.StatusBadRequest, nil, "authorized_key options are not supported"
 	}
-	ref := servers.Ref(params)
+	ref := router.Str(params, "ref")
+	startMu.Lock()
+	defer startMu.Unlock()
 	for _, running := range tasks.Select(kind) {
 		if running.ID == ref && running.State == tasks.StateRunning {
 			return http.StatusOK, map[string]any{"id": running.ID, "bind_port": running.Port()}, ""
@@ -44,7 +48,6 @@ func startServer(_ context.Context, params map[string]any) (int, any, string) {
 	if err != nil {
 		return http.StatusInternalServerError, nil, err.Error()
 	}
-	log.Printf("vscode: listening on %s", created.Addr)
 	return http.StatusCreated, map[string]any{"id": created.ID, "bind_port": created.Port()}, ""
 }
 

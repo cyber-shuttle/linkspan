@@ -1,7 +1,7 @@
 // Package devtunnel hosts the Dev Tunnel whoever started Linkspan made, by running the devtunnel CLI's host process as
 // a task. They declare the control port on the Dev Tunnel, so the host process carries only the API and every server
 // is reached through /api/v1/forward. A host process that dies returns its output, and the tunnel package reruns it.
-// The host token is read from LINKSPAN_TUNNEL_HOST_TOKEN so it never shows on Linkspan's command line.
+// The host token comes from LINKSPAN_TUNNEL_HOST_TOKEN so it never shows on Linkspan's command line.
 //
 //	output  The last 64KB of the host process's stdout and stderr.
 //	Tunnel
@@ -9,7 +9,7 @@
 //	Write, String
 //	Host    The task main starts: fetches the CLI on first use, then runs the host process until it exits or is
 //	        cancelled, and returns with the captured output.
-//	New     Parses the args value and validates it with the token, so main refuses them before binding.
+//	New     Parses the args value, so main refuses them before binding.
 package devtunnel
 
 import (
@@ -20,9 +20,7 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -74,7 +72,7 @@ func (t *Tunnel) Host(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	bin := filepath.Join(install.Dir(), "bin", "devtunnel")
+	bin := install.Bin("devtunnel")
 	if err := install.Fetch(ctx, bin, cliBase+asset+"-devtunnel"); err != nil {
 		return err
 	}
@@ -90,15 +88,12 @@ func (t *Tunnel) Host(ctx context.Context) error {
 	return fmt.Errorf("host process exited (output=%q): %w", out, err)
 }
 
-func New(args string) (func(context.Context) error, error) {
+func New(args, token string) (func(context.Context) error, error) {
 	fs := flag.NewFlagSet("devtunnel", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	id, cluster, token := fs.String("id", "", ""), fs.String("cluster", "", ""), os.Getenv(Env)
+	id, cluster := fs.String("id", "", ""), fs.String("cluster", "", "")
 	if err := fs.Parse(strings.Fields(args)); err != nil || fs.NArg() > 0 || *id == "" || *cluster == "" {
 		return nil, errors.New("--tunnel-devtunnel-args needs only --id and --cluster")
-	}
-	if token == "" {
-		return nil, errors.New(Env + " is required with the devtunnel transport")
 	}
 	return (&Tunnel{id: *id, cluster: *cluster, token: token}).Host, nil
 }

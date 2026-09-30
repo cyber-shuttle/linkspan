@@ -66,19 +66,11 @@ type Trigger struct {
 var loaded []Trigger
 
 func exec(_ context.Context, params map[string]any) (int, any, string) {
-	command, _ := params["command"].(string)
+	command := router.Str(params, "command")
 	if strings.TrimSpace(command) == "" {
 		return http.StatusBadRequest, nil, "command is required"
 	}
-	created := servers.Start(tasks.Task{Kind: servers.Process, ID: servers.Ref(params)}, "sh", "-c", command)
-	ended, paused := servers.Wait(created.ID)
-	switch {
-	case paused:
-		return http.StatusAccepted, ended, ""
-	case ended.State != tasks.StateExited:
-		return http.StatusInternalServerError, nil, ended.Error
-	}
-	return http.StatusOK, ended, ""
+	return servers.Run(tasks.Task{Kind: servers.Process, ID: router.Str(params, "ref")}, "sh", "-c", command)
 }
 
 func Run(ctx context.Context, moment string) error {

@@ -6,12 +6,15 @@
 //
 //	Action   Returns a status, a body and an error message.
 //	Router   Routes is held keyed by "METHOD path" behind Prefix.
-//	respond  The one reader and writer: the body decoded as the params, an absent one being none, an oversize one
-//	         refused with 413 and any other failure with 400; a non-empty message becomes the error shape.
+//	write    The one writer; a non-empty message becomes the error shape.
+//	respond  The one reader: the body decoded as the params, an absent one being none, an oversize one refused with
+//	         413 and any other failure with 400.
 //	add      The one writer of Routes.
 //	New      A router at prefix serving the routes given relative to it, the pointer Mount chains on.
 //	Mount    Returns the router, so a tree is one expression.
 //	Handler  The table as a ServeMux with bodies capped at 64KB.
+//	Error    The error shape for a route outside the table.
+//	Str      A string param, "" when absent.
 package router
 
 import (
@@ -28,6 +31,15 @@ type Action func(ctx context.Context, params map[string]any) (status int, body a
 type Router struct {
 	Prefix string
 	Routes map[string]Action
+}
+
+func write(w http.ResponseWriter, status int, body any, errMsg string) {
+	if errMsg != "" {
+		body = map[string]string{"error": errMsg}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 func respond(c Action) http.HandlerFunc {
@@ -50,12 +62,7 @@ func respond(c Action) http.HandlerFunc {
 			}
 			status, body, errMsg = c(r.Context(), params)
 		}
-		if errMsg != "" {
-			body = map[string]string{"error": errMsg}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(body)
+		write(w, status, body, errMsg)
 	}
 }
 
@@ -81,4 +88,11 @@ func (r *Router) Handler() http.Handler {
 		m.HandleFunc(pattern, respond(c))
 	}
 	return http.MaxBytesHandler(m, 64<<10)
+}
+
+func Error(w http.ResponseWriter, status int, errMsg string) { write(w, status, nil, errMsg) }
+
+func Str(params map[string]any, key string) string {
+	s, _ := params[key].(string)
+	return s
 }

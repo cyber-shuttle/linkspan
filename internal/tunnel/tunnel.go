@@ -1,14 +1,13 @@
 // Package tunnel carries the API off the node over the transports --tunnel-mode lists. Each transport is a package of
-// its own that parses its --tunnel-<transport>-args value and reads its credential from the environment; this package
-// only frames them, so it knows each transport by name and nothing of its flags. Parse validates everything before
-// main binds anything.
+// its own that parses its --tunnel-<transport>-args value; this package frames them and reads each credential from
+// the environment, knowing nothing of their flags. Parse validates everything before main binds anything.
 //
 //	Transport
 //	Transports  Each transport by name; main registers --tunnel-<name>-args with its Usage.
 //	redial      Reruns a transport's attempt until cancelled, backing off from 1s to 1m, reset once an attempt lasts a
 //	            minute, so one transport failing never ends Linkspan or another transport.
-//	Parse       One task per listed transport, kinded by its name; a listed transport without args, or args of an
-//	            unlisted one, is refused.
+//	Parse       One task per listed transport, kinded by its name; a listed transport without args or its credential,
+//	            or args of an unlisted one, is refused.
 package tunnel
 
 import (
@@ -17,6 +16,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -28,12 +28,13 @@ import (
 
 type Transport struct {
 	Usage string
-	start func(args string) (func(context.Context) error, error)
+	env   string
+	start func(args, token string) (func(context.Context) error, error)
 }
 
 var Transports = map[string]Transport{
-	"link":      {link.Usage, link.New},
-	"devtunnel": {devtunnel.Usage, devtunnel.New},
+	"link":      {link.Usage, link.Env, link.New},
+	"devtunnel": {devtunnel.Usage, devtunnel.Env, devtunnel.New},
 }
 
 func redial(name string, attempt func(context.Context) error) func(context.Context) error {
@@ -74,7 +75,12 @@ func Parse(enable bool, list string, args map[string]string) ([]*tasks.Task, err
 		if !listed[name] {
 			continue
 		}
-		run, err := Transports[name].start(args[name])
+		t := Transports[name]
+		token := os.Getenv(t.env)
+		if token == "" {
+			return nil, fmt.Errorf("%s is required with the %s transport", t.env, name)
+		}
+		run, err := t.start(args[name], token)
 		if err != nil {
 			return nil, err
 		}

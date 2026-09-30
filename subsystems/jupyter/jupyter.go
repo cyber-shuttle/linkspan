@@ -6,6 +6,7 @@
 //	kind
 //	newToken
 //	setupMu                             Two uv runs on one environment race.
+//	envDir
 //	setup                               Installs uv without touching shell profiles, then creates the environment
 //	                                    and installs the packages, idempotently, with Linkspan's stdio and uv's
 //	                                    paths under install.Dir. A workflow runs it on start to build ahead of the
@@ -49,11 +50,13 @@ func newToken() string {
 
 var setupMu sync.Mutex
 
+func envDir() string { return filepath.Join(install.Dir(), "jupyter-env") }
+
 func setup(ctx context.Context, _ map[string]any) (int, any, string) {
 	setupMu.Lock()
 	defer setupMu.Unlock()
 	root := install.Dir()
-	uv, env := filepath.Join(root, "bin", "uv"), filepath.Join(root, "jupyter-env")
+	uv, env := install.Bin("uv"), envDir()
 	steps := []struct {
 		name string
 		argv []string
@@ -80,27 +83,21 @@ func setup(ctx context.Context, _ map[string]any) (int, any, string) {
 }
 
 func startServer(_ context.Context, params map[string]any) (int, any, string) {
-	rootDir, _ := params["root_dir"].(string)
-	addr, _ := params["addr"].(string)
-	token, _ := params["token"].(string)
-	token = cmp.Or(token, os.Getenv("JUPYTER_TOKEN"), newToken())
-	created, err := (&tasks.Task{ID: servers.Ref(params), Kind: kind, Addr: addr, Attrs: func(tasks.Task) map[string]string {
+	rootDir := router.Str(params, "root_dir")
+	token := cmp.Or(router.Str(params, "token"), os.Getenv("JUPYTER_TOKEN"), newToken())
+	return servers.Serve(&tasks.Task{ID: router.Str(params, "ref"), Kind: kind, Addr: router.Str(params, "addr"), Attrs: func(tasks.Task) map[string]string {
 		return map[string]string{"root_dir": rootDir, "token": token}
 	}, Spawn: func(ctx context.Context, port int) (*exec.Cmd, error) {
 		if status, _, msg := setup(ctx, nil); status != http.StatusOK {
 			return nil, errors.New(msg)
 		}
-		cmd := exec.Command(filepath.Join(install.Dir(), "jupyter-env", "bin", "python"), "-m", "jupyter_server",
+		cmd := exec.Command(filepath.Join(envDir(), "bin", "python"), "-m", "jupyter_server",
 			"--no-browser", "--ip=127.0.0.1", "--port="+strconv.Itoa(port), "--port-retries=0", "--ServerApp.allow_origin=*", "--ContentsManager.allow_hidden=True")
 		cmd.Dir = rootDir
 		cmd.Env = append(os.Environ(), "JUPYTER_TOKEN="+token)
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		return cmd, nil
-	}}).Start()
-	if err != nil {
-		return http.StatusInternalServerError, nil, err.Error()
-	}
-	return http.StatusCreated, created, ""
+	}})
 }
 
 var Actions = map[string]router.Action{

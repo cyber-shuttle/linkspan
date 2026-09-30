@@ -9,6 +9,7 @@
 //	          flag needs CRIU 3.18.
 //	record    What a resume needs beside the images: the tree's pid, and the names of the stdout and stderr CRIU
 //	          dumped, so it hands the tree this job's in their stead.
+//	imagesDir
 //	pause     Dumps the running process id into a .part folder, so a failed dump leaves the earlier checkpoint,
 //	          and the process ends with it.
 //	resume    Runs criu as the process, its pid the tree's, and like shell.exec answers once it ends: 202 when
@@ -51,8 +52,10 @@ type record struct {
 	Stderr string `json:"stderr"`
 }
 
+func imagesDir(id string) string { return filepath.Join(install.Dir(), "checkpoints", id) }
+
 func pause(ctx context.Context, params map[string]any) (int, any, string) {
-	id, _ := params["id"].(string)
+	id := router.Str(params, "id")
 	if criu == "" {
 		return http.StatusNotImplemented, nil, "criu is not on PATH"
 	}
@@ -68,7 +71,7 @@ func pause(ctx context.Context, params map[string]any) (int, any, string) {
 		*name = strings.TrimPrefix(target, "/")
 	}
 	r.Pid = t.Pid
-	images := filepath.Join(install.Dir(), "checkpoints", id)
+	images := imagesDir(id)
 	part := images + ".part"
 	cmd := exec.Command(criu, append([]string{"dump", "-t", strconv.Itoa(t.Pid), "--images-dir", part}, criuArgs...)...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
@@ -95,11 +98,11 @@ func pause(ctx context.Context, params map[string]any) (int, any, string) {
 }
 
 func resume(_ context.Context, params map[string]any) (int, any, string) {
-	id, _ := params["id"].(string)
+	id := router.Str(params, "id")
 	if criu == "" {
 		return http.StatusNotImplemented, nil, "criu is not on PATH"
 	}
-	images := filepath.Join(install.Dir(), "checkpoints", id)
+	images := imagesDir(id)
 	var r record
 	if data, err := os.ReadFile(filepath.Join(images, "snapshot")); err != nil || json.Unmarshal(data, &r) != nil {
 		return http.StatusNotFound, nil, "no checkpoint " + id
@@ -110,15 +113,7 @@ func resume(_ context.Context, params map[string]any) (int, any, string) {
 			argv = append(argv, "--inherit-fd", fmt.Sprintf("fd[%d]:%s", fd+1, name))
 		}
 	}
-	created := servers.Start(tasks.Task{Kind: servers.Process, ID: id, Pid: r.Pid}, argv...)
-	ended, paused := servers.Wait(created.ID)
-	switch {
-	case paused:
-		return http.StatusAccepted, ended, ""
-	case ended.State != tasks.StateExited:
-		return http.StatusInternalServerError, nil, ended.Error
-	}
-	return http.StatusOK, ended, ""
+	return servers.Run(tasks.Task{Kind: servers.Process, ID: id, Pid: r.Pid}, argv...)
 }
 
 var Actions = map[string]router.Action{

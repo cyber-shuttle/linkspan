@@ -3,6 +3,7 @@
 //
 //	Asset  The entry of a GOOS/GOARCH-keyed table for this platform, or an error naming what has no build for it.
 //	Dir    ~/.cybershuttle.
+//	Bin
 //	Fetch  Does nothing when dst is present; otherwise downloads src through a sibling file renamed into place, so a
 //	       failed transfer publishes nothing.
 //	Which  The path of a binary the user installed, found on PATH, or "".
@@ -32,6 +33,8 @@ func Dir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".cybershuttle")
 }
+
+func Bin(name string) string { return filepath.Join(Dir(), "bin", name) }
 
 func Fetch(ctx context.Context, dst, src string) error {
 	if _, err := os.Stat(dst); err == nil {

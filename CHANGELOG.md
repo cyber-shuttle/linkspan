@@ -5,6 +5,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Every bound server logs `<kind>: listening on <address>`; the API and VS Code sshd lines read `http:` and `sshd:`,
+  not `api:` and `vscode:`.
+
+### Fixed
+
+- Concurrent `POST /api/v1/vscode/sessions` with one `ref` no longer replace the server the first answered with.
+- `GET /api/v1/forward/{port}` answers its 404 as JSON, like every other route.
+
 ## [0.22.0] - 2026-09-28
 
 ### Added

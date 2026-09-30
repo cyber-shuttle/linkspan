@@ -27,7 +27,7 @@ its routes keep the `/sessions` path.
 | Archive | `linkspan_Linux_${arch}.tar.gz` holding the member `linkspan`; cs-plane curls and untars it by those names. |
 | Link | One WebSocket offering subprotocols `cybershuttle.v1` and `link.<token>`, carrying yamux in binary frames, cs-plane the yamux client. Per stream cs-plane writes a port as two big-endian bytes; Linkspan answers `1` if it connected to that port, else `0`, then carries bytes until either end closes. yamux's keepalive detects a dead link and Linkspan redials. |
 | Response bodies | As in the README's [HTTP API](../README.md#http-api), field names included: `/usage` camelCase, `/sessions` snake_case. `/usage` is an object. |
-| `POST /vscode/sessions` | `201` with `bind_port` already accepting; a `ref` already serving answers `200` with the same server, so cs-plane names each key's server `ssh-<key hash>` and keeps one per key. |
+| `POST /vscode/sessions` | `201` with `bind_port` already accepting; a `ref` already serving answers `200` with the same server, so cs-plane and cs-bridge name each key's server `ssh-<key hash>` and keep one per key. |
 | Workflow document | `tasks`, each a trigger with `on` and `steps`. cs-plane ships one `start` trigger whose one step is `jupyter.sessions.start` with `root_dir` and `addr`, the port it derived ahead, and the token from `JUPYTER_TOKEN`. The job lives as long as that server. |
 | Jupyter token | The object's `token` field, passed to the server as `JUPYTER_TOKEN`, which every Jupyter Server release honors. |
 | Dev Tunnel | Linkspan only hosts the Dev Tunnel and publishes no port, so `LINKSPAN_TUNNEL_HOST_TOKEN` needs only the `host` scope. cs-plane declares only the control port and reaches every other port through `/forward`. |

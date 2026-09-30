@@ -2,13 +2,13 @@
 // WebSocket out to its --url and holds it until it ends, and yamux multiplexes every stream over it with its
 // own keepalive. For each stream cs-plane opens, Linkspan reads a two-byte port, answers one byte, 1 carried or 0
 // refused, and joins the stream to that port through forward.Dial, so only a port a running task serves is reached;
-// closing either end closes both. The socket offers cybershuttle.v1 and link.<token>, the token read from
+// closing either end closes both. The socket offers cybershuttle.v1 and link.<token>, the token from
 // LINKSPAN_LINK_TOKEN so it never shows on a command line.
 //
 //	Link
 //	carry
 //	Run    One socket as yamux's transport, accepting streams until it or its context ends.
-//	New    Parses the args value and validates the URL and token, so main refuses them before binding.
+//	New    Parses the args value and validates the URL, so main refuses them before binding.
 package link
 
 import (
@@ -19,7 +19,6 @@ import (
 	"io"
 	"net"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -76,17 +75,14 @@ func (l *Link) Run(ctx context.Context) error {
 	}
 }
 
-func New(args string) (func(context.Context) error, error) {
+func New(args, token string) (func(context.Context) error, error) {
 	fs := flag.NewFlagSet("link", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	rawURL, token := fs.String("url", "", ""), os.Getenv(Env)
+	rawURL := fs.String("url", "", "")
 	perr := fs.Parse(strings.Fields(args))
 	u, err := url.Parse(*rawURL)
 	if perr != nil || fs.NArg() > 0 || err != nil || u.Host == "" || u.Scheme != "ws" && u.Scheme != "wss" {
 		return nil, errors.New("--tunnel-link-args needs only --url, a ws or wss URL")
-	}
-	if token == "" {
-		return nil, errors.New(Env + " is required with the link transport")
 	}
 	return (&Link{url: *rawURL, dialer: websocket.Dialer{HandshakeTimeout: 30 * time.Second, Subprotocols: []string{protocol, "link." + token}}}).Run, nil
 }
