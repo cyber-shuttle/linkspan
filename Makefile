@@ -2,7 +2,7 @@ MODULE := github.com/cyber-shuttle/linkspan
 BIN    := bin
 
 # Pinned so a local run and a CI run report the same thing.
-GOLANGCI := v2.13.2
+GOLANGCI := v2.15.0
 GOVULN   := v1.8.0
 
 # A release tag is X.Y.Z; a build ahead of one is X.Y.Z.<commit>, a distinct newer version.
