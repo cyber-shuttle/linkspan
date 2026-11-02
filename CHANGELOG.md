@@ -5,6 +5,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Builds with Go 1.27.3.
+
 ## [0.22.1] - 2026-09-30
 
 ### Changed
