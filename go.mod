@@ -5,6 +5,7 @@ go 1.27.0
 toolchain go1.27.3
 
 require (
+	github.com/ebitengine/purego v0.11.2
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/gorilla/websocket v1.5.3
 	github.com/hashicorp/yamux v0.1.2
