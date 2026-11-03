@@ -104,8 +104,8 @@ func TestGPUs(t *testing.T) {
 		if *source != c.want || opens != c.opens {
 			t.Fatalf("sample %d: source %s after %d opens, want %s after %d", i, *source, opens, c.want, c.opens)
 		}
-		has(t, entries, map[string]string{"dcgm": `[{"index":0,"name":"NVIDIA B200","tensorActive":0.58,"uuid":"GPU-a"}]`,
-			"nvml": `[{"index":0,"name":"NVIDIA B200","utilPct":1,"uuid":"GPU-a"}]`}[c.want])
+		has(t, entries, map[string]string{"dcgm": `"tensorActive":0.58,"throttleReasons":null`, "nvml": `"utilPct":1,"uuid":"GPU-a"`}[c.want],
+			`"utilPct":null,"uuid":"GPU-b"`)
 	}
 }
 
@@ -143,13 +143,13 @@ func TestSample(t *testing.T) {
 	has(t, sample(job{cgroup: cg, gpus: gpus, gpuMem: func() map[int]int64 { return map[int]int64{81: 41984} }, wholeNode: true}),
 		`"memBytes":123456`, `"memAnonBytes":100`, `"memFileBytes":20`, `"oomKills":1`,
 		`"cpuUsageUsec":295339339`, `"cpuSystemUsec":5`,
-		`"processes":[{"pid":81,"name":"python","rssBytes":2097152,"gpuMemMiB":41984},{"pid":83,"name":"bash","gpuMemMiB":0}]`,
+		`"processes":[{"pid":81,"name":"python","rssBytes":2097152,"gpuMemMiB":41984},{"pid":83,"name":"bash","rssBytes":null,"gpuMemMiB":0}]`,
 		`"gpuSource":"nvml"`,
 		`"network":{"eno1":{"type":"ethernet","xmitBytes":30,"rcvBytes":40},"mlx5_0/1":{"type":"infiniband","xmitBytes":40,"rcvBytes":80}}`)
 
-	has(t, sample(job{cgroup: cg, gpus: gpus, gpuMem: func() map[int]int64 { return nil }}), `{"pid":83,"name":"bash"}`)
-	has(t, sample(job{cgroup: cg, gpus: none, gpuMem: noMem}), `"gpuMemMiB":0}]}`)
-	has(t, sample(job{gpus: none, gpuMem: noMem}), `Z"}`)
+	has(t, sample(job{cgroup: cg, gpus: gpus, gpuMem: func() map[int]int64 { return nil }}), `"rssBytes":null,"gpuMemMiB":null}`)
+	has(t, sample(job{cgroup: cg, gpus: none, gpuMem: noMem}), `"gpuMemMiB":0}],"gpuSource":null,"gpus":[],"network":null}`)
+	has(t, sample(job{gpus: none, gpuMem: noMem}), `Z","memBytes":null`, `"processes":null,"gpuSource":null,"gpus":[],"network":null}`)
 }
 
 func TestPollSamplesAndStops(t *testing.T) {
@@ -166,7 +166,7 @@ func TestPollSamplesAndStops(t *testing.T) {
 	})
 	seam(t, &interval, 50*time.Millisecond)
 	last.Store(nil)
-	has(t, Latest(), `{}`)
+	has(t, Latest(), `{"sampledAt":null,`)
 
 	_, _ = (&tasks.Task{Kind: "usage", Run: Poll}).Start()
 	t.Cleanup(func() { tasks.Stop("usage") })

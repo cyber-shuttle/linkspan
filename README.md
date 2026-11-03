@@ -199,7 +199,7 @@ answers errors as `{"error": "<message>"}`: `400` for an unparsable body, `413` 
 |---|---|---|
 | GET | `/api/v1/health` | `{"status":"ok"}` |
 | GET | `/api/v1/forward/{port}` | WebSocket carrying one TCP connection, in binary frames, to the loopback port a running task serves; `404` otherwise |
-| GET | `/api/v1/usage` | The job's latest memory, CPU, process, GPU and network sample, taken every 5s; an unreadable value is left out |
+| GET | `/api/v1/usage` | The job's latest memory, CPU, process, GPU and network sample, taken every 5s; an unreadable value is `null` |
 | POST | `/api/v1/workflow/shell/exec` | Takes `{"command","ref"}`, `400` without `command`; `200` with the process once it exits 0, `202` once a pause ended it, `500` otherwise |
 | GET | `/api/v1/vscode/sessions` | `[{"id":"s-<port>","addr":"127.0.0.1:<port>","state":"<state>","error":""}]` |
 | POST | `/api/v1/vscode/sessions` | Takes `{"authorized_key","ref"}`; `201` with `{"id":"s-<port>","bind_port":<port>}`, or `200` with the same shape when `ref` is already serving |
