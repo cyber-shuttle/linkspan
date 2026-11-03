@@ -1,97 +1,112 @@
-// Package usage reports the job's usage: memory and CPU from its cgroup v2 hierarchy, and GPU load and memory
-// from nvidia-smi. A source that cannot be read leaves its field unset. A task samples the whole set,
-// so a request answers from the last sample without waiting on anything.
+// Package usage reports what the job uses. What the job is gets read once at start; a task then samples every
+// interval, and a request answers from the last sample. An unreadable value is left out.
+// Library calls cannot be cancelled, so a sample runs apart and a stop does not wait for it.
 //
-//	GPU, Sample
-//	interval, procCgroup, cgroupRoot  Test seams.
-//	last           The last sample; nil before the first.
-//	parseGPUs      Skips rows that do not scan, because a failed nvidia-smi prints its complaint to stdout.
-//	readCgroupInt  An empty key takes the first line that parses.
-//	sample         One whole set: the nvidia-smi probe through tasks.Exec, waited for however long it takes, then the
-//	               cgroup files. The job's cgroup is the 0:: entry of /proc/self/cgroup without its step suffix.
-//	Latest         The last sample, or an empty one before the first.
-//	Poll           The task main starts: a sample, then interval, until cancelled. Cancellation kills a slow
-//	               probe; one that ignores SIGKILL holds the task, and StopAll with it.
+//	Sample, job
+//	interval, procCgroup, cgroupRoot, procRoot, sysClass  Test seams.
+//	readInt, scale
+//	detect  The job holds the node when its cgroup has every CPU of Slurm's parent cgroup.
+//	sample, Latest, Poll
 package usage
 
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"os"
-	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"github.com/cyber-shuttle/linkspan/internal/tasks"
 )
 
-type GPU struct {
-	Index       int `json:"index"`
-	UtilPct     int `json:"utilPct"`
-	MemUsedMiB  int `json:"memUsedMiB"`
-	MemTotalMiB int `json:"memTotalMiB"`
+type Sample struct {
+	SampledAt     *time.Time       `json:"sampledAt,omitempty"`
+	MemBytes      *int64           `json:"memBytes,omitempty"`
+	MemAnonBytes  *int64           `json:"memAnonBytes,omitempty"`
+	MemFileBytes  *int64           `json:"memFileBytes,omitempty"`
+	OOMKills      *int64           `json:"oomKills,omitempty"`
+	CPUUsageUsec  *int64           `json:"cpuUsageUsec,omitempty"`
+	CPUSystemUsec *int64           `json:"cpuSystemUsec,omitempty"`
+	Processes     []Process        `json:"processes,omitempty"`
+	GPUSource     *string          `json:"gpuSource,omitempty"`
+	GPUs          []map[string]any `json:"gpus,omitempty"`
+	Network       map[string]Link  `json:"network,omitempty"`
 }
 
-type Sample struct {
-	MemBytes     *int64 `json:"memBytes,omitempty"`
-	CPUUsageUsec *int64 `json:"cpuUsageUsec,omitempty"`
-	GPUs         []GPU  `json:"gpus,omitempty"`
+type job struct {
+	cgroup    string
+	wholeNode bool
+	gpus      func() (*string, []map[string]any)
+	gpuMem    func() map[int]int64
 }
 
 var (
 	interval   = 5 * time.Second
 	procCgroup = "/proc/self/cgroup"
 	cgroupRoot = "/sys/fs/cgroup"
+	procRoot   = "/proc"
+	sysClass   = "/sys/class"
 )
 
-var last atomic.Pointer[Sample]
+var (
+	last      atomic.Pointer[Sample]
+	jobCgroup = regexp.MustCompile(`(?m)^0::(.*?)/step_`)
+)
 
-func parseGPUs(out string) []GPU {
-	var gpus []GPU
-	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
-		var g GPU
-		if _, err := fmt.Sscanf(line, "%d, %d, %d, %d", &g.Index, &g.UtilPct, &g.MemUsedMiB, &g.MemTotalMiB); err == nil {
-			gpus = append(gpus, g)
-		}
-	}
-	return gpus
-}
-
-func readCgroupInt(path, key string) *int64 {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	for line := range strings.SplitSeq(string(b), "\n") {
+func readInt(path, key string) *int64 {
+	b, _ := os.ReadFile(path)
+	for line := range strings.Lines(string(b)) {
 		if s, ok := strings.CutPrefix(line, key); ok {
-			if v, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
-				return &v
+			if f := strings.Fields(s); len(f) > 0 {
+				if v, err := strconv.ParseInt(f[0], 10, 64); err == nil {
+					return &v
+				}
 			}
 		}
 	}
 	return nil
 }
 
-func sample(ctx context.Context) {
-	var s Sample
-	var out bytes.Buffer
-	cmd := exec.Command("nvidia-smi",
-		"--query-gpu=index,utilization.gpu,memory.used,memory.total",
-		"--format=csv,noheader,nounits")
-	cmd.Stdout = &out
-	if err := tasks.Exec(ctx, cmd); err == nil {
-		s.GPUs = parseGPUs(out.String())
+func scale(v *int64, by int64) *int64 {
+	if v != nil {
+		*v *= by
 	}
+	return v
+}
+
+func detect() job {
+	var j job
 	if b, err := os.ReadFile(procCgroup); err == nil {
-		_, path, _ := strings.Cut(string(b), "0::")
-		job, _, _ := strings.Cut(strings.TrimSpace(path), "/step_")
-		s.MemBytes = readCgroupInt(cgroupRoot+job+"/memory.current", "")
-		s.CPUUsageUsec = readCgroupInt(cgroupRoot+job+"/cpu.stat", "usage_usec ")
+		if m := jobCgroup.FindSubmatch(b); m != nil {
+			j.cgroup = cgroupRoot + string(m[1])
+			mine, _ := os.ReadFile(j.cgroup + "/cpuset.cpus.effective")
+			all, _ := os.ReadFile(filepath.Dir(j.cgroup) + "/cpuset.cpus.effective")
+			j.wholeNode = len(mine) > 1 && bytes.Equal(mine, all)
+		}
 	}
-	last.Store(&s)
+	j.gpus, j.gpuMem = openGPUs()
+	return j
+}
+
+func sample(j job) Sample {
+	now := time.Now().UTC()
+	s := Sample{SampledAt: &now}
+	s.GPUSource, s.GPUs = j.gpus()
+	if c := j.cgroup; c != "" {
+		s.MemBytes = readInt(c+"/memory.current", "")
+		s.MemAnonBytes = readInt(c+"/memory.stat", "anon ")
+		s.MemFileBytes = readInt(c+"/memory.stat", "file ")
+		s.OOMKills = readInt(c+"/memory.events", "oom_kill ")
+		s.CPUUsageUsec = readInt(c+"/cpu.stat", "usage_usec ")
+		s.CPUSystemUsec = readInt(c+"/cpu.stat", "system_usec ")
+		s.Processes = readProcesses(j)
+	}
+	if j.wholeNode {
+		s.Network = readNetwork()
+	}
+	return s
 }
 
 func Latest() Sample {
@@ -102,8 +117,23 @@ func Latest() Sample {
 }
 
 func Poll(ctx context.Context) error {
+	var j *job
 	for {
-		sample(ctx)
+		done := make(chan struct{})
+		go func() {
+			if j == nil {
+				d := detect()
+				j = &d
+			}
+			s := sample(*j)
+			last.Store(&s)
+			close(done)
+		}()
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-done:
+		}
 		select {
 		case <-ctx.Done():
 			return nil

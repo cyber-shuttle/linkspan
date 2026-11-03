@@ -29,10 +29,10 @@ linters:
       - path: internal/servers/servers\.go
         linters: [gosec]
         text: "G204"
-      # Reads a path the kernel wrote to /proc/self/cgroup (G304, G703).
-      - path: internal/usage/usage\.go
+      # Converts integers across the NVML and DCGM C ABIs (G115) and reads cgroup, /proc and /sys (G122, G304, G703).
+      - path: internal/usage/
         linters: [gosec]
-        text: "G304|G703"
+        text: "G115|G122|G304|G703"
       # Writes a fetched binary executable (G306).
       - path: internal/install/install\.go
         linters: [gosec]

@@ -41,7 +41,7 @@ Archives exist for `Linux` and `Darwin` on `x86_64` and `arm64`. To build from s
 |---|---|
 | Everything | A writable home directory; Linkspan fetches and builds only under `~/.cybershuttle/` |
 | Usage | Linux, cgroup v2 as Slurm lays it out; macOS builds report none |
-| GPU usage | `nvidia-smi` on `PATH`; otherwise `gpus` is omitted |
+| GPU usage | The NVIDIA driver; DCGM metrics also need `libdcgm.so.4` and its host engine on `127.0.0.1:5555` |
 | `--tunnel-mode=devtunnel` | HTTPS to `tunnelsassetsprod.blob.core.windows.net`, `devtunnels.ms` and `rel.tunnels.api.visualstudio.com` |
 | Jupyter | `curl` on `PATH`; HTTPS to `astral.sh`, `github.com`, `release-assets.githubusercontent.com` and `pypi.org` |
 | Terminals | Linux; HTTPS to `github.com` and `release-assets.githubusercontent.com` |
@@ -199,7 +199,7 @@ answers errors as `{"error": "<message>"}`: `400` for an unparsable body, `413` 
 |---|---|---|
 | GET | `/api/v1/health` | `{"status":"ok"}` |
 | GET | `/api/v1/forward/{port}` | WebSocket carrying one TCP connection, in binary frames, to the loopback port a running task serves; `404` otherwise |
-| GET | `/api/v1/usage` | `{"memBytes":<n>,"cpuUsageUsec":<n>,"gpus":[{"index":<n>,"utilPct":<n>,"memUsedMiB":<n>,"memTotalMiB":<n>}]}`, the latest sample, taken every 5s; an unreadable source omits its field |
+| GET | `/api/v1/usage` | The job's latest memory, CPU, process, GPU and network sample, taken every 5s; an unreadable value is left out |
 | POST | `/api/v1/workflow/shell/exec` | Takes `{"command","ref"}`, `400` without `command`; `200` with the process once it exits 0, `202` once a pause ended it, `500` otherwise |
 | GET | `/api/v1/vscode/sessions` | `[{"id":"s-<port>","addr":"127.0.0.1:<port>","state":"<state>","error":""}]` |
 | POST | `/api/v1/vscode/sessions` | Takes `{"authorized_key","ref"}`; `201` with `{"id":"s-<port>","bind_port":<port>}`, or `200` with the same shape when `ref` is already serving |

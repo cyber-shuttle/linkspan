@@ -5,6 +5,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `/api/v1/usage` reports processes, network and more memory, CPU and GPU metrics.
+- GPU metrics come from DCGM when available, else from NVML.
+
 ### Changed
 
 - Builds with Go 1.27.3.
