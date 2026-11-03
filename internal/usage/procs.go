@@ -14,8 +14,8 @@ import (
 type Process struct {
 	PID       int    `json:"pid"`
 	Name      string `json:"name"`
-	RSSBytes  *int64 `json:"rssBytes,omitempty"`
-	GPUMemMiB *int64 `json:"gpuMemMiB,omitempty"`
+	RSSBytes  *int64 `json:"rssBytes"`
+	GPUMemMiB *int64 `json:"gpuMemMiB"`
 }
 
 func readProcesses(j job) []Process {

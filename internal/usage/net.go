@@ -12,8 +12,8 @@ import (
 
 type Link struct {
 	Type      string `json:"type"`
-	XmitBytes *int64 `json:"xmitBytes,omitempty"`
-	RcvBytes  *int64 `json:"rcvBytes,omitempty"`
+	XmitBytes *int64 `json:"xmitBytes"`
+	RcvBytes  *int64 `json:"rcvBytes"`
 }
 
 func readNetwork() map[string]Link {

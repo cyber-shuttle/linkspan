@@ -336,17 +336,18 @@ var openDCGM = func(gpus []gpu) func() map[string]map[string]any {
 func openGPUs() (func() (*string, []map[string]any), func() map[int]int64) {
 	gpus, nvml, gpuMem := openNVML()
 	if len(gpus) == 0 {
-		return func() (*string, []map[string]any) { return nil, nil }, func() map[int]int64 { return map[int]int64{} }
+		return func() (*string, []map[string]any) { return nil, []map[string]any{} }, func() map[int]int64 { return map[int]int64{} }
 	}
 	dcgm := openDCGM(gpus)
 	entries := func(source string, values map[string]map[string]any) (*string, []map[string]any) {
-		out := []map[string]any{}
+		out := make([]map[string]any, 0, len(gpus))
 		for _, g := range gpus {
-			if len(values[g.uuid]) > 0 {
-				e := map[string]any{"index": g.index, "uuid": g.uuid, "name": g.name}
-				maps.Copy(e, values[g.uuid])
-				out = append(out, e)
+			e := map[string]any{"index": g.index, "uuid": g.uuid, "name": g.name}
+			for _, m := range metrics {
+				e[m.key] = nil
 			}
+			maps.Copy(e, values[g.uuid])
+			out = append(out, e)
 		}
 		return &source, out
 	}

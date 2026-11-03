@@ -1,5 +1,5 @@
 // Package usage reports what the job uses. What the job is gets read once at start; a task then samples every
-// interval, and a request answers from the last sample. An unreadable value is left out.
+// interval, and a request answers from the last sample. Every key is always present; an unreadable value is null.
 // Library calls cannot be cancelled, so a sample runs apart and a stop does not wait for it.
 //
 //	Sample, job
@@ -22,17 +22,17 @@ import (
 )
 
 type Sample struct {
-	SampledAt     *time.Time       `json:"sampledAt,omitempty"`
-	MemBytes      *int64           `json:"memBytes,omitempty"`
-	MemAnonBytes  *int64           `json:"memAnonBytes,omitempty"`
-	MemFileBytes  *int64           `json:"memFileBytes,omitempty"`
-	OOMKills      *int64           `json:"oomKills,omitempty"`
-	CPUUsageUsec  *int64           `json:"cpuUsageUsec,omitempty"`
-	CPUSystemUsec *int64           `json:"cpuSystemUsec,omitempty"`
-	Processes     []Process        `json:"processes,omitempty"`
-	GPUSource     *string          `json:"gpuSource,omitempty"`
-	GPUs          []map[string]any `json:"gpus,omitempty"`
-	Network       map[string]Link  `json:"network,omitempty"`
+	SampledAt     *time.Time       `json:"sampledAt"`
+	MemBytes      *int64           `json:"memBytes"`
+	MemAnonBytes  *int64           `json:"memAnonBytes"`
+	MemFileBytes  *int64           `json:"memFileBytes"`
+	OOMKills      *int64           `json:"oomKills"`
+	CPUUsageUsec  *int64           `json:"cpuUsageUsec"`
+	CPUSystemUsec *int64           `json:"cpuSystemUsec"`
+	Processes     []Process        `json:"processes"`
+	GPUSource     *string          `json:"gpuSource"`
+	GPUs          []map[string]any `json:"gpus"`
+	Network       map[string]Link  `json:"network"`
 }
 
 type job struct {

@@ -13,6 +13,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 ### Changed
 
 - Builds with Go 1.27.3.
+- `/api/v1/usage` sends `null` for an unreadable value instead of leaving it out.
 
 ## [0.22.1] - 2026-09-30
 
