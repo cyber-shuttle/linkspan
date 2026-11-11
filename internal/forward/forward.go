@@ -5,17 +5,18 @@
 //	Dial    nil unless a running task serves that loopback port, so a stream reaches Linkspan's own servers and
 //	        nothing else on the node.
 //	Pipe
-//	Stream  GET /api/v1/forward/{port}: 404 unless Dial reaches the port.
-//	HTTP    /api/v1/forward/{port}/{path...}: the request itself, sent to /{path} on the port, for clients that
-//	        speak HTTP and cannot open a stream, such as a browser; WebSocket upgrades included. 404 as Stream.
+//	Stream  /api/v1/forward/{port}: 404 unless Dial reaches the port. Any request but a WebSocket upgrade of that
+//	        exact path is HTTP, sent on to the port at the path after it, for clients that cannot open a stream.
 package forward
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/cyber-shuttle/linkspan/internal/router"
 	"github.com/cyber-shuttle/linkspan/internal/tasks"
@@ -56,10 +57,21 @@ func Pipe(client *websocket.Conn, server net.Conn) {
 }
 
 func Stream(w http.ResponseWriter, r *http.Request) {
-	port, _ := strconv.Atoi(r.PathValue("port"))
+	rawPort, path, isHTTP := strings.Cut(r.PathValue("port"), "/")
+	port, _ := strconv.Atoi(rawPort)
 	server := Dial(port)
 	if server == nil {
 		router.Error(w, http.StatusNotFound, "no running server on that port")
+		return
+	}
+	if isHTTP || !websocket.IsWebSocketUpgrade(r) {
+		(&httputil.ReverseProxy{
+			Transport: &http.Transport{DisableKeepAlives: true, DialContext: func(context.Context, string, string) (net.Conn, error) { return server, nil }},
+			Rewrite: func(p *httputil.ProxyRequest) {
+				p.Out.URL = &url.URL{Scheme: "http", Host: server.RemoteAddr().String(), Path: "/" + path, RawQuery: r.URL.RawQuery}
+				p.Out.Host = ""
+			},
+		}).ServeHTTP(w, r)
 		return
 	}
 	client, err := upgrader.Upgrade(w, r, nil)
@@ -68,17 +80,4 @@ func Stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	Pipe(client, server)
-}
-
-func HTTP(w http.ResponseWriter, r *http.Request) {
-	port, _ := strconv.Atoi(r.PathValue("port"))
-	if !tasks.IsServing(port) {
-		router.Error(w, http.StatusNotFound, "no running server on that port")
-		return
-	}
-	(&httputil.ReverseProxy{Rewrite: func(p *httputil.ProxyRequest) {
-		p.Out.URL = &url.URL{Scheme: "http", Host: net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
-			Path: "/" + r.PathValue("path"), RawQuery: r.URL.RawQuery}
-		p.Out.Host = ""
-	}}).ServeHTTP(w, r)
 }
