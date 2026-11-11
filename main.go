@@ -124,6 +124,7 @@ func startAll(opts *options) error {
 	h := http.NewServeMux()
 	h.Handle("/", routes().Handler())
 	h.HandleFunc("GET /api/v1/forward/{port}", forward.Stream)
+	h.HandleFunc("/api/v1/forward/{port}/{path...}", forward.HTTP)
 	var all []*tasks.Task
 	for _, addr := range addrs {
 		all = append(all, &tasks.Task{Kind: "http", Addr: addr, Server: &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}})

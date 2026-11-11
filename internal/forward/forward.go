@@ -6,11 +6,15 @@
 //	        nothing else on the node.
 //	Pipe
 //	Stream  GET /api/v1/forward/{port}: 404 unless Dial reaches the port.
+//	HTTP    /api/v1/forward/{port}/{path...}: the request itself, sent to /{path} on the port, for clients that
+//	        speak HTTP and cannot open a stream, such as a browser; WebSocket upgrades included. 404 as Stream.
 package forward
 
 import (
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"strconv"
 
 	"github.com/cyber-shuttle/linkspan/internal/router"
@@ -64,4 +68,17 @@ func Stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	Pipe(client, server)
+}
+
+func HTTP(w http.ResponseWriter, r *http.Request) {
+	port, _ := strconv.Atoi(r.PathValue("port"))
+	if !tasks.IsServing(port) {
+		router.Error(w, http.StatusNotFound, "no running server on that port")
+		return
+	}
+	(&httputil.ReverseProxy{Rewrite: func(p *httputil.ProxyRequest) {
+		p.Out.URL = &url.URL{Scheme: "http", Host: net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
+			Path: "/" + r.PathValue("path"), RawQuery: r.URL.RawQuery}
+		p.Out.Host = ""
+	}}).ServeHTTP(w, r)
 }
