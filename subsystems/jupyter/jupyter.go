@@ -63,7 +63,7 @@ func setup(ctx context.Context, _ map[string]any) (int, any, string) {
 	}{
 		{"install uv", []string{"sh", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"}},
 		{"create environment", []string{uv, "venv", "--quiet", "--allow-existing", "--python", "3.12", env}},
-		{"install packages", []string{uv, "pip", "install", "--quiet", "--python", filepath.Join(env, "bin", "python"), "jupyter-server", "ipykernel", "jupyter-server-terminals"}},
+		{"install packages", []string{uv, "pip", "install", "--quiet", "--python", filepath.Join(env, "bin", "python"), "jupyter-server", "ipykernel", "jupyter-server-terminals", "uv"}},
 	}
 	if _, err := os.Stat(uv); err == nil {
 		steps = steps[1:]

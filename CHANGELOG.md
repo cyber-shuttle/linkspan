@@ -5,6 +5,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-11-16
+
+### Added
+
+- The Jupyter environment includes `uv`, so notebooks can run `%uv pip install`.
+
+### Changed
+
+- Builds with Go 1.27.4.
+
 ## [0.23.0] - 2026-11-03
 
 ### Added
@@ -628,7 +638,8 @@ No change. The tag points at the same commit as 0.14.8.
   tunnel routes, and opens a dev tunnel at startup unless `--tunnel-enable=false`.
 - GoReleaser archives for Linux, macOS and Windows.
 
-[Unreleased]: https://github.com/cyber-shuttle/linkspan/compare/v0.23.0...HEAD
+[Unreleased]: https://github.com/cyber-shuttle/linkspan/compare/v0.23.1...HEAD
+[0.23.1]: https://github.com/cyber-shuttle/linkspan/compare/v0.23.0...v0.23.1
 [0.23.0]: https://github.com/cyber-shuttle/linkspan/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/cyber-shuttle/linkspan/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/cyber-shuttle/linkspan/compare/v0.21.0...v0.22.0
